@@ -5644,19 +5644,20 @@ static void diagnoseOperatorFixityAttributes(Parser &P,
   }
 }
 
-static unsigned skipUntilMatchingRBrace(Parser &P,
-                                        bool &HasPoundDirective,
+static unsigned skipUntilMatchingRBrace(Parser &P, bool &HasPoundDirective,
                                         bool &HasPoundSourceLocation,
                                         bool &HasOperatorDeclarations,
                                         bool &HasNestedClassDeclarations,
                                         bool &HasNestedTypeDeclarations,
-                                        bool &HasPotentialRegexLiteral) {
+                                        bool &HasPotentialRegexLiteral,
+                                        bool &HasDerivativeDeclarations) {
   HasPoundDirective = false;
   HasPoundSourceLocation = false;
   HasOperatorDeclarations = false;
   HasNestedClassDeclarations = false;
   HasNestedTypeDeclarations = false;
   HasPotentialRegexLiteral = false;
+  HasDerivativeDeclarations = false;
 
   unsigned OpenBraces = 1;
   unsigned OpenPoundIf = 0;
@@ -5684,6 +5685,18 @@ static unsigned skipUntilMatchingRBrace(Parser &P,
                                              tok::kw_enum, tok::kw_typealias,
                                              tok::kw_protocol)
                               || P.Tok.isContextualKeyword("actor");
+
+    if (P.consumeIf(tok::at_sign)) {
+      if (P.Tok.is(tok::identifier)) {
+        std::optional<DeclAttrKind> DK =
+            DeclAttribute::getAttrKindFromString(P.Tok.getText());
+        if (DK && *DK == DeclAttrKind::Derivative) {
+          HasDerivativeDeclarations = true;
+          P.consumeToken();
+        }
+      }
+      continue;
+    }
 
     // HACK: Bail if we encounter what could potentially be a regex literal.
     // This is necessary as:
@@ -7033,13 +7046,17 @@ bool Parser::parseMemberDeclList(SourceLoc &LBLoc, SourceLoc &RBLoc,
 
   bool HasOperatorDeclarations;
   bool HasNestedClassDeclarations;
+  bool HasDerivativeDeclarations;
 
   if (canDelayMemberDeclParsing(HasOperatorDeclarations,
-                                HasNestedClassDeclarations)) {
+                                HasNestedClassDeclarations,
+                                HasDerivativeDeclarations)) {
     if (HasOperatorDeclarations)
       IDC->setMaybeHasOperatorDeclarations();
     if (HasNestedClassDeclarations)
       IDC->setMaybeHasNestedClassDeclarations();
+    if (HasDerivativeDeclarations)
+      IDC->setMaybeHasDerivativeDeclarations();
 
     if (delayParsingDeclList(LBLoc, RBLoc, IDC))
       return true;
@@ -7050,6 +7067,7 @@ bool Parser::parseMemberDeclList(SourceLoc &LBLoc, SourceLoc &RBLoc,
     auto membersAndHash = parseDeclList(LBLoc, RBLoc, RBraceDiag, hadError);
     IDC->setMaybeHasOperatorDeclarations();
     IDC->setMaybeHasNestedClassDeclarations();
+    IDC->setMaybeHasDerivativeDeclarations();
     Context.evaluator.cacheOutput(
         ParseMembersRequest{IDC},
         FingerprintAndMembers{
@@ -7110,7 +7128,8 @@ Parser::parseDeclList(SourceLoc LBLoc, SourceLoc &RBLoc, Diag<> ErrorDiag,
 }
 
 bool Parser::canDelayMemberDeclParsing(bool &HasOperatorDeclarations,
-                                       bool &HasNestedClassDeclarations) {
+                                       bool &HasNestedClassDeclarations,
+                                       bool &HasDerivativeDeclarations) {
   // If explicitly disabled, respect the flag.
   if (!isDelayedParsingEnabled())
     return false;
@@ -7122,13 +7141,10 @@ bool Parser::canDelayMemberDeclParsing(bool &HasOperatorDeclarations,
   bool HasPoundSourceLocation;
   bool HasNestedTypeDeclarations;
   bool HasPotentialRegexLiteral;
-  skipUntilMatchingRBrace(*this,
-                          HasPoundDirective,
-                          HasPoundSourceLocation,
-                          HasOperatorDeclarations,
-                          HasNestedClassDeclarations,
-                          HasNestedTypeDeclarations,
-                          HasPotentialRegexLiteral);
+  skipUntilMatchingRBrace(*this, HasPoundDirective, HasPoundSourceLocation,
+                          HasOperatorDeclarations, HasNestedClassDeclarations,
+                          HasNestedTypeDeclarations, HasPotentialRegexLiteral,
+                          HasDerivativeDeclarations);
   if (!HasPoundDirective && !HasPotentialRegexLiteral) {
     // If we didn't see any pound directive, we must not have seen
     // #sourceLocation either.
@@ -7740,9 +7756,11 @@ bool Parser::canDelayFunctionBodyParsing(bool &HasNestedTypeDeclarations) {
   bool HasOperatorDeclarations;
   bool HasNestedClassDeclarations;
   bool HasPotentialRegexLiteral;
+  bool HasDerivativeDeclarations;
   skipUntilMatchingRBrace(*this, HasPoundDirectives, HasPoundSourceLocation,
                           HasOperatorDeclarations, HasNestedClassDeclarations,
-                          HasNestedTypeDeclarations, HasPotentialRegexLiteral);
+                          HasNestedTypeDeclarations, HasPotentialRegexLiteral,
+                          HasDerivativeDeclarations);
   if (HasPoundSourceLocation || HasPotentialRegexLiteral)
     return false;
 

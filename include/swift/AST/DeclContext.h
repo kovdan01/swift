@@ -798,6 +798,10 @@ class IterableDeclContext {
   /// while skipping the body of this context.
   unsigned HasNestedClassDeclarations : 1;
 
+  /// Whether delayed parsing detect a possible custom derivative definition
+  /// while skipping the body of this context.
+  unsigned HasDerivativeDeclarations : 1;
+
   template<class A, class B, class C>
   friend struct ::llvm::CastInfo;
 
@@ -813,6 +817,7 @@ public:
     : LastDeclAndKind(nullptr, kind) {
     AddedParsedMembers = 0;
     HasOperatorDeclarations = 0;
+    HasDerivativeDeclarations = 0;
     HasNestedClassDeclarations = 0;
   }
 
@@ -839,6 +844,15 @@ public:
   void setMaybeHasNestedClassDeclarations() {
     assert(hasUnparsedMembers());
     HasNestedClassDeclarations = 1;
+  }
+
+  bool maybeHasDerivativeDeclarations() const {
+    return HasDerivativeDeclarations;
+  }
+
+  void setMaybeHasDerivativeDeclarations() {
+    assert(hasUnparsedMembers());
+    HasDerivativeDeclarations = 1;
   }
 
   /// Retrieve the current set of members in this context.
