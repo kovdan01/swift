@@ -1748,11 +1748,14 @@ static ConstraintSystem::TypeMatchResult matchCallArguments(
           cs.increaseScore(SK_FunctionToAutoClosureConversion, loc);
         }
 
+        //llvm::errs() << "\n\nXXXXXXX\n\n";
+
         // If the argument is not marked as @autoclosure or
         // this is Swift version >= 5 where forwarding is not allowed,
         // argument would always be wrapped into an implicit closure
         // at the end, so we can safely match against result type.
         if (ctx.isSwiftVersionAtLeast(5) || !isAutoClosureArgument(argExpr)) {
+          //llvm::errs() << "\n\YYYYYYYY\n\n";
           // In Swift >= 5 mode there is no @autoclosure forwarding,
           // so let's match result types.
           if (auto *fnType = paramTy->getAs<FunctionType>()) {

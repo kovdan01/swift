@@ -453,6 +453,35 @@ static SILValue reapplyFunctionConversion(
   llvm_unreachable("Unhandled function conversion instruction");
 }
 
+// TODO asserts?
+static SILFunction *tryExtractWrappedFunctionFromAutoClosure(FunctionRefInst *originalFRI) {
+  auto *ACE = dyn_cast<AutoClosureExpr>(originalFRI->getLoc().getAsASTNode<Expr>());
+  if (ACE == nullptr)
+    return nullptr;
+  if (ACE->getThunkKind() != AutoClosureExpr::Kind::SingleCurryThunk)
+    return nullptr;
+
+  auto *originalFn = originalFRI->getReferencedFunction();
+
+  if (originalFn->size() != 1)
+    return nullptr;
+
+  SILBasicBlock *BB = originalFn->getEntryBlock();
+  for (SILInstruction &I : *BB) {
+    if (isa<ApplyInst>(I)) {
+      // TODO only allow single apply?
+      SILValue callee = cast<ApplyInst>(I).getCallee();
+      if (auto *FRI = dyn_cast<FunctionRefInst>(callee.getDefiningInstruction())) {
+        SILFunction *foo = FRI->getReferencedFunctionOrNull();
+        if (foo)
+          return foo;
+      }
+    }
+  }
+
+  return nullptr;
+}
+
 /// Emits a reference to a derivative function of `original`, differentiated
 /// with respect to a superset of `desiredIndices`. Returns the `SILValue` for
 /// the derivative function and the actual indices that the derivative function
@@ -480,8 +509,11 @@ emitDerivativeFunctionReference(
 
   // If `original` is a `@differentiable` function, just extract the
   // derivative function.
+  llvm::errs() << "HERE 00\n";
   if (auto diffableFnType = original->getType().castTo<SILFunctionType>()) {
+    llvm::errs() << "HERE 01\n";
     if (diffableFnType->isDifferentiable()) {
+      llvm::errs() << "HERE 02\n";
       auto paramIndices =
           diffableFnType->getDifferentiabilityParameterIndices();
       for (auto i : desiredConfig.parameterIndices->getIndices()) {
@@ -510,6 +542,8 @@ emitDerivativeFunctionReference(
           peerThroughFunctionConversions<FunctionRefInst>(original)) {
     auto loc = originalFRI->getLoc();
     auto *originalFn = originalFRI->getReferencedFunction();
+    if (SILFunction *wrappedFunction = tryExtractWrappedFunctionFromAutoClosure(originalFRI))
+      originalFn = wrappedFunction;
     auto originalFnTy = originalFn->getLoweredFunctionType();
     auto *desiredParameterIndices = desiredConfig.parameterIndices;
     auto *desiredResultIndices = desiredConfig.resultIndices;
@@ -605,6 +639,7 @@ emitDerivativeFunctionReference(
               desiredParameterIndices, desiredResultIndices,
               contextualDerivativeGenSig,
               LookUpConformanceInModule());
+      llvm::errs() << "!!! create witness\n";
       minimalWitness = SILDifferentiabilityWitness::createDefinition(
           context.getModule(), SILLinkage::Private, originalFn,
           DifferentiabilityKind::Reverse, desiredParameterIndices,
@@ -615,8 +650,77 @@ emitDerivativeFunctionReference(
         return std::nullopt;
     }
     assert(minimalWitness);
+    // llvm::errs() << "\n\nAAAAAA\n\n";
+    // llvm::errs() << "BBBBB " << original->getFunction()->getName() << "\n";
+    // llvm::errs() << "CCCCC isDefer = " << (int)(original->getFunction()->isDefer())
+    //              << ", isThunk = " << (int)(original->getFunction()->isThunk())
+    //              << "\n";
+    // minimalWitness->dump();
+    // llvm::errs() << "DDDDD\n";
+    // minimalWitness->getOriginalFunction()->dump();
+    // llvm::errs() << "EEEEE isDefer = " << (int)(minimalWitness->getOriginalFunction()->isDefer())
+    //              << ", isThunk = " << (int)(minimalWitness->getOriginalFunction()->isThunk())
+    //              << ", purpose = " << (int)(minimalWitness->getOriginalFunction()->getSpecialPurpose())
+    //              << ", hasDynamicSelfMetadata = " << (int)(minimalWitness->getOriginalFunction()->hasDynamicSelfMetadata())
+    //              << "\n";
+    // auto *ACE = dyn_cast<AutoClosureExpr>(originalFRI->getLoc().getAsASTNode<Expr>());
+    // llvm::errs() << "!!! isa<AutoClosureExpr> = " << (int)(ACE != nullptr) << "\n";
+    // if (ACE != nullptr) {
+    //   llvm::errs() << "ACE kind = " << (int)ACE->getThunkKind() << "\n";
+    //   Stmt *St = ACE->getBody()->getSingleActiveStatement();
+    //   if (St != nullptr) {
+    //     if (auto *RS = dyn_cast<ReturnStmt>(St)) {
+    //       if (Expr *E = RS->getResult()) {
+    //         if (auto *AE = dyn_cast<ApplyExpr>(E)) {
+    //           llvm::errs() << "AE->getFn()->dump() begin\n";
+    //           AE->getFn()->dump();
+    //           llvm::errs() << "\nAE->getFn()->dump() end\n";
+    //           ValueDecl *VD = AE->getCalledValue(/*skipFunctionConversions=*/true);
+    //           llvm::errs() << "VD = " << (uintptr_t)(VD) << "\n";
+    //           if (VD != nullptr) {
+    //             llvm::errs() << "VD->dump() begin\n";
+    //             VD->dump();
+    //             llvm::errs() << "VD->dump() end\n";
+    //             //FuncDecl;
+    //           }
+    //         }
+    //       }
+    //     }
+    //   }
+    // }
+
+    // llvm::errs() << "\n\n!!!! originalFn->dump() begin\n\n";
+    // originalFn->dump();
+    // llvm::errs() << "\n\n!!!! originalFn->dump() end\n\n";
+
+    // if (originalFn->size() == 1) {
+    //   SILBasicBlock *BB = originalFn->getEntryBlock();
+    //   for (SILInstruction &I : *BB) {
+    //     if (isa<ApplyInst>(I)) {
+    //       llvm::errs() << "\n\n!!!! callee.dump() begin\n\n";
+    //       ApplyInst &AI = cast<ApplyInst>(I);
+    //       SILValue callee = AI.getCallee();
+    //       callee.dump();
+    //       llvm::errs() << "\n\n!!!! callee.dump() end\n\n";
+    //       if (FunctionRefInst *FRI = dyn_cast<FunctionRefInst>(callee.getDefiningInstruction())) {
+    //         // Expr *E = FRI->getLoc().getAsASTNode<Expr>();
+    //         // llvm::errs() << "\n\n!!!! E->dump() begin\n\n";
+    //         // E->dump();
+    //         // llvm::errs() << "\n\n!!!! E->dump() end\n\n";
+    //         SILFunction *foo = FRI->getReferencedFunctionOrNull();
+    //         if (foo) {
+    //           llvm::errs() << "\n\n!!!! foo->dump() begin\n\n";
+    //           foo->dump();
+    //           llvm::errs() << "\n\n!!!! foo->dump() end\n\n";
+    //         }
+    //       }
+    //     }
+    //   }
+    // }
+
     if (original->getFunction()->isSerialized() &&
         !hasPublicVisibility(minimalWitness->getLinkage())) {
+      llvm::errs() << "\n\nFFFFF\n\n";
       enum { Inlinable = 0, DefaultArgument = 1 };
       unsigned fragileKind = Inlinable;
       // FIXME: This is not a very robust way of determining if the function is

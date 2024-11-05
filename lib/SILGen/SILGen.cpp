@@ -1517,6 +1517,7 @@ void SILGenModule::emitConstructor(ConstructorDecl *decl) {
 
 SILFunction *SILGenModule::emitClosure(AbstractClosureExpr *e,
                                        const FunctionTypeInfo &closureInfo) {
+  llvm::errs() << "\n\n\nXXXXXXXX\n\n\n";
   Types.setCaptureTypeExpansionContext(SILDeclRef(e), M);
 
   SILFunction *f = nullptr;

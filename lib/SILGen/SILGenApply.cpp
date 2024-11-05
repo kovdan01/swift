@@ -644,16 +644,20 @@ public:
 
     switch (kind) {
     case Kind::IndirectValue:
+      llvm::errs() << "YYYY01\n";
       assert(Substitutions.empty());
       return IndirectValue;
     case Kind::EnumElement:
+      llvm::errs() << "YYYY02\n";
     case Kind::StandaloneFunction: {
+      llvm::errs() << "YYYY03\n";
       auto constantInfo =
           SGF.getConstantInfo(SGF.getTypeExpansionContext(), *constant);
       SILValue ref = SGF.emitGlobalFunctionRef(Loc, *constant, constantInfo);
       return ManagedValue::forObjectRValueWithoutOwnership(ref);
     }
     case Kind::StandaloneFunctionDynamicallyReplaceableImpl: {
+      llvm::errs() << "YYYY04\n";
       auto constantInfo =
           SGF.getConstantInfo(SGF.getTypeExpansionContext(), *constant);
       SILValue ref =
@@ -661,6 +665,7 @@ public:
       return ManagedValue::forObjectRValueWithoutOwnership(ref);
     }
     case Kind::ClassMethod: {
+      llvm::errs() << "YYYY05\n";
       auto methodTy = SGF.SGM.Types.getConstantOverrideType(
           SGF.getTypeExpansionContext(), *constant);
 
@@ -680,6 +685,7 @@ public:
       return ManagedValue::forObjectRValueWithoutOwnership(methodVal);
     }
     case Kind::SuperMethod: {
+      llvm::errs() << "YYYY06\n";
       ArgumentScope S(SGF, Loc);
       ManagedValue castValue = borrowedCastToOriginalSelfType(
         SGF, Loc, *borrowedSelf);
@@ -700,6 +706,7 @@ public:
       return fn;
     }
     case Kind::WitnessMethod: {
+      llvm::errs() << "YYYY07\n";
       if (auto func = constant->getFuncDecl()) {
         if (SGF.shouldReplaceConstantForApplyWithDistributedThunk(func)) {
           auto thunk = func->getDistributedThunk();
@@ -731,6 +738,7 @@ public:
       return ManagedValue::forObjectRValueWithoutOwnership(fn);
     }
     case Kind::DynamicMethod: {
+      llvm::errs() << "YYYY08\n";
       auto closureType = getDynamicMethodLoweredType(
           SGF.SGM.M, *constant, getSubstFormalType());
 
@@ -3591,6 +3599,10 @@ private:
       return;
     }
 
+    // llvm::errs() << "\n---- loweredSubstArgType.dump()\n\n";
+    // loweredSubstArgType.dump();
+    // llvm::errs() << "\n---- origParamType.dump()\n\n";
+    // origParamType.dump();
     // Okay, if the original parameter is passed directly, then we
     // just need to handle abstraction differences and bridging.
     emitDirect(std::move(arg), loweredSubstArgType, origParamType, param,
@@ -4209,6 +4221,7 @@ private:
       if (destTy->hasOpenedExistential()
           && !srcTy->hasOpenedExistential()
           && destTy->getRepresentation() == srcTy->getRepresentation()) {
+        llvm::errs() << "\n!!! emitDelayedConversion FUNC\n\n";
         return emitDelayedConversion(funcConv, original);
       }
     }
@@ -5512,6 +5525,7 @@ CallEmission CallEmission::forApplyExpr(SILGenFunction &SGF, ApplyExpr *e) {
   if (auto *call = apply.callSite) {
     auto fnTy = call->getFn()->getType()->castTo<FunctionType>();
     PreparedArguments preparedArgs(fnTy->getParams(), call->getArgs());
+    llvm::errs() << "\n!!!!! addCallSite 06\n\n";
     emission.addCallSite(call, std::move(preparedArgs), call->isNoThrows(),
                          call->isNoAsync());
 
@@ -6537,6 +6551,7 @@ RValue SILGenFunction::emitApplyAllocatingInitializer(SILLocation loc,
                         substFormalType.getParams()[0]);
 
   // Arguments.
+  llvm::errs() << "\n!!!!! addCallSite 07\n\n";
   emission.addCallSite(loc, std::move(args));
 
   // For an inheritable initializer, determine whether we'll need to adjust the
@@ -6584,6 +6599,7 @@ RValue SILGenFunction::emitApplyOfPropertyWrapperBackingInitializer(
 
   PreparedArguments args(substFnType->getAs<AnyFunctionType>()->getParams());
   args.add(loc, std::move(originalValue));
+  llvm::errs() << "\n!!!!! addCallSite 01\n\n";
   emission.addCallSite(loc, std::move(args));
   
   return emission.apply(C);
@@ -7177,6 +7193,7 @@ RValue SILGenFunction::emitGetAccessor(
   if (subscriptIndices.isNull())
     subscriptIndices.emplace({});
 
+  llvm::errs() << "\n!!!!! addCallSite 02\n\n";
   emission.addCallSite(loc, std::move(subscriptIndices));
 
   // T
@@ -7219,6 +7236,7 @@ void SILGenFunction::emitSetAccessor(SILLocation loc, SILDeclRef set,
     }
   }
   assert(values.isValid());
+  llvm::errs() << "\n!!!!! addCallSite 03\n\n";
   emission.addCallSite(loc, std::move(values));
   // ()
   emission.apply();
@@ -7252,6 +7270,7 @@ ManagedValue SILGenFunction::emitAddressorAccessor(
   if (subscriptIndices.isNull())
     subscriptIndices.emplace({});
 
+  llvm::errs() << "\n!!!!! addCallSite 04\n\n";
   emission.addCallSite(loc, std::move(subscriptIndices));
 
   // Unsafe{Mutable}Pointer<T> or
@@ -7314,6 +7333,7 @@ SILGenFunction::emitCoroutineAccessor(SILLocation loc, SILDeclRef accessor,
   if (subscriptIndices.isNull())
     subscriptIndices.emplace({});
 
+  llvm::errs() << "\n!!!!! addCallSite 05\n\n";
   emission.addCallSite(loc, std::move(subscriptIndices));
 
   auto endApplyHandle = emission.applyCoroutine(yields);

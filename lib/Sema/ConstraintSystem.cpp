@@ -4505,6 +4505,7 @@ Expr *ConstraintSystem::buildAutoClosureExpr(Expr *expr,
     assert(newClosureType
                ->withExtInfo(newClosureType->getExtInfo().withNoEscape(true))
                ->isEqual(closureType));
+    llvm::errs() << "\n!!! buildAutoClosureExpr\n\n";
     result = new (Context) FunctionConversionExpr(closure, closureType);
   }
 

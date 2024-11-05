@@ -2874,6 +2874,7 @@ wrappedValueAutoclosurePlaceholder(const AbstractClosureExpr *e) {
 static std::optional<FunctionTypeInfo>
 tryGetSpecializedClosureTypeFromContext(CanAnyFunctionType closureType,
                                         const Conversion &conv) {
+  llvm::errs() << "\n\n!!!!!!!!!!! tryGetSpecializedClosureTypeFromContext\n\n";
   // Note that the kinds of conversion we work on here have to be kinds
   // that we can call withSourceType on later.
   if (conv.getKind() == Conversion::Reabstract ||
@@ -2973,6 +2974,7 @@ static bool canEmitSpecializedClosureFunction(CanAnyFunctionType closureType,
 /// Returns an invalid ManagedValue if this fails.
 ManagedValue RValueEmitter::tryEmitConvertedClosure(AbstractClosureExpr *e,
                                                     const Conversion &conv) {
+  llvm::errs() << "\n\n!!!!!!!!!!! tryEmitConvertedClosure\n\n";
   auto closureType = cast<AnyFunctionType>(e->getType()->getCanonicalType());
 
   // Bail out if we don't have specialized type information from context.
