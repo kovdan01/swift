@@ -1023,7 +1023,7 @@ namespace {
 
       // For an RValue function type, use a standard function conversion.
       if (openedType->is<AnyFunctionType>()) {
-        llvm::errs() << "\n!!!create FunctionConversionExpr 01\n\n";
+        //llvm::errs() << "\n!!!create FunctionConversionExpr 01\n\n";
         expr = new (context) FunctionConversionExpr(
             expr, getNewType(adjustedOpenedType));
         cs.cacheType(expr);
@@ -1134,9 +1134,9 @@ namespace {
                                              DeclContext *declOrClosure,
                                              ParameterList *thunkParamList,
                                              ConstraintLocatorBuilder locator) {
-      llvm::errs() << "!!! buildSingleCurryThunkBodyCall begin\n";
-      fnExpr->dump();
-      llvm::errs() << "!!! buildSingleCurryThunkBodyCall end\n";
+      // llvm::errs() << "!!! buildSingleCurryThunkBodyCall begin\n";
+      // fnExpr->dump();
+      // llvm::errs() << "!!! buildSingleCurryThunkBodyCall end\n";
       auto &ctx = cs.getASTContext();
       auto *const fnTy = cs.getType(fnExpr)->castTo<FunctionType>();
       auto *calleeFnTy = fnTy;
@@ -1273,9 +1273,9 @@ namespace {
                                            DeclContext *declOrClosure,
                                            FunctionType *thunkTy,
                                            ConstraintLocatorBuilder locator) {
-      llvm::errs() << "!!! buildSingleCurryThunk begin\n";
-      fnExpr->dump();
-      llvm::errs() << "!!! buildSingleCurryThunk end\n";
+      // llvm::errs() << "!!! buildSingleCurryThunk begin\n";
+      // fnExpr->dump();
+      // llvm::errs() << "!!! buildSingleCurryThunk end\n";
       auto &ctx = cs.getASTContext();
 
       const OptionSet<ParameterList::CloneFlags> options =
@@ -1427,7 +1427,7 @@ namespace {
                           FunctionType *outerThunkTy,
                           ConstraintLocatorBuilder memberLocator,
                           DeclNameLoc memberLoc, bool isDynamicLookup) {
-      llvm::errs() << "!!! buildDoubleCurryThunk\n";
+      //llvm::errs() << "!!! buildDoubleCurryThunk\n";
       auto &ctx = cs.getASTContext();
 
       const auto selfThunkParam = outerThunkTy->getParams().front();
@@ -1548,14 +1548,14 @@ namespace {
                          ConstraintLocatorBuilder locator,
                          ConstraintLocatorBuilder memberLocator, bool Implicit,
                          AccessSemantics semantics) {
-      llvm::errs() << "!!! buildMemberRef begin\n";
+      //llvm::errs() << "!!! buildMemberRef begin\n";
       const auto &choice = overload.choice;
       const auto openedType = overload.openedType;
       const auto adjustedOpenedType = overload.adjustedOpenedType;
 
       ValueDecl *member = choice.getDecl();
-      member->dump();
-      llvm::errs() << "!!! buildMemberRef end\n";
+      // member->dump();
+      // llvm::errs() << "!!! buildMemberRef end\n";
 
       auto &context = cs.getASTContext();
 
@@ -7623,14 +7623,14 @@ Expr *ExprRewriter::coerceToType(Expr *expr, Type toType,
           auto escapingToFuncTy =
               toFunc->withExtInfo(toEI.withNoEscape(false));
           maybeDiagnoseUnsupportedFunctionConversion(cs, expr, toFunc);
-          llvm::errs() << "\n!!!create FunctionConversionExpr 05\n\n";
+          //llvm::errs() << "\n!!!create FunctionConversionExpr 05\n\n";
           expr = cs.cacheType(
               new (ctx) FunctionConversionExpr(expr, escapingToFuncTy));
         }
         // Apply an explicit function conversion *only* for the escape to
         // noescape conversion. This conversion will be stripped by the
         // default argument generator. (We can't return a @noescape function)
-        llvm::errs() << "\n!!!create FunctionConversionExpr 04\n\n";
+        //llvm::errs() << "\n!!!create FunctionConversionExpr 04\n\n";
         auto newExpr =
             cs.cacheType(new (ctx) FunctionConversionExpr(expr, toFunc));
         return newExpr;
@@ -7680,7 +7680,7 @@ Expr *ExprRewriter::coerceToType(Expr *expr, Type toType,
           auto isolatedToType =
               FunctionType::get(toFunc->getParams(), toFunc->getResult(),
                                 toEI.withGlobalActor(fromEI.getGlobalActor()));
-          llvm::errs() << "\n!!!create FunctionConversionExpr 03\n\n";
+          //llvm::errs() << "\n!!!create FunctionConversionExpr 03\n\n";
 
           // Global actor might not be the only difference, let's introduce
           // a function conversion first but with matching isolation.
@@ -7695,7 +7695,7 @@ Expr *ExprRewriter::coerceToType(Expr *expr, Type toType,
 
     maybeDiagnoseUnsupportedFunctionConversion(cs, expr, toFunc);
 
-    llvm::errs() << "\n!!!create FunctionConversionExpr 02\n\n";
+    //llvm::errs() << "\n!!!create FunctionConversionExpr 02\n\n";
     return cs.cacheType(new (ctx) FunctionConversionExpr(expr, toType));
   }
 
