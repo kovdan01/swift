@@ -455,14 +455,18 @@ static SILValue reapplyFunctionConversion(
 
 // TODO asserts?
 static SILFunction *tryExtractWrappedFunctionFromAutoClosure(FunctionRefInst *originalFRI) {
-  auto *ACE = dyn_cast<AutoClosureExpr>(originalFRI->getLoc().getAsASTNode<Expr>());
+  auto *E = originalFRI->getLoc().getAsASTNode<Expr>();
+  if (E == nullptr)
+    return nullptr;
+
+  auto *ACE = dyn_cast<AutoClosureExpr>(E);
   if (ACE == nullptr)
     return nullptr;
+
   if (ACE->getThunkKind() != AutoClosureExpr::Kind::SingleCurryThunk)
     return nullptr;
 
   auto *originalFn = originalFRI->getReferencedFunction();
-
   if (originalFn->size() != 1)
     return nullptr;
 
