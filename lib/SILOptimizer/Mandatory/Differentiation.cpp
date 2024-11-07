@@ -513,11 +513,11 @@ emitDerivativeFunctionReference(
 
   // If `original` is a `@differentiable` function, just extract the
   // derivative function.
-  //llvm::errs() << "HERE 00\n";
+  llvm::errs() << "HERE 00\n";
   if (auto diffableFnType = original->getType().castTo<SILFunctionType>()) {
-    //llvm::errs() << "HERE 01\n";
+    llvm::errs() << "HERE 01\n";
     if (diffableFnType->isDifferentiable()) {
-      //llvm::errs() << "HERE 02\n";
+      llvm::errs() << "HERE 02\n";
       auto paramIndices =
           diffableFnType->getDifferentiabilityParameterIndices();
       for (auto i : desiredConfig.parameterIndices->getIndices()) {
@@ -644,7 +644,7 @@ emitDerivativeFunctionReference(
               desiredParameterIndices, desiredResultIndices,
               contextualDerivativeGenSig,
               LookUpConformanceInModule());
-      //llvm::errs() << "!!! create witness\n";
+      llvm::errs() << "!!! create witness\n";
       llvm::errs() << "!!!\n originalFn->getLinkage() = " << (int)(originalFn->getLinkage()) << "\n";
       minimalWitness = SILDifferentiabilityWitness::createDefinition(
           context.getModule(), /*(wrappedFunction == nullptr ? */SILLinkage::Private/* : SILLinkage::Public/*stripExternalFromLinkage(originalFn->getLinkage()))*/, originalFn,
@@ -656,19 +656,22 @@ emitDerivativeFunctionReference(
         return std::nullopt;
     }
     assert(minimalWitness);
-    // llvm::errs() << "\n\nAAAAAA\n\n";
-    // llvm::errs() << "BBBBB " << original->getFunction()->getName() << "\n";
-    // llvm::errs() << "CCCCC isDefer = " << (int)(original->getFunction()->isDefer())
-    //              << ", isThunk = " << (int)(original->getFunction()->isThunk())
-    //              << "\n";
-    // minimalWitness->dump();
-    // llvm::errs() << "DDDDD\n";
-    // minimalWitness->getOriginalFunction()->dump();
-    // llvm::errs() << "EEEEE isDefer = " << (int)(minimalWitness->getOriginalFunction()->isDefer())
-    //              << ", isThunk = " << (int)(minimalWitness->getOriginalFunction()->isThunk())
-    //              << ", purpose = " << (int)(minimalWitness->getOriginalFunction()->getSpecialPurpose())
-    //              << ", hasDynamicSelfMetadata = " << (int)(minimalWitness->getOriginalFunction()->hasDynamicSelfMetadata())
-    //              << "\n";
+    llvm::errs() << "\n\nAAAAAA\n\n";
+    llvm::errs() << "BBBBB " << original->getFunction()->getName() << "\n";
+    llvm::errs() << "CCCCC isDefer = " << (int)(original->getFunction()->isDefer())
+                 << ", isThunk = " << (int)(original->getFunction()->isThunk())
+                 << "\n";
+    minimalWitness->dump();
+    llvm::errs() << "DDDDD\n";
+    minimalWitness->getOriginalFunction()->dump();
+    llvm::errs() << "EEEEE isDefer = " << (int)(minimalWitness->getOriginalFunction()->isDefer())
+                 << ", isThunk = " << (int)(minimalWitness->getOriginalFunction()->isThunk())
+                 << ", purpose = " << (int)(minimalWitness->getOriginalFunction()->getSpecialPurpose())
+                 << ", hasDynamicSelfMetadata = " << (int)(minimalWitness->getOriginalFunction()->hasDynamicSelfMetadata())
+                 << "\n";
+    llvm::errs() << "!!! original->getFunction()->isSerialized() = " << (int)(original->getFunction()->isSerialized()) << "\n";
+    llvm::errs() << "!!! original->getFunction()->getSerializedKind() = " << (int)(original->getFunction()->getSerializedKind()) << "\n";
+
     // auto *ACE = dyn_cast<AutoClosureExpr>(originalFRI->getLoc().getAsASTNode<Expr>());
     // llvm::errs() << "!!! isa<AutoClosureExpr> = " << (int)(ACE != nullptr) << "\n";
     // if (ACE != nullptr) {
@@ -724,10 +727,10 @@ emitDerivativeFunctionReference(
     //   }
     // }
 
-    // TODO: check wrapped function linkage
+    // TODO: assert public visibility
     if (original->getFunction()->isSerialized() &&
-        wrappedFunction == nullptr && !hasPublicVisibility(minimalWitness->getLinkage())) {
-      //llvm::errs() << "\n\nFFFFF\n\n";
+        (wrappedFunction == nullptr || !hasPublicVisibility(wrappedFunction->getLinkage())) && !hasPublicVisibility(minimalWitness->getLinkage())) {
+      llvm::errs() << "\n\nFFFFF\n\n";
       enum { Inlinable = 0, DefaultArgument = 1 };
       unsigned fragileKind = Inlinable;
       // FIXME: This is not a very robust way of determining if the function is
