@@ -546,8 +546,9 @@ emitDerivativeFunctionReference(
           peerThroughFunctionConversions<FunctionRefInst>(original)) {
     auto loc = originalFRI->getLoc();
     auto *originalFn = originalFRI->getReferencedFunction();
-    if (SILFunction *wrappedFunction = tryExtractWrappedFunctionFromAutoClosure(originalFRI))
-      originalFn = wrappedFunction;
+    // if (SILFunction *wrappedFunction = tryExtractWrappedFunctionFromAutoClosure(originalFRI))
+    //   originalFn = wrappedFunction;
+    SILFunction *wrappedFunction = tryExtractWrappedFunctionFromAutoClosure(originalFRI);
     auto originalFnTy = originalFn->getLoweredFunctionType();
     auto *desiredParameterIndices = desiredConfig.parameterIndices;
     auto *desiredResultIndices = desiredConfig.resultIndices;
@@ -644,8 +645,9 @@ emitDerivativeFunctionReference(
               contextualDerivativeGenSig,
               LookUpConformanceInModule());
       //llvm::errs() << "!!! create witness\n";
+      llvm::errs() << "!!!\n originalFn->getLinkage() = " << (int)(originalFn->getLinkage()) << "\n";
       minimalWitness = SILDifferentiabilityWitness::createDefinition(
-          context.getModule(), SILLinkage::Private, originalFn,
+          context.getModule(), /*(wrappedFunction == nullptr ? */SILLinkage::Private/* : SILLinkage::Public/*stripExternalFromLinkage(originalFn->getLinkage()))*/, originalFn,
           DifferentiabilityKind::Reverse, desiredParameterIndices,
           desiredResultIndices, derivativeConstrainedGenSig, /*jvp*/ nullptr,
           /*vjp*/ nullptr, /*isSerialized*/ false);

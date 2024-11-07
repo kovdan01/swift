@@ -730,6 +730,48 @@ getOrCreateSubsetParametersThunkForDerivativeFunction(
     targetType = SILType::getPrimitiveObjectType(substTargetType)
                      .castTo<SILFunctionType>();
   }
+
+  llvm::errs() << "!!!! getOrCreateSubsetParametersThunkForDerivativeFunction\n";
+  llvm::errs() << "derivativeFnType->getNumParameters() = " << derivativeFnType->getNumParameters() << "\n";
+  llvm::errs() << "targetType->getNumParameters() = " << targetType->getNumParameters() << "\n";
+
+  llvm::errs() << "\n!!!! derivativeFn->dump() begin\n\n";
+  derivativeFn->dump();
+  llvm::errs() << "\n!!!! derivativeFn->dump() end\n\n";
+  llvm::errs() << "\n!!!! origFnOperand->dump() begin\n\n";
+  origFnOperand->dump();
+  llvm::errs() << "\n!!!! origFnOperand->dump() end\n\n";
+
+  // FIXME: The logic for resolving `assocRef` does not reapply function
+  // conversions, which is problematic if `derivativeFn` is a `partial_apply`
+  // instruction.
+  StringRef origName;
+  if (auto *origFnRef =
+      peerThroughFunctionConversions<FunctionRefInst>(origFnOperand)) {
+    origName = origFnRef->getReferencedFunction()->getName();
+    llvm::errs() << "\n!!!! origFnRef->dump() begin\n\n";
+    origFnRef->dump();
+    llvm::errs() << "\n!!!! referenced function dump \n\n";
+    origFnRef->getReferencedFunction()->dump();
+    llvm::errs() << "\n!!!! origFnRef->dump() end\n\n";
+  } else if (auto *origMethodInst =
+             peerThroughFunctionConversions<MethodInst>(origFnOperand)) {
+    origName = origMethodInst->getMember()
+    .getAnyFunctionRef()
+        ->getAbstractFunctionDecl()
+        ->getNameStr();
+    llvm::errs() << "\n!!!! origMethodInst->dump() begin\n\n";
+    origMethodInst->dump();
+    llvm::errs() << "\n!!!! origMethodInst->dump() end\n\n";
+  }
+  assert(!origName.empty() && "Original function name could not be resolved");
+
+  llvm::errs() << "!!!! origName = " << origName << "\n";
+
+  llvm::errs() << "\n!!!! origFnOperand->getFunction()->dump() begin\n\n";
+  origFnOperand->getFunction()->dump();
+  llvm::errs() << "\n!!!! origFnOperand->getFunction()->dump() end\n\n";
+
   assert(derivativeFnType->getNumParameters() ==
          targetType->getNumParameters());
   assert(derivativeFnType->getNumResults() == targetType->getNumResults());
@@ -742,21 +784,21 @@ getOrCreateSubsetParametersThunkForDerivativeFunction(
                                   /*withoutActuallyEscaping*/ false,
                                   DifferentiationThunkKind::IndexSubset);
 
-  // FIXME: The logic for resolving `assocRef` does not reapply function
-  // conversions, which is problematic if `derivativeFn` is a `partial_apply`
-  // instruction.
-  StringRef origName;
-  if (auto *origFnRef =
-          peerThroughFunctionConversions<FunctionRefInst>(origFnOperand)) {
-    origName = origFnRef->getReferencedFunction()->getName();
-  } else if (auto *origMethodInst =
-                 peerThroughFunctionConversions<MethodInst>(origFnOperand)) {
-    origName = origMethodInst->getMember()
-                   .getAnyFunctionRef()
-                   ->getAbstractFunctionDecl()
-                   ->getNameStr();
-  }
-  assert(!origName.empty() && "Original function name could not be resolved");
+  // // FIXME: The logic for resolving `assocRef` does not reapply function
+  // // conversions, which is problematic if `derivativeFn` is a `partial_apply`
+  // // instruction.
+  // StringRef origName;
+  // if (auto *origFnRef =
+  //         peerThroughFunctionConversions<FunctionRefInst>(origFnOperand)) {
+  //   origName = origFnRef->getReferencedFunction()->getName();
+  // } else if (auto *origMethodInst =
+  //                peerThroughFunctionConversions<MethodInst>(origFnOperand)) {
+  //   origName = origMethodInst->getMember()
+  //                  .getAnyFunctionRef()
+  //                  ->getAbstractFunctionDecl()
+  //                  ->getNameStr();
+  // }
+  // assert(!origName.empty() && "Original function name could not be resolved");
   Mangle::DifferentiationMangler mangler;
   auto thunkName = mangler.mangleDerivativeFunctionSubsetParametersThunk(
       origName, targetType->mapTypeOutOfContext()->getCanonicalType(),
