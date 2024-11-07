@@ -724,8 +724,9 @@ emitDerivativeFunctionReference(
     //   }
     // }
 
+    // TODO: check wrapped function linkage
     if (original->getFunction()->isSerialized() &&
-        !hasPublicVisibility(minimalWitness->getLinkage())) {
+        wrappedFunction == nullptr && !hasPublicVisibility(minimalWitness->getLinkage())) {
       //llvm::errs() << "\n\nFFFFF\n\n";
       enum { Inlinable = 0, DefaultArgument = 1 };
       unsigned fragileKind = Inlinable;
