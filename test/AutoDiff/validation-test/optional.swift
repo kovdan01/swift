@@ -14,6 +14,16 @@ var OptionalTests = TestSuite("OptionalDifferentiation")
 //===----------------------------------------------------------------------===//
 
 // TODO(TF-433): operator `??` lowers to an active `try_apply`.
+// MYNOTE: MEDIUM PRIORITY
+// MYNOTE: https://github.com/swiftlang/swift/issues/54628
+// MYNOTE: error: function is not differentiable
+// MYNOTE: | @differentiable(reverse)
+// MYNOTE: |  `- error: function is not differentiable
+// MYNOTE: | func optional_nil_coalescing(_ maybeX: Float?) -> Float {
+// MYNOTE: |      `- note: when differentiating this function definition
+// MYNOTE: |   return maybeX ?? 10
+// MYNOTE: |                 `- note: expression is not differentiable
+// MYNOTE: | }
 /*
 @differentiable(reverse)
 func optional_nil_coalescing(_ maybeX: Float?) -> Float {
