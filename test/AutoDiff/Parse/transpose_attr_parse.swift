@@ -30,6 +30,12 @@ func transpose(v: Float) -> Float
 
 // Qualified operator.
 // TODO(TF-1065): Consider disallowing qualified operators.
+// MYNOTE: LOW PRIORITY
+// MYNOTE:
+// 1. What is the motivation for the TODO?
+// 2. Is the motivation still relevant?
+// 3. If yes, do we want to convert the TODO to an issue?
+//    If no, do we want to just delete the TODO?
 @transpose(of: Swift.Float.+)
 func transpose(v: Float) -> Float
 
