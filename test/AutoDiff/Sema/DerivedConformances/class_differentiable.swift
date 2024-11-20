@@ -379,6 +379,19 @@ final class TF_260<T: Differentiable>: Differentiable & DummyAdditiveArithmetic
 // [AD] Diagnosing non-differentiability.
 // [AD] For instruction:
 //   %2 = ref_element_addr %0 : $TF_269, #TF_269.filter // user: %3
+
+// MYNOTE: KeyPathIterable is not even defined.
+// Probably should take a look at swift-for-tensorflow/Sources/TensorFlow/Core/KeyPathIterable.swift (mentioned in other test).
+// Also, one of the tests contains this:
+// ```
+// public protocol KeyPathIterable {
+//   associatedtype AllKeyPaths: Sequence
+//     where AllKeyPaths.Element == PartialKeyPath<Self>
+// }
+// ```
+// Even with this being defined, we get errors like TF_269 not conforming to KeyPathIterable
+// and "unexpected note produced: protocol requires nested type 'AllKeyPaths'".
+
 /*
 public protocol TF_269_Layer: Differentiable & KeyPathIterable
   where TangentVector: KeyPathIterable {
