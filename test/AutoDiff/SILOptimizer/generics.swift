@@ -342,11 +342,9 @@ extension ContextualLayoutRequirement {
     let _: @differentiable(reverse) (T) -> T = { $0 }
   }
 }
+
 // The layout requirement directly involves `T`, the differentiable function
 // parameter/result type.
-// TODO(TF-851): Uncomment the tests below after `@differentiable` function
-// SILGen thunking is fixed.
-/*
 struct LayoutRequirement<T: AnyObject & Differentiable> {
   var stored: T
 }
@@ -356,7 +354,6 @@ extension LayoutRequirement {
     let _: @differentiable(reverse) (T) -> T = { $0 }
   }
 }
-*/
 
 // Test superclass requirements.
 
@@ -373,11 +370,10 @@ extension ContextualSuperclassRequirement {
     let _: @differentiable(reverse) (T) -> T = { $0 }
   }
 }
+
 // The superclass requirement directly involves `T`, the differentiable
 // function parameter/result type.
-// TODO(TF-851): Uncomment the tests below after `@differentiable` function
-// SILGen thunking is fixed.
-/*
+
 struct SuperclassRequirement<T: Super & Differentiable> {
   var stored: T
 }
@@ -387,4 +383,3 @@ extension SuperclassRequirement {
     let _: @differentiable(reverse) (T) -> T = { $0 }
   }
 }
-*/
