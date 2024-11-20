@@ -10,6 +10,7 @@ import StdlibUnittest
 
 var InoutParameterAutoDiffTests = TestSuite("InoutParameterDifferentiation")
 
+// MYNOTE: ZERO PRIORITY (forward-mode)
 // TODO(TF-1173): Move floating-point mutating operation tests to
 // `test/AutoDiff/stdlib/floating_point.swift.gyb` when forward-mode
 // differentiation supports `inout` parameter differentiation.
