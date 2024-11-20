@@ -578,6 +578,7 @@ func TF_534<Model: TF_534_Layer>(
   }.0
 }
 
+// MYNOTE:
 // TODO: uncomment once control flow is supported in forward mode.
 // TF-652: Test VJPEmitter substitution map generic signature.
 // The substitution map should have the VJP's generic signature, not the
@@ -1082,6 +1083,7 @@ ForwardModeTests.test("ResultSelection") {
   */
 }
 
+// MYNOTE:
 // TODO(TF-983): Support forward-mode differentiation of multiple results.
 /*
 ForwardModeTests.test("MultipleResults") {

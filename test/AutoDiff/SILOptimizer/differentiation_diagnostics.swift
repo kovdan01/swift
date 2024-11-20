@@ -315,6 +315,7 @@ func roundingGivesError(x: Float) -> Float {
 
 @differentiable(reverse)
 func nonVariedResult(_ x: Float) -> Float {
+  // MYNOTE: LOW PRIORITY
   // TODO(TF-788): Re-enable non-varied result warning.
   // xpected-warning @+1 {{result does not depend on differentiation arguments and will always have a zero derivative; do you want to use 'withoutDerivative(at:)'?}} {{10-10=withoutDerivative(at:}} {{15-15=)}}
   return 0
@@ -751,6 +752,8 @@ public func hasImplicitlyDifferentiatedTopLevelDefaultArgument(
   _ f: @differentiable(reverse) (Float) -> Float = implicitlyDifferentiableFromFragile
 ) {}
 
+// MYNOTE: MEDIUM PRIORITY
+// MYNOTE: The same error was fixed for curry thunks in https://github.com/swiftlang/swift/pull/77615
 // TODO(TF-1030): This will eventually not be an error.
 // expected-error @+2 {{function is not differentiable}}
 // expected-note @+1 {{differentiated functions in default arguments must be marked '@differentiable' or have a public '@derivative'; this is not possible with a closure, make a top-level function instead}}

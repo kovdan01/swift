@@ -4,6 +4,7 @@
 // - Stored property accessors.
 // - Property wrapper wrapped value accessors.
 
+// MYNOTE: ZERO PRIORITY (forward-mode)
 // TODO(TF-1254): Support forward-mode differentiation and test generated differentials.
 
 import _Differentiation

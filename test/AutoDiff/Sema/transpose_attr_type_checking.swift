@@ -279,6 +279,7 @@ struct A : Differentiable & AdditiveArithmetic {
     return a
   }
 
+  // MYNOTE: LOW PRIORITY
   // TODO(TF-1065): Consider disallowing qualified operator names.
   @transpose(of: A.+, wrt: 0)
   static func transposeIdQualified(t: A) -> A {

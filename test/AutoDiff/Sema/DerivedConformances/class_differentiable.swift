@@ -374,6 +374,7 @@ final class TF_260<T: Differentiable>: Differentiable & DummyAdditiveArithmetic
 // TF-269: Test crash when differentiation properties have no getter.
 // Related to access levels and associated type inference.
 
+// MYNOTE: below
 // TODO(TF-631): Blocked by class type differentiation support.
 // [AD] Unhandled instruction in adjoint emitter:   %2 = ref_element_addr %0 : $TF_269, #TF_269.filter // user: %3
 // [AD] Diagnosing non-differentiability.

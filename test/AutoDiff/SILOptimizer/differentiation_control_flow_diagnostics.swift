@@ -131,6 +131,7 @@ enum Tree : Differentiable & AdditiveArithmetic {
 
   // expected-error @+1 {{function is not differentiable}}
   @differentiable(reverse)
+  // MYNOTE: LOW PRIORITY
   // TODO(TF-956): Improve location of active enum non-differentiability errors
   // so that they are closer to the source of the non-differentiability.
   // expected-note @+2 {{when differentiating this function definition}}
@@ -148,6 +149,7 @@ enum Tree : Differentiable & AdditiveArithmetic {
 
   // expected-error @+1 {{function is not differentiable}}
   @differentiable(reverse)
+  // MYNOTE: LOW PRIORITY
   // TODO(TF-956): Improve location of active enum non-differentiability errors
   // so that they are closer to the source of the non-differentiability.
   // expected-note @+2 {{when differentiating this function definition}}
@@ -164,6 +166,7 @@ enum Tree : Differentiable & AdditiveArithmetic {
   }
 }
 
+// MYNOTE: LOW PRIORITY
 // TODO(TF-957): Improve non-differentiability errors for for-in loops
 // (`Collection.makeIterator` and `IteratorProtocol.next`).
 // expected-error @+1 {{function is not differentiable}}

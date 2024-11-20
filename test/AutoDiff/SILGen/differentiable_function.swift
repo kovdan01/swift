@@ -81,6 +81,8 @@ var global_f_linear: @differentiable(_linear) (Float) -> Float = {$0}
 
 func calls_global_f() {
   _ = global_f(10)
+  // MYNOTE: linear
+  // MYNOTE: calls_global_f is not tested at all
   // TODO(TF-900, TF-902): Uncomment the following line to test loading a linear function from memory and direct calls to a linear function.
   _ = global_f_linear(10)
 }

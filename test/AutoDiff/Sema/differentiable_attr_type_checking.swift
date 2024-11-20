@@ -64,6 +64,7 @@ struct ComputedPropertyDupeAttributes<T: Differentiable>: Differentiable {
     set { value = newValue }
   }
 
+  // MYNOTE:
   // TODO(TF-482): Remove diagnostics when `@differentiable` attributes are
   // also uniqued based on generic requirements.
   @differentiable(reverse where T == Float) // expected-error {{duplicate '@differentiable' attribute with same parameters}}
@@ -335,6 +336,7 @@ protocol ProtocolRequirementsWithDefault_NoConformingTypes {
   func f1(_ x: Float) -> Float
 }
 extension ProtocolRequirementsWithDefault_NoConformingTypes {
+  // MYNOTE:
   // TODO(TF-650): It would be nice to diagnose protocol default implementation
   // with missing `@differentiable` attribute.
   func f1(_ x: Float) -> Float { x }
@@ -640,6 +642,7 @@ class Super: Differentiable {
   @differentiable(reverse)
   var testDynamicSelfProperty: Self { self }
 
+  // MYNOTE:
   // TODO(TF-632): Fix "'TangentVector' is not a member type of 'Self'" diagnostic.
   // The underlying error should appear instead:
   // "covariant 'Self' can only appear at the top level of method result type".

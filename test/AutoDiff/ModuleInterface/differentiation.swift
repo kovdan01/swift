@@ -7,6 +7,7 @@ import _Differentiation
 public func a(f: @differentiable(reverse) (Float) -> Float) {}
 // CHECK: public func a(f: @differentiable(reverse) (Swift.Float) -> Swift.Float)
 
+// MYNOTE:
 // TODO: Remove once `@differentiable` becomes deprecated.
 public func b(f: @differentiable(reverse) (Float) -> Float) {}
 // CHECK: public func b(f: @differentiable(reverse) (Swift.Float) -> Swift.Float)

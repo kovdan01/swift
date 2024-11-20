@@ -197,6 +197,7 @@ func inferredConformancesGenericLinear<T, U>(_: @differentiable(_linear) (Vector
 
 func nondiff(x: Vector<Int>) -> Vector<Int> {}
 
+// MYNOTE: LOW PRIORITY
 // TODO(diagnostics): Ambiguity notes for two following calls should talk about `T` and `U` both not conforming to `Differentiable`
 // but we currently have to way to coalesce notes multiple fixes in to a single note.
 

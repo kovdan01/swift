@@ -4,6 +4,7 @@
 // Test is unexpectedly passing on no_assert config on Linux
 // REQUIRES: rdar89860761
 
+// MYNOTE: MEDIUM PRIORITY
 // FIXME: Disabled due to test failure with `-O` (https://github.com/apple/swift/issues/55690).
 // XFAIL: swift_test_mode_optimize
 // XFAIL: swift_test_mode_optimize_size

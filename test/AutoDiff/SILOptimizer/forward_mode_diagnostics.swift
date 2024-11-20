@@ -2,6 +2,7 @@
 
 // Test forward-mode differentiation transform diagnostics.
 
+// MYNOTE: I don't get the contents of the file. We have @differentiable(reverse); why it's forward-mode?
 // TODO: Move these tests back into `autodiff_diagnostics.swift` once
 // forward mode reaches feature parity with reverse mode.
 

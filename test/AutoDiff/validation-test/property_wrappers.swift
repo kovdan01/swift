@@ -1,4 +1,5 @@
 // RUN: %target-run-simple-swift
+// MYNOTE: ZERO PRIORITY (forward-mode)
 // TODO(TF-1254): Support and test forward-mode differentiation.
 // TODO(TF-1254): %target-run-simple-swift(-Xfrontend -enable-experimental-forward-mode-differentiation)
 // REQUIRES: executable_test
@@ -46,6 +47,7 @@ PropertyWrapperTests.test("SimpleStruct") {
   expectEqual((.init(x: 60, y: 0, z: 20), 300),
               gradient(at: Struct(), 2, of: setter))
 
+  // MYNOTE: MEDIUM PRIORITY
   // TODO: Support `modify` accessors (https://github.com/apple/swift/issues/55084).
   /*
   func modify(_ s: Struct, _ x: Tracked<Float>) -> Tracked<Float> {
@@ -86,6 +88,7 @@ PropertyWrapperTests.test("GenericStruct") {
   expectEqual((.init(x: 60, y: 0, z: 20), 300),
               gradient(at: GenericStruct<Tracked<Float>>(y: 20), 2, of: setter))
 
+  // MYNOTE: MEDIUM PRIORITY
   // TODO: Support `modify` accessors (https://github.com/apple/swift/issues/55084).
   /*
   func modify<T>(_ s: GenericStruct<T>, _ x: Tracked<Float>) -> Tracked<Float> {
@@ -121,16 +124,21 @@ PropertyWrapperTests.test("SimpleClass") {
     c.x = c.x * x * c.z
     return c.x
   }
+  // MYNOTE: I don't get this
   // FIXME(TF-1175): Class operands should always be marked active.
   // This is relevant for `Class.x.setter`, which has type
   // `$@convention(method) (@in Tracked<Float>, @guaranteed Class) -> ()`.
   expectEqual((.init(x: 1, y: 0, z: 0), 0),
               gradient(at: Class(), 2, of: setter))
+  // MYNOTE: HIGH (???) PRIORITY
+  // MYNOTE: When uncommented, the test compiles properly, but crashes during execution.
+  // MYNOTE: The crash is also present for similar commented expectEqual with `of: modify` below. 
   /*
   expectEqual((.init(x: 60, y: 0, z: 20), 300),
               gradient(at: Class(), 2, of: setter))
   */
 
+  // MYNOTE: MEDIUM PRIORITY
   // TODO: Support `modify` accessors (https://github.com/apple/swift/issues/55084).
   /*
   func modify(_ c: Class, _ x: Tracked<Float>) -> Tracked<Float> {
@@ -156,6 +164,7 @@ enum Lazy<Value> {
   }
 
   var wrappedValue: Value {
+    // MYNOTE: I don't get this
     // TODO(TF-1250): Replace with actual mutating getter implementation.
     // Requires differentiation to support functions with multiple results.
     get {

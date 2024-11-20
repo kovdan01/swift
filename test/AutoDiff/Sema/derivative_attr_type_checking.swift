@@ -383,6 +383,7 @@ class Super {
 }
 
 class Sub: Super {
+  // MYNOTE:
   // TODO(TF-649): Enable `@derivative` to override derivatives for original
   // declaration defined in superclass.
   // expected-error @+1 {{referenced declaration 'foo' could not be resolved}}
@@ -730,6 +731,7 @@ extension HasStoredProperty {
 }
 
 // Test derivative registration for protocol requirements. Currently unsupported.
+// MYNOTE: https://github.com/swiftlang/swift/issues/54231
 // TODO(TF-982): Lift this restriction and add proper support.
 
 protocol ProtocolRequirementDerivative {
@@ -1001,6 +1003,7 @@ protocol HasADefaultDerivative {
   func req(_ x: Float) -> Float
 }
 extension HasADefaultDerivative {
+  // MYNOTE: https://github.com/swiftlang/swift/issues/54231
   // TODO(TF-982): Support default derivatives for protocol requirements.
   // expected-error @+1 {{referenced declaration 'req' could not be resolved}}
   @derivative(of: req)

@@ -14,6 +14,7 @@
 // - `differentiable_function`
 // - `differentiable_function_extract`
 
+// MYNOTE: linear
 // TODO: Add tests for `@differentiable(_linear)` functions.
 
 import _Differentiation
