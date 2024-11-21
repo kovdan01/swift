@@ -19,6 +19,8 @@ SIMDTests.test("init(repeating:)") {
   expectEqual(8, pb1(g))
 }
 
+// MYNOTE: MEDIUM PRIORITY
+// MYNOTE: ISSUE https://github.com/swiftlang/swift/issues/54445
 // FIXME(TF-1103): Derivative registration does not yet support
 // `@_alwaysEmitIntoClient` original functions.
 /*
@@ -27,6 +29,8 @@ SIMDTests.test("Sum") {
 
   func foo1(x: SIMD4<Float>) -> Float {
     return x.sum()
+// MYNOTE: |- error: expression is not differentiable
+// MYNOTE: `- note: cannot differentiate functions that have not been marked '@differentiable' and that are defined in other files
   }
   let (val1, pb1) = valueWithPullback(at: a, of: foo1)
   expectEqual(10, val1)
@@ -289,6 +293,8 @@ SIMDTests.test("Generics") {
   expectEqual(SIMD3<Double>(5, 10, 15), val4)
   expectEqual((SIMD3<Double>(5, 5, 5), 6), pb4(g))
 
+  // MYNOTE: MEDIUM PRIORITY
+  // MYNOTE: ISSUE https://github.com/swiftlang/swift/issues/54445
   // FIXME(TF-1103): Derivative registration does not yet support
   // `@_alwaysEmitIntoClient` original functions like `SIMD.sum()`.
   /*

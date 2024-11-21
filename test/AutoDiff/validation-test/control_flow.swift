@@ -1,6 +1,7 @@
 // RUN: %target-run-simple-swift
 // REQUIRES: executable_test
 
+// MYNOTE: LOW PRIORITY (32 bit)
 // FIXME: Enable test for all platforms after debugging (https://github.com/apple/swift/issues/55186).
 // iphonesimulator-i386-specific failures.
 // REQUIRES: CPU=x86_64
@@ -624,6 +625,8 @@ ControlFlowTests.test("Loops") {
     } while i < 2
     return result
   }
+  // MYNOTE: HIGH PRIORITY
+  // MYNOTE: TODO CREATE ISSUE
   // FIXME(TF-584): Investigate incorrect (too big) gradient values for
   // repeat-while loops.
   // expectEqual((8, 12), valueWithGradient(at: 2, of: repeat_while_loop))
@@ -640,6 +643,7 @@ ControlFlowTests.test("Loops") {
     } while i < 2
     return result
   }
+  // MYNOTE: HIGH PRIORITY
   // FIXME(TF-584): Investigate incorrect (too big) gradient values for
   // repeat-while loops.
   // expectEqual((4, 4), valueWithGradient(at: 2, of: repeat_while_loop_nonactive_initial_value))

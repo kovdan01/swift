@@ -1,5 +1,7 @@
 // RUN: %target-build-swift -O %s
 
+// MYNOTE: what is this fixme?
+// MYNOTE try to enable and, if still failing, create a GH issue
 // FIXME(rdar://89055298)
 // UNSUPPORTED: OS=linux-gnu
 

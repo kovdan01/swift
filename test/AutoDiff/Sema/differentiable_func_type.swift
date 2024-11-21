@@ -18,6 +18,7 @@ let _: @differentiable(reverse) (Float) throws -> Float
 
 struct NonDiffType { var x: Int }
 
+// MYNOTE: What's the issue actually? The error looks correct
 // FIXME: Properly type-check parameters and the result's differentiability
 // expected-error @+1 {{parameter type 'NonDiffType' does not conform to 'Differentiable', but the enclosing function type is '@differentiable'}}
 let _: @differentiable(reverse) (NonDiffType) -> Float

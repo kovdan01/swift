@@ -755,6 +755,8 @@ func testClassModifyAccessor(_ c: inout C) {
   c.float *= c.float
 }
 
+// MYNOTE: ??? PRIORITY
+// MYNOTE: ??? ISSUE
 // FIXME(TF-1176): Some values are incorrectly not marked as active: `%16`, etc.
 // CHECK-LABEL: [AD] Activity info for ${{.*}}testClassModifyAccessor{{.*}} at parameter indices (0) and result indices (0)
 // CHECK: [ACTIVE] %0 = argument of bb0 : $*C

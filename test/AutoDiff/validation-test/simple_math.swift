@@ -250,6 +250,7 @@ SimpleMathTests.test("TupleMutation") {
   }
   expectEqual(1, gradient(at: 3.0, of: generic))
 
+  // MYNOTE: ZERO PRIORITY (forward-mode)
   // FIXME(TF-1033): Fix forward-mode ownership error for tuple with non-active
   // initial values.
   /*

@@ -627,6 +627,7 @@ extension Class where T: Differentiable {
     return (1, { _ in .zero })
   }
 
+  // MYNOTE: ??? PRIORITY (relevant to structs or class-only?)
   // FIXME: Enable derivative registration for class property/subscript setters (https://github.com/apple/swift/issues/55542).
   //
   // This requires changing derivative type calculation rules for functions with

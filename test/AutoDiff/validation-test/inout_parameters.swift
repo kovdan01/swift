@@ -184,6 +184,8 @@ InoutParameterAutoDiffTests.test("InoutClassParameter") {
       squaredViaModifyAccessor(&c)
       return c.x
     }
+    // MYNOTE: ??? PRIORITY (probably zero since 'We decided not to proceed with class differentiation due to many fundamental questions (classes are not values)')
+    // MYNOTE: probably https://github.com/swiftlang/swift/issues/54685
     // FIXME(TF-1080): Fix incorrect class property `modify` accessor derivative values.
     // expectEqual((100, 20), valueWithGradient(at: 10, of: squared))
     // expectEqual(200, pullback(at: 10, of: squared)(10))

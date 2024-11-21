@@ -319,6 +319,7 @@ ForwardModeTests.test("TupleMutation") {
   }
   expectEqual(1, derivative(at: 3.0, of: generic))
 
+  // MYNOTE: ZERO PRIORITY (forward-mode)
   // FIXME(TF-1033): Fix forward-mode ownership error for tuple with non-active
   // initial values.
   /*
@@ -361,6 +362,8 @@ ForwardModeTests.test("TupleNonDifferentiableElements") {
     tuple.2 = x
     return tuple.1.1 * tuple.2
   }
+  // MYNOTE: ZERO PRIORITY (forward-mode)
+  // MYNOTE: the issue was closed since forward mode will be deprecated
   // FIXME: Fix runtime segfault (https://github.com/apple/swift/issues/55357).
   // expectEqual((16, 8), valueWithDerivative(at: 4, of: nested))
 
@@ -578,7 +581,7 @@ func TF_534<Model: TF_534_Layer>(
   }.0
 }
 
-// MYNOTE:
+// MYNOTE: ZERO PRIORITY (forward mode)
 // TODO: uncomment once control flow is supported in forward mode.
 // TF-652: Test VJPEmitter substitution map generic signature.
 // The substitution map should have the VJP's generic signature, not the
@@ -744,9 +747,12 @@ ForwardModeTests.test("Simple") {
 ForwardModeTests.test("SimpleWrtSelf") {
   class Super : Differentiable {
     var base: Float
+    // MYNOTE: ZERO PRIORITY (forward-mode)
     // FIXME(TF-648): Dummy to make `Super.AllDifferentiableVariables` be nontrivial.
     var _nontrivial: [Float] = []
 
+    // MYNOTE: ZERO PRIORITY (forward-mode)
+    // MYNOTE: looks like there is no crash
     // FIXME: Fix forward-mode differentiation tangent buffer crash (https://github.com/apple/swift/issues/54600).
     // @differentiable(reverse)
     required init(base: Float) {
@@ -793,6 +799,7 @@ ForwardModeTests.test("SimpleWrtSelf") {
     }
   }
 
+  // MYNOTE: ZERO PRIORITY (forward mode)
   // FIXME: Fix forward-mode differentiation tangent buffer crash (https://github.com/apple/swift/issues/54600).
   // let v = Super.TangentVector(base: 100, _nontrivial: [])
   // expectEqual(100, pullback(at: 1337) { x in Super(base: x) }(v))

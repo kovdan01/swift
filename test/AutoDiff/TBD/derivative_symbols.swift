@@ -106,6 +106,13 @@ public final class Class: Differentiable {
   var stored: Float
 
   // Test initializer.
+  // MYNOTE: ??? PRIORITY (this is class, need to test for struct)
+  // MYNOTE: ??? ISSUE
+  // MYNOTE: crash in
+  // MYNOTE  1.      Swift version 6.1-dev (LLVM 0f86f354a7bc883, Swift e6b4e0f9f171a51)
+  // MYNOTE  2.      Compiling with effective version 4.1.50
+  // MYNOTE  3.      While evaluating request ASTLoweringRequest(Lowering AST to SIL for module test)
+  // MYNOTE  4.      While verifying SIL function "@$s4test5ClassCyACSfcfCTJVfSUpSr".
   // FIXME(rdar://74380324)
   // @differentiable(reverse)
   public init(_ x: Float) {
@@ -113,6 +120,8 @@ public final class Class: Differentiable {
   }
 
   // Test delegating initializer.
+  // MYNOTE: ??? MPRIORITY
+  // MYNOTE requires initializer above
   // FIXME(rdar://74380324)
   // @differentiable(reverse)
   // public convenience init(blah x: Float) {
@@ -134,6 +143,7 @@ public final class Class: Differentiable {
     @differentiable(reverse)
     get { x }
 
+    // MYNOTE: ??? is this for classes?
     // FIXME: https://github.com/apple/swift/issues/55542
     // @differentiable(reverse)
     // set { stored = newValue }
@@ -146,6 +156,7 @@ public final class Class: Differentiable {
     fatalError()
   }
 
+  // MYNOTE: ??? is this for classes?
   // FIXME: https://github.com/apple/swift/issues/55542
   // @derivative(of: subscript.set)
   // public func vjpSubscriptSetter(_ x: Float, _ newValue: Float) -> (

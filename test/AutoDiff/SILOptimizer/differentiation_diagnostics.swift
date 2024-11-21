@@ -774,7 +774,7 @@ public func fragileDifferentiable(_ x: Float) -> Float {
   implicitlyDifferentiableFromFragile(x)
 }
 
-
+// MYNOTE: fixed in https://github.com/swiftlang/swift/pull/77615
 // FIXME: Differentiable curry thunk RequirementMachine error (rdar://87429620, https://github.com/apple/swift/issues/54819).
 #if false
 // TF-1208: Test curry thunk differentiation regression.

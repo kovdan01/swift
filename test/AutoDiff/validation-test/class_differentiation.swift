@@ -155,9 +155,13 @@ ClassTests.test("ClassArgumentActivity") {
   // Returns `x * x`.
   func squared(_ x: Float) -> Float {
     var c = C(x)
+    // MYNOTE: ??? PRIORITY (class differentiation?)
+    // MYNOTE: IS THIS https://github.com/swiftlang/swift/issues/54685
     c.square() // FIXME(TF-1175): doesn't get differentiated!
     return c.x
   }
+  // MYNOTE: ??? PRIORITY (class differentiation?)
+  // MYNOTE: IS THIS https://github.com/swiftlang/swift/issues/54685
   // FIXME(TF-1175): Find a robust solution so that derivatives are correct.
   // expectEqual((100, 20), valueWithGradient(at: 10, of: squared))
   expectEqual((100, 1), valueWithGradient(at: 10, of: squared))

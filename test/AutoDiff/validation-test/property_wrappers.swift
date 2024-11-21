@@ -125,6 +125,7 @@ PropertyWrapperTests.test("SimpleClass") {
     return c.x
   }
   // MYNOTE: I don't get this
+  // MYNOTE: Is this https://github.com/swiftlang/swift/issues/54685 ?
   // FIXME(TF-1175): Class operands should always be marked active.
   // This is relevant for `Class.x.setter`, which has type
   // `$@convention(method) (@in Tracked<Float>, @guaranteed Class) -> ()`.
@@ -139,6 +140,7 @@ PropertyWrapperTests.test("SimpleClass") {
   */
 
   // MYNOTE: MEDIUM PRIORITY
+  // MYNOTE: Is this https://github.com/swiftlang/swift/issues/54685 ?
   // TODO: Support `modify` accessors (https://github.com/apple/swift/issues/55084).
   /*
   func modify(_ c: Class, _ x: Tracked<Float>) -> Tracked<Float> {

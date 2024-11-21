@@ -9,6 +9,7 @@ import _Differentiation
 
 // Dummy `Differentiable`-conforming type.
 struct DummyTangentVector: Differentiable & AdditiveArithmetic {
+  // MYNOTE: I don't get this
   // FIXME(TF-648): Dummy to make `Super.TangentVector` be nontrivial.
   var _nontrivial: [Float] = []
 
@@ -23,6 +24,8 @@ class Super: Differentiable {
   func move(by _: TangentVector) {}
 
   var base: Float
+  // MYNOTE: I don't get this
+  // MYNOTE: class-related, zero priority?
   // FIXME(TF-648): Dummy to make `Super.TangentVector` be nontrivial.
   var _nontrivial: [Float] = []
 
@@ -68,6 +71,8 @@ class Sub: Super {
   }
 
   // Override derivatives for `method` wrt `x`.
+  // MYNOTE: I don't get this
+  // MYNOTE: class-related, zero priority?
   // FIXME(TF-1203): This `@differentiable` attribute should not be necessary to
   // override derivatives. Fix `derivativeFunctionRequiresNewVTableEntry` to
   // account for derived declaration `@derivative` attributes.

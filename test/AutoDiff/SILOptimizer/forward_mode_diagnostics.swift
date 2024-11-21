@@ -238,6 +238,7 @@ final class ClassTangentPropertyWrongType: Differentiable {
   func move(by offset: TangentVector) {}
 }
 
+// MYNOTE: ZERO PRIORITY (forward-mode)
 // FIXME: Missing support for classes in forward-mode AD causes crash (https://github.com/apple/swift/issues/55906).
 /*
 // xpected-error @+2 {{function is not differentiable}}
@@ -287,6 +288,7 @@ final class ClassTangentPropertyNotStored: Differentiable {
   func move(by offset: TangentVector) {}
 }
 
+// MYNOTE: ZERO PRIORITY (forward-mode)
 // FIXME: Missing support for classes in forward-mode AD causes crash (https://github.com/apple/swift/issues/55906).
 /*
 // xpected-error @+2 {{function is not differentiable}}
