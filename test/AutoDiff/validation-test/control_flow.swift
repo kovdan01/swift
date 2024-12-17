@@ -628,12 +628,8 @@ ControlFlowTests.test("Loops") {
     } while i < 2
     return result
   }
-  // FIXME(TF-584): Investigate incorrect (too big) gradient values for
-  // repeat-while loops.
-  // expectEqual((8, 12), valueWithGradient(at: 2, of: repeat_while_loop))
-  // expectEqual((27, 27), valueWithGradient(at: 3, of: repeat_while_loop))
-  expectEqual((8, 18), valueWithGradient(at: 2, of: repeat_while_loop))
-  expectEqual((27, 36), valueWithGradient(at: 3, of: repeat_while_loop))
+  expectEqual((8, 12), valueWithGradient(at: 2, of: repeat_while_loop))
+  expectEqual((27, 27), valueWithGradient(at: 3, of: repeat_while_loop))
 
   func repeat_while_loop_nonactive_initial_value(_ x: Float) -> Float {
     var result: Float = 1
@@ -644,12 +640,8 @@ ControlFlowTests.test("Loops") {
     } while i < 2
     return result
   }
-  // FIXME(TF-584): Investigate incorrect (too big) gradient values for
-  // repeat-while loops.
-  // expectEqual((4, 4), valueWithGradient(at: 2, of: repeat_while_loop_nonactive_initial_value))
-  // expectEqual((9, 6), valueWithGradient(at: 3, of: repeat_while_loop_nonactive_initial_value))
-  expectEqual((4, 5), valueWithGradient(at: 2, of: repeat_while_loop_nonactive_initial_value))
-  expectEqual((9, 7), valueWithGradient(at: 3, of: repeat_while_loop_nonactive_initial_value))
+  expectEqual((4, 4), valueWithGradient(at: 2, of: repeat_while_loop_nonactive_initial_value))
+  expectEqual((9, 6), valueWithGradient(at: 3, of: repeat_while_loop_nonactive_initial_value))
 
   func loop_continue(_ x: Float) -> Float {
     var result = x

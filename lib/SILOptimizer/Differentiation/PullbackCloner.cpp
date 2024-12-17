@@ -1693,7 +1693,7 @@ public:
 
   /// Handle `store` or `store_borrow` instruction.
   ///   Original: store/store_borrow x to y
-  ///    Adjoint: adj[x] += load adj[y]; adj[y] = 0
+  ///    Adjoint: adj[x] += load adj[y]; adj[y] = 0 // TODO
   void visitStoreOperation(SILBasicBlock *bb, SILLocation loc, SILValue origSrc,
                            SILValue origDest) {
     auto adjBuf = getAdjointBuffer(bb, origDest);
@@ -1768,7 +1768,7 @@ public:
 
   /// Handle `move_value` instruction.
   ///   Original: y = move_value x
-  ///    Adjoint: adj[x] += adj[y]
+  ///    Adjoint: adj[x] += adj[y] // TODO don't we need to have zero?
   void visitMoveValueInst(MoveValueInst *mvi) { visitValueOwnershipInst(mvi); }
 
   void visitEndInitLetRefInst(EndInitLetRefInst *eir) { visitValueOwnershipInst(eir); }
@@ -2456,6 +2456,29 @@ bool PullbackCloner::Implementation::run() {
   // Visit original blocks in post-order and perform differentiation
   // in corresponding pullback blocks. If errors occurred, back out.
   else {
+    for (auto *bb : originalBlocks) {
+      SILLoop *loop = vjpCloner.getLoopInfo()->getLoopFor(bb);
+      if (loop == nullptr)
+        continue;
+      SILBasicBlock *loopHeader = loop->getHeader();
+      builder.setInsertionPoint(getPullbackBlock(loopHeader));
+      auto &bbActiveValues = activeValues[bb];
+      for (SILValue bbActiveValue : bbActiveValues) {
+        if (bbActiveValue->getParentBlock() != bb)
+          continue;
+        if (getTangentValueCategory(bbActiveValue) ==
+            SILValueCategory::Object) {
+          setAdjointValue(bb, bbActiveValue,
+                          makeZeroAdjointValue(getRemappedTangentType(
+                              bbActiveValue->getType())));
+        } else {
+          assert(getTangentValueCategory(bbActiveValue) ==
+                 SILValueCategory::Address);
+          getAdjointBuffer(bb, bbActiveValue);
+        }
+      }
+    }
+
     for (auto *bb : originalBlocks) {
       visitSILBasicBlock(bb);
       if (errorOccurred)
