@@ -2456,6 +2456,79 @@ bool PullbackCloner::Implementation::run() {
   // Visit original blocks in post-order and perform differentiation
   // in corresponding pullback blocks. If errors occurred, back out.
   else {
+    LLVM_DEBUG(getADDebugStream()
+               << "Begin search for adjoints of loop-local active values\n");
+    llvm::DenseMap<const SILLoop *, llvm::DenseSet<SILValue>>
+        loopLocalActiveValues;
+    for (auto *bb : originalBlocks) {
+      const SILLoop *loop = vjpCloner.getLoopInfo()->getLoopFor(bb);
+      if (loop == nullptr)
+        continue;
+      SILBasicBlock *loopHeader = loop->getHeader();
+      SILBasicBlock *pbLoopHeader = getPullbackBlock(loopHeader);
+      LLVM_DEBUG(getADDebugStream()
+                 << "Original bb" << bb->getDebugID()
+                 << " belongs to a loop, original header bb"
+                 << loopHeader->getDebugID() << ", pullback header bb"
+                 << pbLoopHeader->getDebugID() << '\n');
+      builder.setInsertionPoint(pbLoopHeader);
+      auto bbActiveValuesIt = activeValues.find(bb);
+      if (bbActiveValuesIt == activeValues.end())
+        continue;
+      const auto &bbActiveValues = bbActiveValuesIt->second;
+      for (SILValue bbActiveValue : bbActiveValues) {
+        if (vjpCloner.getLoopInfo()->getLoopFor(
+                bbActiveValue->getParentBlock()) != loop) {
+          LLVM_DEBUG(
+              getADDebugStream()
+              << "The following active value is NOT loop-local, skipping: "
+              << bbActiveValue);
+          continue;
+        }
+        auto [_, wasInserted] =
+            loopLocalActiveValues[loop].insert(bbActiveValue);
+        LLVM_DEBUG(getADDebugStream()
+                   << "The following active value is loop-local, ");
+        if (!wasInserted) {
+          LLVM_DEBUG(llvm::dbgs() << "but it was already processed, skipping: "
+                                  << bbActiveValue);
+          continue;
+        }
+        if (getTangentValueCategory(bbActiveValue) ==
+            SILValueCategory::Object) {
+          LLVM_DEBUG(llvm::dbgs()
+                     << "zeroing its adjoint value in loop header: "
+                     << bbActiveValue);
+          setAdjointValue(bb, bbActiveValue,
+                          makeZeroAdjointValue(getRemappedTangentType(
+                              bbActiveValue->getType())));
+        } else {
+          assert(getTangentValueCategory(bbActiveValue) ==
+                 SILValueCategory::Address);
+          // Adjoint for address projections are handled automatically:
+          // 1. If the source address is loop-local, it's adjoint buffer will
+          //    be zeroed, and we'll have zero adjoint projection to it.
+          // 2. Otherwise, we do not need to zero the projection buffer.
+          //    Consider '%X = begin_access [modify] [static] %Y' where %Y is
+          //    not loop-local - adjoint buffer for  projection %X should not
+          //    be zeroed.
+          if (!getAdjointProjection(bb, bbActiveValue)) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "zeroing its adjoint buffer in loop header: "
+                       << bbActiveValue);
+            builder.emitZeroIntoBuffer(
+                pbLoc, getAdjointBuffer(bb, bbActiveValue), IsInitialization);
+          } else {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "but it is an address projection, skipping: "
+                       << bbActiveValue);
+          }
+        }
+      }
+    }
+    LLVM_DEBUG(getADDebugStream()
+               << "End search for adjoints of loop-local active values\n");
+
     for (auto *bb : originalBlocks) {
       visitSILBasicBlock(bb);
       if (errorOccurred)
