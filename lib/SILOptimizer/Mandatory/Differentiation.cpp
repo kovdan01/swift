@@ -615,21 +615,35 @@ emitDerivativeFunctionReference(
         return std::nullopt;
     }
     assert(minimalWitness);
-    if (original->getFunction()->isSerialized() &&
-        !hasPublicVisibility(minimalWitness->getLinkage())) {
-      enum { Inlinable = 0, DefaultArgument = 1 };
-      unsigned fragileKind = Inlinable;
-      // FIXME: This is not a very robust way of determining if the function is
-      // a default argument. Also, we have not exhaustively listed all the kinds
-      // of fragility.
-      if (original->getFunction()->getLinkage() == SILLinkage::PublicNonABI)
-        fragileKind = DefaultArgument;
-      context.emitNondifferentiabilityError(
-          original, invoker, diag::autodiff_private_derivative_from_fragile,
-          fragileKind,
-          isa_and_nonnull<AbstractClosureExpr>(
-              originalFRI->getLoc().getAsASTNode<Expr>()));
-      return std::nullopt;
+    if (original->getFunction()->isSerialized()) {
+      bool isWitnessPublic;
+      if (originalFn->getDeclRef().getAbstractClosureExpr() &&
+          originalFRI->getFunction()->getDeclRef().isDefaultArgGenerator()) {
+        // If we reference a closure from inside default argument generator,
+        // check against generator's visibility. If the function having this
+        // default argument has public visibility, it's OK to have a closure
+        // (which always has private visibility) as its default value.
+        isWitnessPublic =
+            hasPublicVisibility(originalFRI->getFunction()->getLinkage());
+      } else {
+        isWitnessPublic = hasPublicVisibility(minimalWitness->getLinkage());
+      }
+
+      if (!isWitnessPublic) {
+        enum { Inlinable = 0, DefaultArgument = 1 };
+        unsigned fragileKind = Inlinable;
+        // FIXME: This is not a very robust way of determining if the function
+        // is a default argument. Also, we have not exhaustively listed all the
+        // kinds of fragility.
+        if (original->getFunction()->getLinkage() == SILLinkage::PublicNonABI)
+          fragileKind = DefaultArgument;
+        context.emitNondifferentiabilityError(
+            original, invoker, diag::autodiff_private_derivative_from_fragile,
+            fragileKind,
+            isa_and_nonnull<AbstractClosureExpr>(
+                originalFRI->getLoc().getAsASTNode<Expr>()));
+        return std::nullopt;
+      }
     }
     // TODO(TF-482): Move generic requirement checking logic to
     // `getExactDifferentiabilityWitness` and
