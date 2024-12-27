@@ -1,8 +1,8 @@
-// RUN: %target-run-simple-swift
+//3RUN: %target-run-simple-swift
 // REQUIRES: executable_test
 
 // Test is unexpectedly passing on no_assert config on Linux
-// REQUIRES: rdar89860761
+// EQUIRES: rdar89860761
 
 // FIXME: Disabled due to test failure with `-O` (https://github.com/apple/swift/issues/55690).
 // XFAIL: swift_test_mode_optimize
@@ -207,6 +207,34 @@ protocol HasExtraConstrainedDerivative {
 struct SatisfiesDerivativeWithLessConstraint: HasExtraConstrainedDerivative {
   @differentiable(reverse)
   func requirement<T: Differentiable>(_ x: T) -> T { x }
+}
+
+// MARK: - Derivative requirements.
+
+// Test derivative registration for protocol requirements. Currently unsupported.
+// TODO(TF-982): Lift this restriction and add proper support.
+
+protocol ProtocolRequirementDerivative {
+  // xpected-note @+1 {{cannot yet register derivative default implementation for protocol requirements}}
+  func requirement(_ x: Float) -> Float
+}
+extension ProtocolRequirementDerivative {
+  // xpected-error @+1 {{referenced declaration 'requirement' could not be resolved}}
+  // No error expected
+  @derivative(of: requirement)
+  func vjpRequirement(_ x: Float) -> (value: Float, pullback: (Float) -> Float) {
+    return (value: x, pullback: { v in 42 })
+  }
+}
+struct StructProtocolRequirementDerivative : ProtocolRequirementDerivative {
+  // This intentionally does not correspond to the custom derivative defined
+  // in the extension above in order to ensure that we pick it up.
+  func requirement(_ x: Float) -> Float { x }
+}
+
+ProtocolRequirementAutodiffTests.testWithLeakChecking("attribute") {
+  let s = StructProtocolRequirementDerivative()
+  expectEqual(gradient(at: 24, of: s.requirement), 42)
 }
 
 runAllTests()

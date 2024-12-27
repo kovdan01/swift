@@ -5669,6 +5669,7 @@ static AbstractFunctionDecl *findAutoDiffOriginalFunctionDecl(
   using LookupErrorKind = AbstractFunctionDeclLookupErrorKind;
   SmallVector<std::pair<ValueDecl *, LookupErrorKind>, 2> invalidCandidates;
   SmallVector<AbstractFunctionDecl *, 2> validCandidates;
+  SmallVector<AbstractFunctionDecl *, 2> validProtocolCandidates;
 
   // Filter lookup results.
   for (auto choice : results) {
@@ -5708,11 +5709,15 @@ static AbstractFunctionDecl *findAutoDiffOriginalFunctionDecl(
       invalidCandidates.push_back({candidate, *invalidCandidateKind});
       continue;
     }
-    // Otherwise, record valid candidate.
-    validCandidates.push_back(candidate);
+    if (isa<ProtocolDecl>(candidate->getDeclContext())) {
+      validProtocolCandidates.push_back(candidate);
+    } else {
+      // Otherwise, record valid candidate.
+      validCandidates.push_back(candidate);
+    }
   }
   // If there are no valid candidates, emit diagnostics for invalid candidates.
-  if (validCandidates.empty()) {
+  if (validCandidates.empty() && validProtocolCandidates.empty()) {
     assert(!invalidCandidates.empty());
     diags.diagnose(funcNameLoc, diag::autodiff_attr_original_decl_none_valid,
                    funcName);
@@ -5777,6 +5782,7 @@ static AbstractFunctionDecl *findAutoDiffOriginalFunctionDecl(
     }
     return nullptr;
   }
+  assert(validProtocolCandidates.size() <= 1); // TODO: is this correct?
   // Error if there are multiple valid candidates.
   if (validCandidates.size() > 1) {
     diags.diagnose(funcNameLoc, diag::autodiff_attr_original_decl_ambiguous,
@@ -5788,6 +5794,10 @@ static AbstractFunctionDecl *findAutoDiffOriginalFunctionDecl(
                      declKind);
     }
     return nullptr;
+  }
+  if (validCandidates.empty()) {
+    // assert(attr->)
+    return validProtocolCandidates.front();
   }
   // Success if there is one unambiguous valid candidate.
   return validCandidates.front();
@@ -6540,8 +6550,9 @@ static bool typeCheckDerivativeAttr(DerivativeAttr *attr) {
     // registration does not yet support protocol requirements.
     // TODO(TF-982): Allow default derivative implementations for protocol
     // requirements.
-    if (isa<ProtocolDecl>(originalCandidate->getDeclContext()))
-      return AbstractFunctionDeclLookupErrorKind::CandidateProtocolRequirement;
+    // if (isa<ProtocolDecl>(originalCandidate->getDeclContext()))
+    //   return
+    //   AbstractFunctionDeclLookupErrorKind::CandidateProtocolRequirement;
     // Error if the original candidate is not defined in a type context
     // compatible with the derivative function.
     if (!hasValidTypeContext(originalCandidate))

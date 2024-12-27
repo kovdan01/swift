@@ -438,12 +438,12 @@ extension Struct where T: Differentiable & AdditiveArithmetic {
   func vjpProperty() -> (value: T, pullback: (T.TangentVector) -> TangentVector) {
     return (x, { v in .init(x: v) })
   }
-  
+
   @derivative(of: computedProperty.get)
   func jvpProperty() -> (value: T, differential: (TangentVector) -> T.TangentVector) {
     fatalError()
   }
-  
+
   @derivative(of: computedProperty.set)
   mutating func vjpPropertySetter(_ newValue: T) -> (
     value: (), pullback: (inout TangentVector) -> T.TangentVector
@@ -733,11 +733,12 @@ extension HasStoredProperty {
 // TODO(TF-982): Lift this restriction and add proper support.
 
 protocol ProtocolRequirementDerivative {
-  // expected-note @+1 {{cannot yet register derivative default implementation for protocol requirements}}
+  // xpected-note @+1 {{cannot yet register derivative default implementation for protocol requirements}}
   func requirement(_ x: Float) -> Float
 }
 extension ProtocolRequirementDerivative {
-  // expected-error @+1 {{referenced declaration 'requirement' could not be resolved}}
+  // xpected-error @+1 {{referenced declaration 'requirement' could not be resolved}}
+  // No error expected
   @derivative(of: requirement)
   func vjpRequirement(_ x: Float) -> (value: Float, pullback: (Float) -> Float) {
     fatalError()
@@ -828,7 +829,7 @@ extension InoutParameters {
 
 extension InoutParameters {
   // expected-note @+2 {{'mutatingMethod' defined here}}
-  // expected-note @+1 {{'mutatingMethod' defined here}}  
+  // expected-note @+1 {{'mutatingMethod' defined here}}
   mutating func mutatingMethod(_ other: Self) {}
 
   // Test wrt `inout` `self` parameter.
@@ -973,9 +974,11 @@ extension Differentiable where Self: AdditiveArithmetic {
 
 extension AdditiveArithmetic
 where Self: Differentiable, Self == Self.TangentVector {
-  // expected-error @+1 {{referenced declaration '+' could not be resolved}}
+  // xpected-error @+1 {{referenced declaration '+' could not be resolved}}
+  // No error expected
   @derivative(of: +)
-  func vjpPlusInstanceMethod(x: Self, y: Self) -> (
+  @usableFromInline
+  static func vjpPlusInstanceMethod(x: Self, y: Self) -> (
     value: Self, pullback: (Self) -> (Self, Self)
   ) {
     return (x + y, { v in (v, v) })
@@ -997,12 +1000,13 @@ extension HasADefaultImplementation {
 
 // Test default derivatives of requirements.
 protocol HasADefaultDerivative {
-  // expected-note @+1 {{cannot yet register derivative default implementation for protocol requirements}}
+  // xpected-note @+1 {{cannot yet register derivative default implementation for protocol requirements}}
   func req(_ x: Float) -> Float
 }
 extension HasADefaultDerivative {
   // TODO(TF-982): Support default derivatives for protocol requirements.
-  // expected-error @+1 {{referenced declaration 'req' could not be resolved}}
+  // xpected-error @+1 {{referenced declaration 'req' could not be resolved}}
+  // No error expected
   @derivative(of: req)
   func vjpReq(_ x: Float) -> (value: Float, pullback: (Float) -> Float) {
     (x, { 10 * $0 })

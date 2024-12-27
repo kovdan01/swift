@@ -45,6 +45,8 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
+#define DEBUG_TYPE "CONFORMANCE-LOOKUP"
+
 using namespace swift;
 
 ArrayRef<ProtocolConformanceRef>
@@ -189,20 +191,23 @@ ProtocolConformanceRef swift::lookupConformance(Type type,
       ImplicitKnownProtocolConformanceRequest icvRequest{nominal, *kp};
       if (eval.hasActiveRequest(icvRequest) ||
           eval.hasActiveRequest(request)) {
+        LLVM_DEBUG(llvm::dbgs() << "AAAAAA!!!\n");
         return ProtocolConformanceRef::forInvalid();
       }
     }
   }
 
+  LLVM_DEBUG(llvm::dbgs() << "BBBBBB!!!\n");
   auto result = evaluateOrDefault(
       eval, request, ProtocolConformanceRef::forInvalid());
 
   // If we aren't supposed to allow missing conformances but we have one,
   // replace the result with an "invalid" result.
-  if (!allowMissing &&
-      shouldCreateMissingConformances(type, protocol) &&
-      result.hasMissingConformance())
+  if (!allowMissing && shouldCreateMissingConformances(type, protocol) &&
+      result.hasMissingConformance()) {
+    LLVM_DEBUG(llvm::dbgs() << "CCCCCCC!!!\n");
     return ProtocolConformanceRef::forInvalid();
+  }
 
   return result;
 }
@@ -478,8 +483,11 @@ LookupConformanceInModuleRequest::evaluate(
 
   // A dynamic Self type conforms to whatever its underlying type
   // conforms to.
-  if (auto selfType = type->getAs<DynamicSelfType>())
+  if (auto selfType = type->getAs<DynamicSelfType>()) {
+    LLVM_DEBUG(llvm::dbgs() << "DDDDDDD!\n");
     type = selfType->getSelfType();
+  }
+  LLVM_DEBUG(llvm::dbgs() << "EEEEEE: " << type << "\n");
 
   // A pack element type conforms to whatever its underlying pack type
   // conforms to.

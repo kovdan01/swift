@@ -267,8 +267,11 @@ static bool diagnoseUnsatisfiedRequirements(ADContext &context,
       assert(protocol && "Expected protocol in generic signature requirement");
       // If the first type does not conform to the second type in the current
       // module, then record the unsatisfied requirement.
-      if (!lookupConformance(firstType, protocol))
+      if (!lookupConformance(firstType, protocol)) {
+        LLVM_DEBUG(getADDebugStream() << "YYYYY: " << firstType << "\nZZZZZZ: "
+                                      << protocol->getName() << "\n");
         unsatisfiedRequirements.push_back(req);
+      }
       continue;
     }
     }

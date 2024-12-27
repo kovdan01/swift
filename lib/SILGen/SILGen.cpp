@@ -1335,6 +1335,62 @@ void SILGenModule::emitDifferentiabilityWitnessesForFunction(
                                    config, /*jvp*/ nullptr,
                                    /*vjp*/ nullptr, diffAttr);
     }
+
+    // if (const auto *ntd = dyn_cast<NominalTypeDecl>(AFD->getDeclContext())) {
+    //   if (!isa<ProtocolDecl>(ntd)) {
+    //     SmallVector<ProtocolConformance *, 2> conformances =
+    //     ntd->getAllConformances(); for (ProtocolConformance *conformance :
+    //     conformances) {
+    //       ProtocolDecl *proto = conformance->getProtocol();
+    //       for (auto *req : proto->getMembers()) {
+    //         auto *afdReq = dyn_cast<AbstractFunctionDecl>(req);
+    //         if (!afdReq)
+    //           continue;
+    //         if (conformance->getWitnessDecl(afdReq) != AFD)
+    //           continue;
+
+    //         for (auto *derivAttr : Attrs.getAttributes<DerivativeAttr>()) {
+    //           SILFunction *jvp = nullptr;
+    //           SILFunction *vjp = nullptr;
+    //           switch (derivAttr->getDerivativeKind()) {
+    //           case AutoDiffDerivativeFunctionKind::JVP:
+    //             jvp = F;
+    //             break;
+    //           case AutoDiffDerivativeFunctionKind::VJP:
+    //             vjp = F;
+    //             break;
+    //           }
+    //           auto *origAFD =
+    //           derivAttr->getOriginalFunction(getASTContext()); auto
+    //           origDeclRef =
+    //               SILDeclRef(origAFD).asForeign(requiresForeignEntryPoint(origAFD));
+    //           auto *origFn = getFunction(origDeclRef, NotForDefinition);
+    //           auto witnessGenSig =
+    //               autodiff::getDifferentiabilityWitnessGenericSignature(
+    //                   origAFD->getGenericSignature(),
+    //                   AFD->getGenericSignature());
+    //           auto *resultIndices =
+    //               autodiff::getFunctionSemanticResultIndices(origAFD,
+    //                                                          derivAttr->getParameterIndices());
+    //           AutoDiffConfig config(derivAttr->getParameterIndices(),
+    //           resultIndices,
+    //                                 witnessGenSig);
+    //           emitDifferentiabilityWitness(origAFD, origFn,
+    //                                        DifferentiabilityKind::Reverse,
+    //                                        config, jvp, vjp, derivAttr);
+    //         }
+
+    //         break;
+    //       }
+    //       if (minimalConfig != std::nullopt)
+    //         break;
+    //       //ValueDecl *witness = conformance->getWitnessDecl(original);
+    //       //LLVM_DEBUG(getADDebugStream() << "AAAAAA: " << original <<
+    //       "\nBBBBBB: " << witness << "\n");
+    //     }
+    //   }
+    // }
+
     for (auto *derivAttr : Attrs.getAttributes<DerivativeAttr>()) {
       SILFunction *jvp = nullptr;
       SILFunction *vjp = nullptr;

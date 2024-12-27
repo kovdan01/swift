@@ -502,6 +502,35 @@ findMinimalDerivativeConfiguration(AbstractFunctionDecl *original,
                              config.derivativeGenericSignature));
     }
   }
+  if (minimalConfig == std::nullopt) {
+    // if (original->isProtocolRequirement()) {
+    if (const auto *ntd =
+            dyn_cast<NominalTypeDecl>(original->getDeclContext())) {
+      if (!isa<ProtocolDecl>(ntd)) {
+        SmallVector<ProtocolConformance *, 2> conformances =
+            ntd->getAllConformances();
+        for (ProtocolConformance *conformance : conformances) {
+          ProtocolDecl *proto = conformance->getProtocol();
+          for (auto *req : proto->getMembers()) {
+            auto *afdReq = dyn_cast<AbstractFunctionDecl>(req);
+            if (!afdReq)
+              continue;
+            if (conformance->getWitnessDecl(afdReq) != original)
+              continue;
+            minimalConfig = findMinimalDerivativeConfiguration(
+                afdReq, parameterIndices, minimalASTParameterIndices);
+            break;
+          }
+          if (minimalConfig != std::nullopt)
+            break;
+          // ValueDecl *witness = conformance->getWitnessDecl(original);
+          // LLVM_DEBUG(getADDebugStream() << "AAAAAA: " << original <<
+          // "\nBBBBBB: " << witness << "\n");
+        }
+      }
+    }
+    //}
+  }
   return minimalConfig;
 }
 
@@ -532,6 +561,48 @@ SILDifferentiabilityWitness *getOrCreateMinimalASTDifferentiabilityWitness(
       {originalName, kind, *minimalConfig});
   if (existingWitness)
     return existingWitness;
+
+  if (const auto *ntd = dyn_cast<NominalTypeDecl>(originalAFD->getDeclContext())) {
+    if (!isa<ProtocolDecl>(ntd)) {
+      SmallVector<ProtocolConformance *, 2> conformances =
+          ntd->getAllConformances();
+      for (ProtocolConformance *conformance : conformances) {
+        ProtocolDecl *proto = conformance->getProtocol();
+        for (auto *req : proto->getMembers()) {
+          auto *afdReq = dyn_cast<AbstractFunctionDecl>(req);
+          if (!afdReq)
+            continue;
+          if (conformance->getWitnessDecl(afdReq) != originalAFD)
+            continue;
+          SILFunction *reqSILFn = nullptr;
+          for (SILFunction &f : module.getFunctions())
+            if (f.getDeclRef().getAbstractFunctionDecl() == afdReq)
+              reqSILFn = &f;
+          assert(reqSILFn);
+          auto *existingReqWitness = module.lookUpDifferentiabilityWitness(
+              {reqSILFn->getName().str(), kind, *minimalConfig});
+          assert(existingReqWitness);
+
+          LLVM_DEBUG(getADDebugStream() << "AAAAA CREATE WITNESS!!!\n");
+
+          return SILDifferentiabilityWitness::createDefinition(
+              existingReqWitness->getModule(), existingReqWitness->getLinkage(),
+              original, existingReqWitness->getKind(),
+              existingReqWitness->getParameterIndices(),
+              existingReqWitness->getResultIndices(),
+              existingReqWitness->getDerivativeGenericSignature(),
+              existingReqWitness->getJVP(), existingReqWitness->getVJP(),
+              existingReqWitness->isSerialized(),
+              existingReqWitness->getAttribute());
+
+          // break;
+        }
+        // ValueDecl *witness = conformance->getWitnessDecl(original);
+        // LLVM_DEBUG(getADDebugStream() << "AAAAAA: " << original << "\nBBBBBB:
+        // " << witness << "\n");
+      }
+    }
+  }
 
   assert(original->isExternalDeclaration() &&
          "SILGen should create differentiability witnesses for all function "
