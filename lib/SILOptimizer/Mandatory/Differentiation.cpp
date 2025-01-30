@@ -1200,6 +1200,7 @@ SILValue DifferentiationTransformer::promoteToDifferentiableFunction(
         derivativeFn->getType()
                 .castTo<SILFunctionType>()
                 ->getRepresentation() == SILFunctionTypeRepresentation::Thin) {
+      LLVM_DEBUG(getADDebugStream() << "\nOOOOOOOO " << *derivativeFn << "\n\n");
       derivativeFn = builder.createThinToThickFunction(
           loc, derivativeFn,
           SILType::getPrimitiveObjectType(expectedDerivativeFnTy));

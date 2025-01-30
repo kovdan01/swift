@@ -127,9 +127,9 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     return
   }
 
-//  debugPrint("AAAA 01 BEGIN")
-//  debugPrint(function)
-//  debugPrint("AAAA 01 END")
+  debugPrint("AAAA 01 BEGIN")
+  debugPrint(function)
+  debugPrint("AAAA 01 END")
 
   //var remainingSpecializationRounds = 5
   var callerModified = false
@@ -319,12 +319,15 @@ private func rewriteApplyInstruction(using specializedCallee: Function, callSite
 
 private func updateCallSites(for rootClosure: SingleValueInstruction, in callSiteMap: inout CallSiteMap,
                              convertedAndReabstractedClosures: inout InstructionSet, _ context: FunctionPassContext) {
+  debugPrint("AAAAA 31")
   var rootClosurePossibleLiveRange = InstructionRange(begin: rootClosure, context)
+  debugPrint("AAAAA 32")
   defer {
     rootClosurePossibleLiveRange.deinitialize()
   }
 
   var rootClosureApplies = OperandWorklist(context)
+  debugPrint("AAAAA 33")
   defer {
     rootClosureApplies.deinitialize()
   }
@@ -353,11 +356,11 @@ private func updateCallSites(for rootClosure: SingleValueInstruction, in callSit
     return
   }
 
-  debugPrint("AAAAA 23 BEGIN")
+  debugPrint("AAAAA 30 BEGIN")
   debugPrint(rootClosureApplies)
-  debugPrint("AAAAA 23 MIDDLE")
+  debugPrint("AAAAA 30 MIDDLE")
   debugPrint(context)
-  debugPrint("AAAAA 23 END")
+  debugPrint("AAAAA 30 END")
 
   let intermediateClosureArgDescriptorData =
     handleApplies(for: rootClosure, callSiteMap: &callSiteMap, rootClosureApplies: &rootClosureApplies,
@@ -385,6 +388,11 @@ private func handleNonApplies(for rootClosure: SingleValueInstruction,
                               _ context: FunctionPassContext)
   -> (foundUnexpectedUse: Bool, haveUsedReabstraction: Bool)
 {
+  debugPrint("GGGGG 00")
+  debugPrint(rootClosure)
+  debugPrint("GGGGG 01")
+  debugPrint(rootClosureApplies)
+  debugPrint("GGGGG 02")
   var foundUnexpectedUse = false
   var haveUsedReabstraction = false
 
@@ -428,38 +436,56 @@ private func handleNonApplies(for rootClosure: SingleValueInstruction,
   }
 
   while let use = rootClosureConversionsAndReabstractions.pop() {
+    debugPrint("GGGGG 05")
+    debugPrint(use)
+    debugPrint("GGGGG 06")
+    debugPrint(use.instruction)
+    debugPrint("GGGGG 11")
     switch use.instruction {
     case let cfi as ConvertFunctionInst:
+      debugPrint("GGGGG 12")
       rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: cfi.uses)
       possibleMarkDependenceBases.insert(cfi)
       rootClosurePossibleLiveRange.insert(use.instruction)
 
     case let cvt as ConvertEscapeToNoEscapeInst:
+      debugPrint("GGGGG 13")
       rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: cvt.uses)
       possibleMarkDependenceBases.insert(cvt)
       rootClosurePossibleLiveRange.insert(use.instruction)
 
     case let pai as PartialApplyInst:
+      debugPrint("GGGGG 07")
+      debugPrint(pai)
+      debugPrint("GGGGG 08")
       if !pai.isPullbackInResultOfAutodiffVJP,
           pai.isSupportedClosure,
           pai.isPartialApplyOfThunk,
           // Argument must be a closure
           pai.arguments[0].type.isThickFunction
       {
+        debugPrint("GGGGG 09")
         rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: pai.uses)
         possibleMarkDependenceBases.insert(pai)
         rootClosurePossibleLiveRange.insert(use.instruction)
         haveUsedReabstraction = true
       } else if pai.isPullbackInResultOfAutodiffVJP {
+        debugPrint("GGGGG 03")
+        debugPrint(use)
+        debugPrint("GGGGG 04")
         rootClosureApplies.pushIfNotVisited(use)
+      } else {
+        debugPrint("GGGGG 10")
       }
 
     case let mv as MoveValueInst:
+      debugPrint("GGGGG 14")
       rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: mv.uses)
       possibleMarkDependenceBases.insert(mv)
       rootClosurePossibleLiveRange.insert(use.instruction)
 
     case let mdi as MarkDependenceInst:
+      debugPrint("GGGGG 15")
       if possibleMarkDependenceBases.contains(mdi.base),
           mdi.value == use.value,
           mdi.value.type.isNoEscapeFunction,
@@ -475,9 +501,11 @@ private func handleNonApplies(for rootClosure: SingleValueInstruction,
          is ReleaseValueInst,
          is StrongRetainInst,
          is StrongReleaseInst:
+      debugPrint("GGGGG 16")
       rootClosurePossibleLiveRange.insert(use.instruction)
 
     case let ti as TupleInst:
+      debugPrint("GGGGG 17")
       if ti.parentFunction.isAutodiffVJP,
          let returnInst = ti.parentFunction.returnInstruction,
          ti == returnInst.returnedValue
@@ -488,6 +516,7 @@ private func handleNonApplies(for rootClosure: SingleValueInstruction,
       }
 
     default:
+      debugPrint("GGGGG 18")
       foundUnexpectedUse = true
       log("Found unexpected direct or transitive user of root closure: \(use.instruction)")
       return (foundUnexpectedUse, haveUsedReabstraction)
@@ -623,13 +652,15 @@ private func handleApplies(for rootClosure: SingleValueInstruction, callSiteMap:
       continue
     }
 
-    debugPrint("AAAAA 10")
+    debugPrint("AAAAA 23")
     if haveUsedReabstraction {
+      debugPrint("AAAAA 24")
       markConvertedAndReabstractedClosuresAsUsed(rootClosure: rootClosure, convertedAndReabstractedClosure: use.value,
                                                  convertedAndReabstractedClosures: &convertedAndReabstractedClosures)
     }
 
     if callSiteMap[pai] == nil {
+      debugPrint("AAAAA 25")
       callSiteMap.insert(key: pai, value: CallSite(applySite: pai))
     }
 

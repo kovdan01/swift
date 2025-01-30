@@ -35,7 +35,7 @@ struct BasicBlockSet : IntrusiveSet {
 
   private let context: BridgedPassContext
   private let bridged: BridgedBasicBlockSet
-    
+
   init(_ context: some Context) {
     self.context = context._bridged
     self.bridged = self.context.allocBasicBlockSet()
@@ -80,7 +80,7 @@ struct ValueSet : IntrusiveSet {
 
   private let context: BridgedPassContext
   private let bridged: BridgedNodeSet
-    
+
   init(_ context: some Context) {
     self.context = context._bridged
     self.bridged = self.context.allocNodeSet()
@@ -139,7 +139,7 @@ struct SpecificInstructionSet<InstType: Instruction> : IntrusiveSet {
 
   private let context: BridgedPassContext
   private let bridged: BridgedNodeSet
-    
+
   init(_ context: some Context) {
     self.context = context._bridged
     self.bridged = self.context.allocNodeSet()
@@ -195,6 +195,8 @@ struct OperandSet : IntrusiveSet {
   init(_ context: some Context) {
     self.context = context._bridged
     self.bridged = self.context.allocOperandSet()
+    debugPrint("FFFFF 00")
+    debugPrint(self.bridged)
   }
 
   func contains(_ operand: Operand) -> Bool {
@@ -204,7 +206,12 @@ struct OperandSet : IntrusiveSet {
   /// Returns true if `inst` was not contained in the set before inserting.
   @discardableResult
   mutating func insert(_ operand: Operand) -> Bool {
-    bridged.insert(operand.bridged)
+    debugPrint("CCCC 00")
+    debugPrint(bridged)
+    debugPrint("CCCC 01")
+    debugPrint(operand)
+    debugPrint("CCCC 02")
+    return bridged.insert(operand.bridged)
   }
 
   mutating func erase(_ operand: Operand) {
@@ -214,9 +221,16 @@ struct OperandSet : IntrusiveSet {
   var description: String {
     let function = bridged.getFunction().function
     var d = "{\n"
+    //debugPrint("BBBB 00")
+    //debugPrint(bridged)
     for inst in function.instructions {
+      //debugPrint("BBBB 01")
+      //debugPrint(inst)
       for op in inst.operands {
+        //debugPrint("BBBB 02")
+        //debugPrint(op)
         if contains(op) {
+          //debugPrint("BBBB 03")
           d += op.description
         }
       }
