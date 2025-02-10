@@ -26,11 +26,11 @@ struct Worklist<Set: IntrusiveSet> : CustomStringConvertible, NoReflectionChildr
   private var pushedElements: Set
 
   init(_ context: some Context) {
-    debugPrint("EEEEE 00")
+    //debugPrint("EEEEE 00")
     self.worklist = Stack(context)
-    debugPrint("EEEEE 01")
+    //debugPrint("EEEEE 01")
     self.pushedElements = Set(context)
-    debugPrint("EEEEE 02")
+    //debugPrint("EEEEE 02")
   }
 
   mutating func pop() -> Element? { return worklist.pop() }

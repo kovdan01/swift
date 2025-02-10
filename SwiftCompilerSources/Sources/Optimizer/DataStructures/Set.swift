@@ -195,8 +195,8 @@ struct OperandSet : IntrusiveSet {
   init(_ context: some Context) {
     self.context = context._bridged
     self.bridged = self.context.allocOperandSet()
-    debugPrint("FFFFF 00")
-    debugPrint(self.bridged)
+    //debugPrint("FFFFF 00")
+    //debugPrint(self.bridged)
   }
 
   func contains(_ operand: Operand) -> Bool {
@@ -206,11 +206,11 @@ struct OperandSet : IntrusiveSet {
   /// Returns true if `inst` was not contained in the set before inserting.
   @discardableResult
   mutating func insert(_ operand: Operand) -> Bool {
-    debugPrint("CCCC 00")
-    debugPrint(bridged)
-    debugPrint("CCCC 01")
-    debugPrint(operand)
-    debugPrint("CCCC 02")
+    //debugPrint("CCCC 00")
+    //debugPrint(bridged)
+    //debugPrint("CCCC 01")
+    //debugPrint(operand)
+    //debugPrint("CCCC 02")
     return bridged.insert(operand.bridged)
   }
 
