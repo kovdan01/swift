@@ -103,6 +103,14 @@ import AST
 import SIL
 import SILBridging
 
+//extension PartialApplyInst: Hashable {
+//  public func hash(into hasher: inout Hasher) {
+//    hasher.combine(ObjectIdentifier(self.bridged))
+//    // TODO: proper hash
+//    //hasher.combine(1)
+//  }
+//}
+
 private let verbose = false
 
 private func log(_ message: @autoclosure () -> String) {
@@ -132,39 +140,60 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
   debugPrint("AAAA 01 END")
 
   //var remainingSpecializationRounds = 5
+  var remainingSpecializationRounds = 1
   var callerModified = false
 
   repeat {
-    var callSites = gatherCallSites(in: function, context)
+    debugPrint("AAAAA gatherCallSites BEFORE")
+    var (callSites, enums) = gatherCallSites(in: function, context)
+    debugPrint("AAAAA gatherCallSites AFTER")
 
     if !callSites.isEmpty {
       debugPrint("AAAA 02")
+      assert(callSites.count == 1)
+      assert(enums.count == 1)
       for callSite in callSites {
-        var (specializedFunction, alreadyExists) = getOrCreateSpecializedFunction(basedOn: callSite, context)
-
+        debugPrint("AAAAA getOrCreateSpecializedFunctionCFG BEGIN")
+        var (specializedFunction, alreadyExists) = getOrCreateSpecializedFunctionCFG(basedOn: (callSite, enums[callSite.applySite as! PartialApplyInst]!), context)
+        //var (specializedFunction, alreadyExists) = getOrCreateSpecializedFunction(basedOn: callSite, context)
+        debugPrint("AAAAA getOrCreateSpecializedFunctionCFG END")
         if !alreadyExists {
+          debugPrint("AAAAA notifyNewFunction BEGIN")
+          debugPrint(specializedFunction)
+          debugPrint("AAAAA notifyNewFunction MIDDLE 1")
+          debugPrint(callSite.applyCallee)
+          debugPrint("AAAAA notifyNewFunction MIDDLE 2")
+          debugPrint(specializedFunction.isDefinition)
+          debugPrint("AAAAA notifyNewFunction MIDDLE 3")
           context.notifyNewFunction(function: specializedFunction, derivedFrom: callSite.applyCallee)
+          debugPrint("AAAAA notifyNewFunction END")
         }
 
+        debugPrint("AAAAA rewriteApplyInstruction BEGIN")
         rewriteApplyInstruction(using: specializedFunction, callSite: callSite, context)
+        debugPrint("AAAAA rewriteApplyInstruction END")
       }
 
+      debugPrint("AAAAA callSites.reduce BEGIN")
       var deadClosures: InstructionWorklist = callSites.reduce(into: InstructionWorklist(context)) { deadClosures, callSite in
         callSite.closureArgDescriptors
           .map { $0.closure }
           .forEach { deadClosures.pushIfNotVisited($0) }
       }
+      debugPrint("AAAAA callSites.reduce END")
 
       defer {
         deadClosures.deinitialize()
       }
 
+      debugPrint("AAAAA deadClosures.pop BEGIN")
       while let deadClosure = deadClosures.pop() {
         let isDeleted = context.tryDeleteDeadClosure(closure: deadClosure as! SingleValueInstruction)
         if isDeleted {
           context.notifyInvalidatedStackNesting()
         }
       }
+      debugPrint("AAAAA deadClosures.pop END")
 
       if context.needFixStackNesting {
         function.fixStackNesting(context)
@@ -173,14 +202,18 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 
     callerModified = callSites.count > 0
     //remainingSpecializationRounds -= 1
-  } while callerModified //&& remainingSpecializationRounds > 0
+    remainingSpecializationRounds -= 1
+  } while callerModified && remainingSpecializationRounds > 0
+  //} while callerModified //&& remainingSpecializationRounds > 0
+
+  debugPrint("autodiffClosureSpecialization END")
 }
 
 // =========== Top-level functions ========== //
 
 private let specializationLevelLimit = 2
 
-private func gatherCallSites(in caller: Function, _ context: FunctionPassContext) -> [CallSite] {
+private func gatherCallSites(in caller: Function, _ context: FunctionPassContext) -> ([CallSite], [PartialApplyInst: EnumClosure]) {
   /// __Root__ closures created via `partial_apply` or `thin_to_thick_function` may be converted and reabstracted
   /// before finally being used at an apply site. We do not want to handle these intermediate closures separately
   /// as they are handled and cloned into the specialized function as part of the root closures. Therefore, we keep
@@ -213,6 +246,7 @@ private func gatherCallSites(in caller: Function, _ context: FunctionPassContext
   }
 
   var callSiteMap = CallSiteMap()
+  var rootClosureEnums = [PartialApplyInst: EnumClosure]()
 
   for inst in caller.instructions {
 //    debugPrint("AAAAA 03 BEGIN")
@@ -223,13 +257,53 @@ private func gatherCallSites(in caller: Function, _ context: FunctionPassContext
     {
       debugPrint("AAAAA 04 BEGIN")
       debugPrint(inst)
-      debugPrint("AAAAA 04 END")
+      debugPrint("AAAAA 04 MIDDLE")
       updateCallSites(for: rootClosure, in: &callSiteMap,
-                      convertedAndReabstractedClosures: &convertedAndReabstractedClosures, context)
+                      convertedAndReabstractedClosures: &convertedAndReabstractedClosures,
+                      rootClosureEnums: &rootClosureEnums, context)
+      debugPrint("AAAAA 04 END")
     }
   }
 
-  return callSiteMap.callSites
+  return (callSiteMap.callSites, rootClosureEnums)
+}
+
+private func getOrCreateSpecializedFunctionCFG(basedOn callSiteAndEnumClosure: (CallSite, EnumClosure), _ context: FunctionPassContext)
+  -> (function: Function, alreadyExists: Bool)
+{
+  var (callSite, enumClosure) = callSiteAndEnumClosure
+  debugPrint("AAAAA 40 BEGIN")
+  let specializedFunctionName = callSite.specializedCalleeName(context)
+  debugPrint(specializedFunctionName)
+  debugPrint("AAAAA 40 END")
+  if let specializedFunction = context.lookupFunction(name: specializedFunctionName) {
+    return (specializedFunction, true)
+  }
+
+  let applySiteCallee = callSite.applyCallee
+  let specializedParameters = applySiteCallee.convention.getSpecializedParameters(basedOn: callSite)
+
+  debugPrint("AAAAA 41 BEGIN")
+  debugPrint(applySiteCallee)
+  debugPrint("AAAAA 41 END")
+
+  let specializedFunction =
+    context.createFunctionForClosureSpecialization(from: applySiteCallee, withName: specializedFunctionName,
+                                                   withParams: specializedParameters,
+                                                   withSerialization: applySiteCallee.isSerialized)
+
+  debugPrint("AAAAA 42 CFG BEGIN")
+  debugPrint(specializedFunction)
+  debugPrint("AAAAA 42 CFG END")
+
+  context.buildSpecializedFunction(specializedFunction: specializedFunction,
+                                   buildFn: { (emptySpecializedFunction, functionPassContext) in
+                                      let closureSpecCloner = SpecializationCloner(emptySpecializedFunction: emptySpecializedFunction, functionPassContext)
+                                      closureSpecCloner.cloneAndSpecializeFunctionBody(using: callSite)
+                                   })
+  debugPrint("AAAAA 43 CFG")
+
+  return (specializedFunction, false)
 }
 
 private func getOrCreateSpecializedFunction(basedOn callSite: CallSite, _ context: FunctionPassContext)
@@ -315,11 +389,13 @@ private func rewriteApplyInstruction(using specializedCallee: Function, callSite
   // TODO: Support only OSSA instructions once the OSSA elimination pass is moved after all function optimization
   // passes.
   for closureArgDesc in callSite.closureArgDescriptors {
-    if closureArgDesc.isClosureConsumed,
-       !closureArgDesc.isPartialApplyOnStack,
-       !closureArgDesc.parameterInfo.isTrivialNoescapeClosure
-    {
-      builder.createReleaseValue(operand: closureArgDesc.closure)
+    if closureArgDesc.closure.parentFunction.blocks.singleElement != nil {
+      if closureArgDesc.isClosureConsumed,
+         !closureArgDesc.isPartialApplyOnStack,
+         !closureArgDesc.parameterInfo.isTrivialNoescapeClosure
+      {
+        builder.createReleaseValue(operand: closureArgDesc.closure)
+      }
     }
   }
 
@@ -329,7 +405,9 @@ private func rewriteApplyInstruction(using specializedCallee: Function, callSite
 // ===================== Utility functions and extensions ===================== //
 
 private func updateCallSites(for rootClosure: SingleValueInstruction, in callSiteMap: inout CallSiteMap,
-                             convertedAndReabstractedClosures: inout InstructionSet, _ context: FunctionPassContext) {
+                             convertedAndReabstractedClosures: inout InstructionSet,
+                             rootClosureEnums: inout [PartialApplyInst: EnumClosure],
+                             _ context: FunctionPassContext) {
   debugPrint("AAAAA 31")
   var rootClosurePossibleLiveRange = InstructionRange(begin: rootClosure, context)
   debugPrint("AAAAA 32")
@@ -357,7 +435,7 @@ private func updateCallSites(for rootClosure: SingleValueInstruction, in callSit
   //    bases for it will be available in the specialized callee in case the call site is specialized against this root
   //    closure.
 
-  var rootClosureEnums = Array<(enumType: Type, enumCase: Int)>()
+  //var rootClosureEnums = Array<(enumType: Type, enumCase: Int, closureIdxInTuple: Int)>()
 
   let (foundUnexpectedUse, haveUsedReabstraction) =
     handleNonApplies(for: rootClosure, rootClosureApplies: &rootClosureApplies,
@@ -400,7 +478,7 @@ private func updateCallSites(for rootClosure: SingleValueInstruction, in callSit
 private func handleNonApplies(for rootClosure: SingleValueInstruction,
                               rootClosureApplies: inout OperandWorklist,
                               rootClosurePossibleLiveRange: inout InstructionRange,
-                              rootClosureEnums: inout Array<(enumType: Type, enumCase: Int)>,
+                              rootClosureEnums: inout [PartialApplyInst: EnumClosure],
                               _ context: FunctionPassContext)
   -> (foundUnexpectedUse: Bool, haveUsedReabstraction: Bool)
 {
@@ -440,7 +518,7 @@ private func handleNonApplies(for rootClosure: SingleValueInstruction,
   }
 
   var rootClosureConversionsAndReabstractions = OperandWorklist(context)
-  //var enumValues = Array<(enumType: Type, enumCase: Int)>()
+  //var enumValues = Array<(enumType: Type, enumCase: Int, closureIdxInTuple: Int)>()
   rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: rootClosure.uses)
   defer {
     rootClosureConversionsAndReabstractions.deinitialize()
@@ -453,6 +531,9 @@ private func handleNonApplies(for rootClosure: SingleValueInstruction,
       possibleMarkDependenceBases.insert(arg)
     }
   }
+
+  var rootClosureEnumsLocal = Array<EnumClosure>()
+  var partialAppliesLocal = Array<PartialApplyInst>()
 
   while let use = rootClosureConversionsAndReabstractions.pop() {
     debugPrint("GGGGG 05")
@@ -493,6 +574,7 @@ private func handleNonApplies(for rootClosure: SingleValueInstruction,
         debugPrint(use)
         debugPrint("GGGGG 04")
         rootClosureApplies.pushIfNotVisited(use)
+        partialAppliesLocal.append(pai)
       } else {
         debugPrint("GGGGG 10")
       }
@@ -533,40 +615,74 @@ private func handleNonApplies(for rootClosure: SingleValueInstruction,
         // This is the pullback closure returned from an Autodiff VJP and we don't need to handle it.
       } else {
         debugPrint("GGGGG 20")
-        rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: ti.uses)
-        possibleMarkDependenceBases.insert(ti)
-        rootClosurePossibleLiveRange.insert(use.instruction)
+
+
+        assert(ti.bridged.hasOneUse())
+        let tupleFirstUse = ti.bridged.getFirstUse()
+        // TODO: proper work with optionals
+        let possibleEnumInst = BridgedOperand(op: tupleFirstUse.op!).getUser().instruction
+        let ei = possibleEnumInst as! EnumInst
+
+        assert(ei.bridged.hasOneUse())
+        let firstEnumUse = ei.bridged.getFirstUse()
+        // TODO: proper work with optionals
+        let possibleBranchInst = BridgedOperand(op: firstEnumUse.op!).getUser().instruction
+        let bi = possibleBranchInst as! BranchInst
+
+        let succBBArg = bi.getArgument(for: Operand(bridged: BridgedOperand(op: firstEnumUse.op!)))
+
+        rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: succBBArg.uses)
+        //possibleMarkDependenceBases.insert(ti)
+        //possibleMarkDependenceBases.insert(ei)
+        //// TODO branch inst is not value? no need for possible mark deps?
+        ////possibleMarkDependenceBases.insert(bi)
+        //rootClosurePossibleLiveRange.insert(use.instruction)
+        //rootClosurePossibleLiveRange.insert(ei)
+        //rootClosurePossibleLiveRange.insert(bi)
+
+        rootClosureEnumsLocal.append((enumType: ei.type, enumCase: ei.caseIndex, closureIdxInTuple: use.index))
+
+        debugPrint("GGGGG 21 BEGIN")
+        debugPrint(rootClosureEnumsLocal)
+        debugPrint("GGGGG 21 END")
+
+
+
+
+       // rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: ti.uses)
+       // possibleMarkDependenceBases.insert(ti)
+       // rootClosurePossibleLiveRange.insert(use.instruction)
         //fallthrough
       }
 
-    case let ei as EnumInst:
-      //rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: ei.uses)
-      assert(ei.bridged.hasOneUse())
-      let firstUse = ei.bridged.getFirstUse()
-      // TODO: proper work with optionals
-      let inst = BridgedOperand(op: firstUse.op!).getUser().instruction
-      let bi = inst as! BranchInst
-      //assert(bi)
-      let succBBArg = bi.getArgument(for: Operand(bridged: BridgedOperand(op: firstUse.op!)))
-      rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: succBBArg.uses)
-      possibleMarkDependenceBases.insert(ei)
-      rootClosurePossibleLiveRange.insert(use.instruction)
-      debugPrint("GGGGG 21 BEGIN")
-      debugPrint(bi)
-      debugPrint("GGGGG 21 MIDDLE 1")
-      debugPrint(succBBArg)
-      debugPrint("GGGGG 21 MIDDLE 2")
-      debugPrint(succBBArg.uses)
-      debugPrint("GGGGG 21 MIDDLE 3")
-      rootClosureEnums.append((enumType: ei.type, enumCase: ei.caseIndex))
-      debugPrint(rootClosureEnums)
-      //debugPrint("GGGGG 21 MIDDLE 1")
-      //debugPrint(ei.operand?.value)
-      //debugPrint("GGGGG 21 MIDDLE 2")
-      //debugPrint(ei.payload)
-      //debugPrint("GGGGG 21 MIDDLE 3")
-      //debugPrint(ei.type)
-      debugPrint("GGGGG 21 END")
+//    case let ei as EnumInst:
+//      //rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: ei.uses)
+//      assert(ei.bridged.hasOneUse())
+//      let firstUse = ei.bridged.getFirstUse()
+//      // TODO: proper work with optionals
+//      let inst = BridgedOperand(op: firstUse.op!).getUser().instruction
+//      let bi = inst as! BranchInst
+//      //assert(bi)
+//      let succBBArg = bi.getArgument(for: Operand(bridged: BridgedOperand(op: firstUse.op!)))
+//      rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: succBBArg.uses)
+//      possibleMarkDependenceBases.insert(ei)
+//      rootClosurePossibleLiveRange.insert(use.instruction)
+//      debugPrint("GGGGG 21 BEGIN")
+//      debugPrint(bi)
+//      debugPrint("GGGGG 21 MIDDLE 1")
+//      debugPrint(succBBArg)
+//      debugPrint("GGGGG 21 MIDDLE 2")
+//      debugPrint(succBBArg.uses)
+//      debugPrint("GGGGG 21 MIDDLE 3")
+//      rootClosureEnums.append((enumType: ei.type, enumCase: ei.caseIndex))
+//      debugPrint(rootClosureEnums)
+//      //debugPrint("GGGGG 21 MIDDLE 1")
+//      //debugPrint(ei.operand?.value)
+//      //debugPrint("GGGGG 21 MIDDLE 2")
+//      //debugPrint(ei.payload)
+//      //debugPrint("GGGGG 21 MIDDLE 3")
+//      //debugPrint(ei.type)
+//      debugPrint("GGGGG 21 END")
 
 //    case let bi as BranchInst:
 //      debugPrint("GGGGG 22")
@@ -584,15 +700,29 @@ private func handleNonApplies(for rootClosure: SingleValueInstruction,
     }
   }
 
+  assert(rootClosureEnumsLocal.count <= 1)
+  if rootClosureEnumsLocal.count == 1 {
+    debugPrint("AAAAA partialAppliesLocal.count BEGIN")
+    debugPrint(partialAppliesLocal.count)
+    debugPrint("AAAAA partialAppliesLocal.count MIDDLE 1")
+    debugPrint(partialAppliesLocal)
+    debugPrint("AAAAA partialAppliesLocal.count MIDDLE 2")
+    debugPrint(rootClosureEnumsLocal)
+    debugPrint("AAAAA partialAppliesLocal.count END")
+    assert(partialAppliesLocal.count == 1)
+    rootClosureEnums[partialAppliesLocal[0]] = rootClosureEnumsLocal[0]
+  }
+
   return (foundUnexpectedUse, haveUsedReabstraction)
 }
 
 private typealias IntermediateClosureArgDescriptorDatum = (applySite: SingleValueInstruction, closureArgIndex: Int, paramInfo: ParameterInfo)
+private typealias EnumClosure = (enumType: Type, enumCase: Int, closureIdxInTuple: Int)
 
 private func handleApplies(for rootClosure: SingleValueInstruction, callSiteMap: inout CallSiteMap,
                            rootClosureApplies: inout OperandWorklist,
                            rootClosurePossibleLiveRange: inout InstructionRange,
-                           rootClosureEnums: inout Array<(enumType: Type, enumCase: Int)>,
+                           rootClosureEnums: inout [PartialApplyInst: EnumClosure],
                            convertedAndReabstractedClosures: inout InstructionSet, haveUsedReabstraction: Bool,
                            _ context: FunctionPassContext) -> [IntermediateClosureArgDescriptorDatum]
 {
@@ -617,6 +747,7 @@ private func handleApplies(for rootClosure: SingleValueInstruction, callSiteMap:
     }
 
     debugPrint("AAAAA 12")
+    // TODO: is callee always pullback?
     guard let callee = pai.referencedFunction else {
       continue
     }
@@ -661,13 +792,28 @@ private func handleApplies(for rootClosure: SingleValueInstruction, callSiteMap:
 
     debugPrint("AAAAA 18 BEGIN")
     debugPrint(callee)
-    debugPrint("AAAAA 18 MIDDLE")
+    debugPrint("AAAAA 18 MIDDLE 1")
     debugPrint(closureArgumentIndex)
-    debugPrint("AAAAA 18 END")
+    debugPrint("AAAAA 18 MIDDLE 2")
+    debugPrint(use)
     // Ok, we know that we can perform the optimization but not whether or not the optimization is profitable. Check if
     // the closure is actually called in the callee (or in a function called by the callee).
-    if !isClosureApplied(in: callee, closureArgIndex: closureArgumentIndex) {
-      continue
+    if pai.parentFunction.blocks.singleElement != nil {
+      debugPrint("AAAAA 18 END")
+      if !isClosureApplied(in: callee, closureArgIndex: closureArgumentIndex) {
+        continue
+      }
+    } else {
+      debugPrint("AAAAA 18 MIDDLE 3")
+      //assert(rootClosureEnums.count == 1)
+      let ai = isClosureAppliedCFG(in: callee, info: rootClosureEnums[pai]!)
+      if ai == nil {
+        debugPrint("NOT APPLIED")
+        continue
+      } else {
+        debugPrint(ai!)
+      }
+      debugPrint("AAAAA 18 END")
     }
 
     debugPrint("AAAAA 19")
@@ -754,12 +900,57 @@ private func finalizeCallSites(for rootClosure: SingleValueInstruction, in callS
                                               parameterInfo: parameterInfo)
     callSite.appendClosureArgDescriptor(closureArgDesc)
     debugPrint("AAAAA 07 BEGIN")
+    debugPrint(applySite)
+    debugPrint("AAAAA 07 MIDDLE 1")
+    debugPrint(callSite)
+    debugPrint("AAAAA 07 MIDDLE 2")
+    debugPrint(closureArgDesc)
+    debugPrint("AAAAA 07 MIDDLE 3")
     debugPrint(callSiteMap)
     callSiteMap.update(key: applySite, value: callSite)
-    debugPrint("AAAAA 07 MIDDLE")
+    debugPrint("AAAAA 07 MIDDLE 4")
     debugPrint(callSiteMap)
     debugPrint("AAAAA 07 END")
   }
+}
+
+private func isClosureAppliedCFG(in callee: Function, info t: EnumClosure) -> ApplyInst? {
+  for inst in callee.instructions {
+    switch inst {
+      case let sei as SwitchEnumInst:
+        if sei.enumOp.type != t.enumType {
+          continue
+        }
+        // TODO: proper work with optional
+        let succBB = sei.getUniqueSuccessor(forCaseIndex: t.enumCase)!
+        assert(succBB.arguments.count == 1)
+        var closureVal : Value? = nil
+        for use in succBB.arguments[0].uses {
+          switch use.instruction {
+            case let tei as TupleExtractInst:
+              if tei.fieldIndex == t.closureIdxInTuple {
+                closureVal = tei
+              }
+            default:
+              assert(false)
+          }
+        }
+        assert(closureVal != nil)
+        for use in closureVal!.uses {
+          switch use.instruction {
+            case let ai as ApplyInst:
+              return ai
+            case let _ as StrongReleaseInst:
+              ()
+            default:
+              assert(false)
+          }
+        }
+      default:
+        continue
+    }
+  }
+  return nil
 }
 
 private func isClosureApplied(in callee: Function, closureArgIndex index: Int) -> Bool {
@@ -834,20 +1025,33 @@ private func markConvertedAndReabstractedClosuresAsUsed(rootClosure: Value, conv
 
 private extension SpecializationCloner {
   func cloneAndSpecializeFunctionBody(using callSite: CallSite) {
-    self.cloneEntryBlockArgsWithoutOrigClosures(usingOrigCalleeAt: callSite)
+    debugPrint("AAAA cloneAndSpecializeFunctionBody 00")
+    debugPrint(callSite)
+    debugPrint("AAAA cloneAndSpecializeFunctionBody 01")
 
-    let (allSpecializedEntryBlockArgs, closureArgIndexToAllClonedReleasableClosures) = cloneAllClosures(at: callSite)
+//    if callSite.applySite.parentFunction.blocks.singleElement == nil {
+//      debugPrint("AAAA cloneAndSpecializeFunctionBody 02")
+//      assert(callSite.applySite.numArguments == 1)
+//    } else {
+      self.cloneEntryBlockArgsWithoutOrigClosures(usingOrigCalleeAt: callSite)
 
-    debugPrint("IIIII 00 BEGIN")
-    debugPrint(allSpecializedEntryBlockArgs)
-    debugPrint("IIIII 00 MIDDLE")
-    debugPrint(closureArgIndexToAllClonedReleasableClosures)
-    debugPrint("IIIII 00 END")
+      let (allSpecializedEntryBlockArgs, closureArgIndexToAllClonedReleasableClosures) = cloneAllClosures(at: callSite)
 
-    self.cloneFunctionBody(from: callSite.applyCallee, entryBlockArguments: allSpecializedEntryBlockArgs)
+      debugPrint("IIIII 00 BEGIN")
+      debugPrint(allSpecializedEntryBlockArgs)
+      debugPrint("IIIII 00 MIDDLE 1")
+      debugPrint(closureArgIndexToAllClonedReleasableClosures)
 
-    self.insertCleanupCodeForClonedReleasableClosures(
-      from: callSite, closureArgIndexToAllClonedReleasableClosures: closureArgIndexToAllClonedReleasableClosures)
+      debugPrint("IIIII 00 MIDDLE 2")
+      self.cloneFunctionBody(from: callSite.applyCallee, entryBlockArguments: allSpecializedEntryBlockArgs)
+      debugPrint("IIIII 00 MIDDLE 3")
+
+      if callSite.applySite.parentFunction.blocks.singleElement != nil {
+        self.insertCleanupCodeForClonedReleasableClosures(
+          from: callSite, closureArgIndexToAllClonedReleasableClosures: closureArgIndexToAllClonedReleasableClosures)
+      }
+//    }
+      debugPrint("IIIII 00 END")
   }
 
   private func cloneEntryBlockArgsWithoutOrigClosures(usingOrigCalleeAt callSite: CallSite) {
@@ -937,11 +1141,21 @@ private extension SpecializationCloner {
 
     let clonedRootClosure = builder.cloneRootClosure(representedBy: closureArgDesc, capturedArguments: clonedClosureArgs)
 
+    debugPrint("AAAAA cloneClosureChain 00")
+    var reabstractedClosure : Value?
+    if closureArgDesc.closure.parentFunction.blocks.singleElement != nil {
+      reabstractedClosure = callSite.appliedArgForClosure(at: closureArgDesc.closureArgIndex)!
+    } else {
+      // TODO
+      reabstractedClosure = closureArgDesc.closure
+    }
+
     let (finalClonedReabstractedClosure, releasableClonedReabstractedClosures) =
       builder.cloneRootClosureReabstractions(rootClosure: closureArgDesc.closure, clonedRootClosure: clonedRootClosure,
-                                             reabstractedClosure: callSite.appliedArgForClosure(at: closureArgDesc.closureArgIndex)!,
+                                             reabstractedClosure: reabstractedClosure!, //callSite.appliedArgForClosure(at: closureArgDesc.closureArgIndex)!,
                                              origToClonedValueMap: origToClonedValueMap,
                                              self.context)
+    debugPrint("AAAAA cloneClosureChain 01")
 
     let allClonedReleasableClosures = [clonedRootClosure] + releasableClonedReabstractedClosures
     return (finalClonedReabstractedClosure, allClonedReleasableClosures)
@@ -973,8 +1187,20 @@ private extension SpecializationCloner {
   private func insertCleanupCodeForClonedReleasableClosures(from callSite: CallSite,
                                                             closureArgIndexToAllClonedReleasableClosures: [Int: [SingleValueInstruction]])
   {
+    debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures BEGIN")
     for closureArgDesc in callSite.closureArgDescriptors {
+      debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 00")
       let allClonedReleasableClosures = closureArgIndexToAllClonedReleasableClosures[closureArgDesc.closureArgIndex]!
+      debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 01 BEGIN")
+      debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 01 MIDDLE 1")
+      debugPrint(closureArgDesc.isClosureGuaranteed)
+      debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 01 MIDDLE 2")
+      debugPrint(closureArgDesc.parameterInfo)
+      debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 01 MIDDLE 3")
+      debugPrint(closureArgDesc.parameterInfo.isTrivialNoescapeClosure)
+      debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 01 MIDDLE 4")
+      debugPrint(allClonedReleasableClosures.isEmpty)
+      debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 01 MIDDLE 5")
 
       // Insert a `destroy_value`, for all releasable closures, in all reachable exit BBs if the closure was passed as a
       // guaranteed parameter or its type was noescape+thick. This is b/c the closure was passed at +0 originally and we
@@ -982,27 +1208,41 @@ private extension SpecializationCloner {
       if closureArgDesc.isClosureGuaranteed || closureArgDesc.parameterInfo.isTrivialNoescapeClosure,
          !allClonedReleasableClosures.isEmpty
       {
+        debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 02")
         for exitBlock in callSite.reachableExitBBsInCallee {
+          debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 03")
           let clonedExitBlock = self.getClonedBlock(for: exitBlock)
+          debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 04")
 
           let terminator = clonedExitBlock.terminator is UnreachableInst
                            ? clonedExitBlock.terminator.previous!
                            : clonedExitBlock.terminator
+          debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 05")
 
           let builder = Builder(before: terminator, self.context)
+          debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 06")
 
           for closure in allClonedReleasableClosures {
+            debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 07")
             if let pai = closure as? PartialApplyInst {
+              debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 08")
               builder.destroyPartialApply(pai: pai, self.context)
+              debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 09")
             }
+            debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 10")
           }
         }
       }
+      debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 01 END")
     }
 
+    debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 11")
     if (self.context.needFixStackNesting) {
+      debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 12")
       self.cloned.fixStackNesting(self.context)
+      debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures 13")
     }
+    debugPrint("AAAAAA insertCleanupCodeForClonedReleasableClosures END")
   }
 }
 
@@ -1149,6 +1389,10 @@ private extension Builder {
           return reabstracted
 
         default:
+          debugPrint("AAAA cloneRootClosureReabstractions DEFAULT BEGIN")
+          debugPrint(reabstractedClosure)
+          debugPrint("AAAA cloneRootClosureReabstractions DEFAULT END")
+          return reabstractedClosure
           log("Parent function of callSite: \(rootClosure.parentFunction)")
           log("Root closure: \(rootClosure)")
           log("Converted/reabstracted closure: \(reabstractedClosure)")
@@ -1158,8 +1402,10 @@ private extension Builder {
 
     var releasableClonedReabstractedClosures: [PartialApplyInst] = []
     var origToClonedValueMap = origToClonedValueMap
+    debugPrint("AAAA cloneRootClosureReabstractions BEFORE inner")
     let finalClonedReabstractedClosure = inner(rootClosure, clonedRootClosure, reabstractedClosure,
                                                &releasableClonedReabstractedClosures, &origToClonedValueMap)
+    debugPrint("AAAA cloneRootClosureReabstractions AFTER inner")
     return (finalClonedReabstractedClosure as! SingleValueInstruction, releasableClonedReabstractedClosures)
   }
 
@@ -1250,7 +1496,10 @@ private extension ParameterInfo {
   }
 
   var isTrivialNoescapeClosure: Bool {
-    SILFunctionType_isTrivialNoescape(type.bridged)
+    debugPrint("AAAAAAA isTrivialNoescapeClosure BEGIN")
+    debugPrint(type)
+    debugPrint("AAAAAAA isTrivialNoescapeClosure END")
+    return SILFunctionType_isTrivialNoescape(type.bridged)
   }
 }
 
@@ -1509,7 +1758,7 @@ private struct CallSite {
 let gatherCallSitesTest = FunctionTest("closure_specialize_gather_call_sites") { function, arguments, context in
   print("Specializing closures in function: \(function.name)")
   print("===============================================")
-  var callSites = gatherCallSites(in: function, context)
+  var (callSites, _) = gatherCallSites(in: function, context)
 
   callSites.forEach { callSite in
     print("PartialApply call site: \(callSite.applySite)")
@@ -1525,7 +1774,7 @@ let gatherCallSitesTest = FunctionTest("closure_specialize_gather_call_sites") {
 let specializedFunctionSignatureAndBodyTest = FunctionTest(
   "closure_specialize_specialized_function_signature_and_body") { function, arguments, context in
 
-  var callSites = gatherCallSites(in: function, context)
+  var (callSites, _) = gatherCallSites(in: function, context)
 
   for callSite in callSites {
     let (specializedFunction, _) = getOrCreateSpecializedFunction(basedOn: callSite, context)
@@ -1535,7 +1784,7 @@ let specializedFunctionSignatureAndBodyTest = FunctionTest(
 }
 
 let rewrittenCallerBodyTest = FunctionTest("closure_specialize_rewritten_caller_body") { function, arguments, context in
-  var callSites = gatherCallSites(in: function, context)
+  var (callSites, _) = gatherCallSites(in: function, context)
 
   for callSite in callSites {
     let (specializedFunction, _) = getOrCreateSpecializedFunction(basedOn: callSite, context)
