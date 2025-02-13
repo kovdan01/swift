@@ -579,6 +579,8 @@ OptionalBridgedOperand BridgedValue::getFirstUse() const {
   return {*getSILValue()->use_begin()};
 }
 
+SwiftBool BridgedValue::hasOneUse() const { return getSILValue()->hasOneUse(); }
+
 BridgedType BridgedValue::getType() const {
   return getSILValue()->getType();
 }
