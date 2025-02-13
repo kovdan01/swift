@@ -149,6 +149,80 @@ void LinearMapInfo::populateBranchingTraceDecl(SILBasicBlock *originalBB,
       if (!linearMapStructTy)
         continue;
       auto canLinearMapStructTy = linearMapStructTy->getCanonicalType();
+      LLVM_DEBUG(getADDebugStream() << "\nBBBBB setInterfaceType BEGIN\n");
+      LLVM_DEBUG(getADDebugStream()
+                 << (int)(canLinearMapStructTy->hasArchetype()) << "\n");
+      LLVM_DEBUG(getADDebugStream() << "\nBBBBB setInterfaceType MIDDLE 1\n");
+      LLVM_DEBUG(getADDebugStream() << canLinearMapStructTy << "\n");
+      LLVM_DEBUG(getADDebugStream() << "\nBBBBB setInterfaceType END\n");
+      decl->setInterfaceType(canLinearMapStructTy->hasArchetype()
+                                 ? canLinearMapStructTy->mapTypeOutOfContext()
+                                 : canLinearMapStructTy);
+    }
+    // Create enum element and enum case declarations.
+    auto *paramList = ParameterList::create(astCtx, {decl});
+    auto bbId = "bb" + std::to_string(predBB->getDebugID());
+    auto *enumEltDecl = new (astCtx) EnumElementDecl(
+        /*IdentifierLoc*/ loc, DeclName(astCtx.getIdentifier(bbId)), paramList,
+        loc, /*RawValueExpr*/ nullptr, branchingTraceDecl);
+    enumEltDecl->setImplicit();
+    auto *enumCaseDecl = EnumCaseDecl::create(
+        /*CaseLoc*/ loc, {enumEltDecl}, branchingTraceDecl);
+    enumCaseDecl->setImplicit();
+
+    LLVM_DEBUG(getADDebugStream() << "\nBBBBB paramList BEGIN\n");
+    decl->print(getADDebugStream());
+    LLVM_DEBUG(getADDebugStream() << "\nBBBBB paramList MIDDLE\n");
+    branchingTraceDecl->print(getADDebugStream());
+    LLVM_DEBUG(getADDebugStream() << "\nBBBBB paramList END\n");
+
+    // LLVM_DEBUG(getADDebugStream() << "\nBBBBB branchingTraceDecl 00
+    // BEGIN\n"); branchingTraceDecl->print(getADDebugStream());
+    // LLVM_DEBUG(getADDebugStream() << "\nBBBBB branchingTraceDecl 00
+    // END\n\n");
+
+    branchingTraceDecl->addMember(enumEltDecl);
+
+    LLVM_DEBUG(getADDebugStream() << "\nBBBBB branchingTraceDecl 01 BEGIN\n");
+    branchingTraceDecl->print(getADDebugStream());
+    LLVM_DEBUG(getADDebugStream() << "\nBBBBB branchingTraceDecl 01 END\n\n");
+
+    branchingTraceDecl->addMember(enumCaseDecl);
+
+    LLVM_DEBUG(getADDebugStream() << "\nBBBBB branchingTraceDecl 02 BEGIN\n");
+    branchingTraceDecl->print(getADDebugStream());
+    LLVM_DEBUG(getADDebugStream() << "\nBBBBB branchingTraceDecl 02 END\n\n");
+
+    // Record enum element declaration.
+    branchingTraceEnumCases.insert({{predBB, originalBB}, enumEltDecl});
+  }
+}
+
+void LinearMapInfo::rewriteBranchingTraceDecl(SILBasicBlock *originalBB,
+                                              SILLoopInfo *loopInfo) {
+  auto &astCtx = original->getASTContext();
+  auto *moduleDecl = original->getModule().getSwiftModule();
+  auto loc = original->getLocation().getSourceLoc();
+  auto *branchingTraceDecl = getBranchingTraceDecl(originalBB);
+
+  // Add basic block enum cases.
+  for (auto *predBB : originalBB->getPredecessorBlocks()) {
+    // Create dummy declaration representing enum case parameter.
+    auto *decl = new (astCtx)
+        ParamDecl(loc, loc, Identifier(), loc, Identifier(), moduleDecl);
+    decl->setSpecifier(ParamDecl::Specifier::Default);
+    // If predecessor block is in a loop, its linear map tuple will be
+    // indirectly referenced in memory owned by the context object. The payload
+    // is just a raw pointer.
+    if (loopInfo->getLoopFor(predBB)) {
+      heapAllocatedContext = true;
+      decl->setInterfaceType(astCtx.TheRawPointerType);
+    } else { // Otherwise the payload is the linear map tuple.
+      auto *linearMapStructTy = getLinearMapTupleType(predBB);
+      // Do not create entries for unreachable predecessors
+      if (!linearMapStructTy)
+        continue;
+      auto canLinearMapStructTy = linearMapStructTy->getCanonicalType();
       decl->setInterfaceType(
           canLinearMapStructTy->hasArchetype()
               ? canLinearMapStructTy->mapTypeOutOfContext() : canLinearMapStructTy);
@@ -169,7 +243,6 @@ void LinearMapInfo::populateBranchingTraceDecl(SILBasicBlock *originalBB,
     branchingTraceEnumCases.insert({{predBB, originalBB}, enumEltDecl});
   }
 }
-
 
 Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
   SmallVector<SILValue, 4> allResults;

@@ -31,6 +31,8 @@
 #include <cstring>
 #include <stdio.h>
 
+#define DEBUG_TYPE "SILBRIDGINGDEBUG"
+
 using namespace swift;
 
 namespace {
@@ -491,6 +493,22 @@ convertCases(SILType enumTy, const void * _Nullable enumCases, SwiftInt numEnumC
     convertedCases.push_back({mappedElements[c.first], c.second.unbridged()});
   }
   return convertedCases;
+}
+
+void BridgedBuilder::rewriteBranchTracingEnum(BridgedType enumType) const {
+  LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 00 BEGIN\n");
+  enumType.unbridged().print(llvm::dbgs());
+  LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 00 END\n\n");
+  EnumDecl *ed = enumType.unbridged().getEnumOrBoundGenericEnum();
+  assert(ed && "Expected valid enum type");
+  LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 01 BEGIN\n");
+  ed->print(llvm::dbgs());
+  LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 01 END\n\n");
+  for (Decl *member : ed->getAllMembers()) {
+    LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 02 BEGIN\n");
+    member->print(llvm::dbgs());
+    LLVM_DEBUG(llvm::dbgs() << "CCCCC rewriteBranchTracingEnum 02 END\n\n");
+  }
 }
 
 BridgedInstruction BridgedBuilder::createSwitchEnumInst(BridgedValue enumVal, OptionalBridgedBasicBlock defaultBlock,

@@ -111,6 +111,8 @@ private:
                                      CanGenericSignature genericSig);
   void populateBranchingTraceDecl(SILBasicBlock *originalBB,
                                   SILLoopInfo *loopInfo);
+  void rewriteBranchingTraceDecl(SILBasicBlock *originalBB,
+                                 SILLoopInfo *loopInfo);
 
   /// Given an `apply` / `begin_apply` instruction, conditionally gets a linear
   /// map tuple field AST type for its linear map function if it is active.
