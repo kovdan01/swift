@@ -151,11 +151,22 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     if !callSites.isEmpty {
       debugPrint("AAAA 02")
       assert(callSites.count == 1)
-      assert(enums.count == 1)
+      if function.blocks.singleElement == nil {
+        assert(enums.count == 1)
+      } else {
+        assert(enums.count == 0)
+      }
       for callSite in callSites {
         debugPrint("AAAAA getOrCreateSpecializedFunctionCFG BEGIN")
-        var (specializedFunction, alreadyExists) = getOrCreateSpecializedFunctionCFG(basedOn: (callSite, enums[callSite.applySite as! PartialApplyInst]!), context)
-        //var (specializedFunction, alreadyExists) = getOrCreateSpecializedFunction(basedOn: callSite, context)
+        var specializedFunctionOpt : Function?
+        var alreadyExistsOpt : Bool?
+        if callSite.applySite.parentFunction.blocks.singleElement == nil {
+          (specializedFunctionOpt, alreadyExistsOpt) = getOrCreateSpecializedFunctionCFG(basedOn: (callSite, enums[callSite.applySite as! PartialApplyInst]!), context)
+        } else {
+          (specializedFunctionOpt, alreadyExistsOpt) = getOrCreateSpecializedFunction(basedOn: callSite, context)
+        }
+        var specializedFunction = specializedFunctionOpt!
+        var alreadyExists = alreadyExistsOpt!
         debugPrint("AAAAA getOrCreateSpecializedFunctionCFG END")
         if !alreadyExists {
           debugPrint("AAAAA notifyNewFunction BEGIN")
@@ -170,11 +181,13 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
         }
 
         debugPrint("AAAAA rewriteApplyInstruction BEGIN")
-        debugPrint(specializedFunction)
+        debugPrint(function)
         debugPrint("AAAAA rewriteApplyInstruction MIDDLE 1")
-        rewriteApplyInstruction(using: specializedFunction, callSite: callSite, context)
+        if function.blocks.singleElement != nil {
+          rewriteApplyInstruction(using: specializedFunction, callSite: callSite, context)
+        }
         debugPrint("AAAAA rewriteApplyInstruction MIDDLE 2")
-        debugPrint(specializedFunction)
+        debugPrint(function)
         debugPrint("AAAAA rewriteApplyInstruction END")
       }
 
@@ -200,7 +213,13 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
       debugPrint("AAAAA deadClosures.pop END")
 
       if context.needFixStackNesting {
+        debugPrint("AAAAAA needFixStackNesting 00 BEGIN")
+        debugPrint(function)
+        debugPrint("AAAAAA needFixStackNesting 00 END")
         function.fixStackNesting(context)
+        debugPrint("AAAAAA needFixStackNesting 01 BEGIN")
+        debugPrint(function)
+        debugPrint("AAAAAA needFixStackNesting 01 END")
       }
     }
 
@@ -210,7 +229,9 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
   } while callerModified && remainingSpecializationRounds > 0
   //} while callerModified //&& remainingSpecializationRounds > 0
 
-  debugPrint("autodiffClosureSpecialization END")
+  debugPrint("autodiffClosureSpecialization END 00")
+  debugPrint(function)
+  debugPrint("autodiffClosureSpecialization END 01")
 }
 
 // =========== Top-level functions ========== //
