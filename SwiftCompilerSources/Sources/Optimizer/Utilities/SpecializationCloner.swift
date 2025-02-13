@@ -14,7 +14,7 @@ import OptimizerBridging
 import SIL
 
 /// Utility cloner type that can be used by optimizations that generate new functions or specialized versions of
-/// existing functions. 
+/// existing functions.
 struct SpecializationCloner {
   private let bridged: BridgedSpecializationCloner
   let context: FunctionPassContext
@@ -23,7 +23,7 @@ struct SpecializationCloner {
     self.bridged = BridgedSpecializationCloner(emptySpecializedFunction.bridged)
     self.context = context
   }
-  
+
   var cloned: Function {
     bridged.getCloned().function
   }
@@ -41,6 +41,11 @@ struct SpecializationCloner {
   }
 
   func cloneFunctionBody(from originalFunction: Function, entryBlockArguments: [Value]) {
+    debugPrint("AAAAAA cloneFunctionBody 00")
+    debugPrint(originalFunction)
+    debugPrint("AAAAAA cloneFunctionBody 01")
+    debugPrint(entryBlockArguments)
+    debugPrint("AAAAAA cloneFunctionBody 02")
     entryBlockArguments.withBridgedValues { bridgedEntryBlockArgs in
       bridged.cloneFunctionBody(originalFunction.bridged, self.entryBlock.bridged, bridgedEntryBlockArgs)
     }

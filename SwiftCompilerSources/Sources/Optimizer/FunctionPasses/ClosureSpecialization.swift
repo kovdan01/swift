@@ -170,7 +170,11 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
         }
 
         debugPrint("AAAAA rewriteApplyInstruction BEGIN")
+        debugPrint(specializedFunction)
+        debugPrint("AAAAA rewriteApplyInstruction MIDDLE 1")
         rewriteApplyInstruction(using: specializedFunction, callSite: callSite, context)
+        debugPrint("AAAAA rewriteApplyInstruction MIDDLE 2")
+        debugPrint(specializedFunction)
         debugPrint("AAAAA rewriteApplyInstruction END")
       }
 
@@ -1038,13 +1042,17 @@ private extension SpecializationCloner {
       let (allSpecializedEntryBlockArgs, closureArgIndexToAllClonedReleasableClosures) = cloneAllClosures(at: callSite)
 
       debugPrint("IIIII 00 BEGIN")
-      debugPrint(allSpecializedEntryBlockArgs)
+      debugPrint(self.cloned)
       debugPrint("IIIII 00 MIDDLE 1")
+      debugPrint(allSpecializedEntryBlockArgs)
+      debugPrint("IIIII 00 MIDDLE 2")
       debugPrint(closureArgIndexToAllClonedReleasableClosures)
 
-      debugPrint("IIIII 00 MIDDLE 2")
-      self.cloneFunctionBody(from: callSite.applyCallee, entryBlockArguments: allSpecializedEntryBlockArgs)
       debugPrint("IIIII 00 MIDDLE 3")
+      self.cloneFunctionBody(from: callSite.applyCallee, entryBlockArguments: allSpecializedEntryBlockArgs)
+      debugPrint("IIIII 00 MIDDLE 4")
+      debugPrint(self.cloned)
+      debugPrint("IIIII 00 MIDDLE 5")
 
       if callSite.applySite.parentFunction.blocks.singleElement != nil {
         self.insertCleanupCodeForClonedReleasableClosures(
@@ -1070,7 +1078,7 @@ private extension SpecializationCloner {
 
     originalEntryBlock.arguments
       .enumerated()
-      .filter { index, _ in !callSite.hasClosureArg(at: index) }
+      .filter { index, _ in !callSite.hasClosureArg(at: index) || callSite.applySite.parentFunction.blocks.singleElement == nil }
       .forEach { _, arg in
         let clonedEntryBlockArgType = arg.type.getLoweredType(in: clonedFunction)
         let clonedEntryBlockArg = clonedEntryBlock.addFunctionArgument(type: clonedEntryBlockArgType, self.context)
@@ -1105,7 +1113,9 @@ private extension SpecializationCloner {
         .enumerated()
         .reduce(into: []) { result, origArgTuple in
           let (index, _) = origArgTuple
-          if !callSite.hasClosureArg(at: index) {
+          if !callSite.hasClosureArg(at: index) || callSite.applySite.parentFunction.blocks.singleElement == nil {
+//          if !callSite.hasClosureArg(at: index) {
+            debugPrint("AAAAA entryBlockArgsWithOrigClosuresSkipped " + String(index))
             result.append(clonedNonClosureEntryBlockArgs.next())
           } else {
             result.append(Optional.none)
@@ -1116,13 +1126,24 @@ private extension SpecializationCloner {
     var entryBlockArgs: [Value?] = entryBlockArgsWithOrigClosuresSkipped()
     var closureArgIndexToAllClonedReleasableClosures: [Int: [SingleValueInstruction]] = [:]
 
+    debugPrint("AAAA cloneAllClosures entryBlockArgs 00 BEGIN")
+    debugPrint(entryBlockArgs)
+    debugPrint("AAAA cloneAllClosures entryBlockArgs 00 END")
+
+    if callSite.applySite.parentFunction.blocks.singleElement != nil {
     for closureArgDesc in callSite.closureArgDescriptors {
       let (finalClonedReabstractedClosure, allClonedReleasableClosures) =
         self.cloneClosureChain(representedBy: closureArgDesc, at: callSite)
 
-      entryBlockArgs[closureArgDesc.closureArgIndex] = finalClonedReabstractedClosure
+        entryBlockArgs[closureArgDesc.closureArgIndex] = finalClonedReabstractedClosure
       closureArgIndexToAllClonedReleasableClosures[closureArgDesc.closureArgIndex] = allClonedReleasableClosures
     }
+    }
+
+    debugPrint("AAAA cloneAllClosures entryBlockArgs 01 BEGIN")
+    debugPrint(entryBlockArgs)
+    debugPrint("AAAA cloneAllClosures entryBlockArgs 01 END")
+
 
     return (entryBlockArgs.map { $0! }, closureArgIndexToAllClonedReleasableClosures)
   }
@@ -1130,18 +1151,22 @@ private extension SpecializationCloner {
   private func cloneClosureChain(representedBy closureArgDesc: ClosureArgDescriptor, at callSite: CallSite)
     -> (finalClonedReabstractedClosure: SingleValueInstruction, allClonedReleasableClosures: [SingleValueInstruction])
   {
+    debugPrint("AAAAA cloneClosureChain 00")
     let (origToClonedValueMap, capturedArgRange) = self.addEntryBlockArgs(forValuesCapturedBy: closureArgDesc)
+    debugPrint("AAAAA cloneClosureChain 01")
     let clonedFunction = self.cloned
     let clonedEntryBlock = self.entryBlock
     let clonedClosureArgs = Array(clonedEntryBlock.arguments[capturedArgRange])
+    debugPrint("AAAAA cloneClosureChain 02")
 
     let builder = clonedEntryBlock.instructions.isEmpty
                   ? Builder(atStartOf: clonedFunction, self.context)
                   : Builder(atEndOf: clonedEntryBlock, location: clonedEntryBlock.instructions.last!.location, self.context)
+    debugPrint("AAAAA cloneClosureChain 03")
 
     let clonedRootClosure = builder.cloneRootClosure(representedBy: closureArgDesc, capturedArguments: clonedClosureArgs)
 
-    debugPrint("AAAAA cloneClosureChain 00")
+    debugPrint("AAAAA cloneClosureChain 04")
     var reabstractedClosure : Value?
     if closureArgDesc.closure.parentFunction.blocks.singleElement != nil {
       reabstractedClosure = callSite.appliedArgForClosure(at: closureArgDesc.closureArgIndex)!
@@ -1155,7 +1180,7 @@ private extension SpecializationCloner {
                                              reabstractedClosure: reabstractedClosure!, //callSite.appliedArgForClosure(at: closureArgDesc.closureArgIndex)!,
                                              origToClonedValueMap: origToClonedValueMap,
                                              self.context)
-    debugPrint("AAAAA cloneClosureChain 01")
+    debugPrint("AAAAA cloneClosureChain 05")
 
     let allClonedReleasableClosures = [clonedRootClosure] + releasableClonedReabstractedClosures
     return (finalClonedReabstractedClosure, allClonedReleasableClosures)
@@ -1170,9 +1195,16 @@ private extension SpecializationCloner {
 
     let capturedArgRangeStart = clonedEntryBlock.arguments.count
 
+    debugPrint("AAAAAA addEntryBlockArgs capturedArgRangeStart " + String(capturedArgRangeStart))
+
     for arg in closureArgDesc.arguments {
+      debugPrint("AAAAAA addEntryBlockArgs BEGIN")
+      debugPrint(arg)
+      debugPrint("AAAAAA addEntryBlockArgs MIDDLE")
       let capturedArg = clonedEntryBlock.addFunctionArgument(type: arg.type.getLoweredType(in: clonedFunction),
                                                               self.context)
+      debugPrint(capturedArg)
+      debugPrint("AAAAAA addEntryBlockArgs END")
       origToClonedValueMap[arg] = capturedArg
     }
 
