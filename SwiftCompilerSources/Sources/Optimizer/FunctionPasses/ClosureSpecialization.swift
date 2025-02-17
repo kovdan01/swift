@@ -307,7 +307,12 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
   debugPrint(newApplyArgs)
   debugPrint("AAAAA newApplyArgs END")
   let builder = Builder(before: callSite.applySite, context)
-  builder.rewriteBranchTracingEnum(enumType: enumClosure.enumType, enumCaseIdx: enumClosure.enumCase, closureIdxInTuple: enumClosure.closureIdxInTuple)
+  // MYTODO: enums set not create each time
+  let newEnumType = builder.rewriteBranchTracingEnum(enumType: enumClosure.enumType, enumCaseIdx: enumClosure.enumCase,
+                                   closureIdxInTuple: enumClosure.closureIdxInTuple)
+  debugPrint("AAAAA newEnumType BEGIN")
+  debugPrint(newEnumType)
+  debugPrint("AAAAA newEnumType END")
 
   return
 
@@ -441,6 +446,7 @@ private func updateCallSites(for rootClosure: SingleValueInstruction, in callSit
   // 2. A root closure may be a partial_apply [stack], in which case we need to make sure that all mark_dependence
   //    bases for it will be available in the specialized callee in case the call site is specialized against this root
   //    closure.
+
 
   let (foundUnexpectedUse, haveUsedReabstraction) =
     handleNonApplies(for: rootClosure, rootClosureApplies: &rootClosureApplies,
