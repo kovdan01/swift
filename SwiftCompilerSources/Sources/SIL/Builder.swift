@@ -361,8 +361,8 @@ public struct Builder {
 //    bridged.analyzeBranchTracingEnum(enumType.bridged)
 //  }
 
-  public func rewriteBranchTracingEnum(enumType: Type, enumCaseIdx: Int, closureIdxInTuple: Int) {
-    bridged.rewriteBranchTracingEnum(enumType.bridged, enumCaseIdx, closureIdxInTuple)
+  public func rewriteBranchTracingEnum(enumType: Type, enumCaseIdx: Int, closureIdxInTuple: Int) -> Type {
+    return bridged.rewriteBranchTracingEnum(enumType.bridged, enumCaseIdx, closureIdxInTuple).type
   }
 
 

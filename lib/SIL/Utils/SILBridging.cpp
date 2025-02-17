@@ -498,138 +498,80 @@ convertCases(SILType enumTy, const void * _Nullable enumCases, SwiftInt numEnumC
   return convertedCases;
 }
 
-void BridgedBuilder::analyzeBranchTracingEnum(BridgedType enumType) const {
-  LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 00 BEGIN\n");
-  enumType.unbridged().print(llvm::dbgs());
-  LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 00 END\n\n");
-  EnumDecl *ed = enumType.unbridged().getEnumOrBoundGenericEnum();
-  assert(ed && "Expected valid enum type");
-  LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 01 BEGIN\n");
-  ed->print(llvm::dbgs());
-  LLVM_DEBUG(llvm::dbgs() << "\nCCCCC hasCases = " << (int)(ed->hasCases())
-                          << "\n\n");
-  LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 01 END\n\n");
+BridgedType
+BridgedBuilder::rewriteBranchTracingEnum(BridgedType enumType,
+                                         SwiftInt enumCaseIdx,
+                                         SwiftInt closureIdxInTuple) const {
+  EnumDecl *oldED = enumType.unbridged().getEnumOrBoundGenericEnum();
+  assert(oldED && "Expected valid enum type");
+
+  ASTContext &astContext = unbridged().getASTContext();
+  Twine edNameStr = oldED->getNameStr() + "_specialized";
+  Identifier edName = astContext.getIdentifier(edNameStr.str());
+
+  auto *ed = new (astContext) EnumDecl(
+      /*EnumLoc*/ SourceLoc(), /*Name*/ edName, /*NameLoc*/ SourceLoc(),
+      /*Inherited*/ {}, /*GenericParams*/ nullptr,
+      /*DC*/
+      oldED->getDeclContext());
+  ed->setImplicit();
+
+  for (EnumCaseDecl *oldECD : oldED->getAllCases()) {
+    assert(oldECD->getElements().size() == 1);
+    EnumElementDecl *oldEED = oldECD->getElements().front();
+    auto *newPL = ParameterList::clone(astContext, oldEED->getParameterList());
+    auto *newEED = new (astContext) EnumElementDecl(
+        /*IdentifierLoc*/ SourceLoc(),
+        DeclName(astContext.getIdentifier(oldEED->getNameStr())), newPL,
+        SourceLoc(), /*RawValueExpr*/ nullptr, ed);
+    newEED->setImplicit();
+    auto *newECD = EnumCaseDecl::create(
+        /*CaseLoc*/ SourceLoc(), {newEED}, ed);
+    newECD->setImplicit();
+    ed->addMember(newEED);
+    ed->addMember(newECD);
+  }
+
+  bool first = true;
   for (EnumCaseDecl *ecd : ed->getAllCases()) {
-    LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 02 BEGIN\n");
-    ecd->print(llvm::dbgs());
-
     assert(ecd->getElements().size() == 1 && "MYTODO");
-    const EnumElementDecl &eed = *ecd->getElements().front();
+    EnumElementDecl *eed = ecd->getElements().front();
+    if (unbridged().getModule().getCaseIndex(eed) != enumCaseIdx)
+      continue;
 
-    assert(eed.getParameterList()->size() == 1 && "MYTODO");
-    const ParamDecl &p = *eed.getParameterList()->front();
-
-    LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 02 MIDDLE\n");
+    assert(first);
+    first = false;
+    assert(eed->getParameterList()->size() == 1 && "MYTODO");
+    ParamDecl &p = *eed->getParameterList()->front();
 
     auto *tt = cast<TupleType>(p.getInterfaceType().getPointer());
+    SmallVector<TupleTypeElt, 4> newElements;
+    newElements.reserve(tt->getNumElements());
     for (unsigned i = 0; i < tt->getNumElements(); ++i) {
-      LLVM_DEBUG(llvm::dbgs() << ">>>>> " << i << ": "
-                              << tt->getElement(i).getType() << "\n");
+      Type type;
+      if (i == closureIdxInTuple) {
+        auto *ft = cast<AnyFunctionType>(tt->getElementType(i).getPointer());
+        SmallVector<TupleTypeElt, 4> paramTuple;
+        paramTuple.reserve(ft->getNumParams());
+        for (const AnyFunctionType::Param &param : ft->getParams())
+          paramTuple.emplace_back(param.getParameterType(), Identifier{});
+        type = TupleType::get(paramTuple, unbridged().getASTContext());
+      } else {
+        type = tt->getElementType(i);
+      }
+      Identifier label = tt->getElement(i).getName();
+      newElements.emplace_back(type, label);
     }
-    // p->setInterfaceType();
-    LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 02 END\n\n");
+
+    Type newTupleType =
+        TupleType::get(newElements, unbridged().getASTContext());
+    p.setInterfaceType(newTupleType);
   }
-}
 
-void BridgedBuilder::rewriteBranchTracingEnum(
-    BridgedType enumType, SwiftInt enumCaseIdx,
-    SwiftInt closureIdxInTuple) const {
-  LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 00 BEGIN\n");
-  enumType.unbridged().print(llvm::dbgs());
-  LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 00 END\n\n");
-  EnumDecl *ed = enumType.unbridged().getEnumOrBoundGenericEnum();
-  assert(ed && "Expected valid enum type");
-  LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 01 BEGIN\n");
-  ed->print(llvm::dbgs());
-  LLVM_DEBUG(llvm::dbgs() << "\nCCCCC hasCases = " << (int)(ed->hasCases())
-                          << "\n\n");
-  LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 01 END\n\n");
-  bool first = true;
-  ed->getAllCases();
-  LLVM_DEBUG(llvm::dbgs() << "\nCCCCC after getAllCases\n\n");
-  for (EnumCaseDecl *ecd : ed->getAllCases()) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "\nCCCCC rewriteBranchTracingEnum 02 BEGIN 00\n");
-    ecd->print(llvm::dbgs());
-    LLVM_DEBUG(llvm::dbgs()
-               << "\nCCCCC rewriteBranchTracingEnum 02 BEGIN 01\n");
-
-    // assert(ecd->getElements().size() == 1 && "MYTODO");
-    //  MYTODO: avoid loop over elements
-    //  MYTODO: getCaseIndex add const
-    for (EnumElementDecl *eed : ecd->getElements()) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "\nCCCCC rewriteBranchTracingEnum 02 MIDDLE 000\n");
-      if (unbridged().getModule().getCaseIndex(eed) != enumCaseIdx) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "\nCCCCC rewriteBranchTracingEnum 02 MIDDLE 001\n");
-        continue;
-      }
-
-      LLVM_DEBUG(llvm::dbgs()
-                 << "\nCCCCC rewriteBranchTracingEnum 02 MIDDLE 002\n");
-      assert(first);
-      LLVM_DEBUG(llvm::dbgs()
-                 << "\nCCCCC rewriteBranchTracingEnum 02 MIDDLE 003\n");
-      first = false;
-      assert(eed->getParameterList()->size() == 1 && "MYTODO");
-      LLVM_DEBUG(llvm::dbgs()
-                 << "\nCCCCC rewriteBranchTracingEnum 02 MIDDLE 004\n");
-      ParamDecl &p = *eed->getParameterList()->front();
-
-      LLVM_DEBUG(llvm::dbgs()
-                 << "\nCCCCC rewriteBranchTracingEnum 02 MIDDLE 1\n");
-
-      auto *tt = cast<TupleType>(p.getInterfaceType().getPointer());
-      for (unsigned i = 0; i < tt->getNumElements(); ++i) {
-        LLVM_DEBUG(llvm::dbgs() << ">>>>> " << i << ": "
-                                << tt->getElement(i).getType() << "\n");
-      }
-      LLVM_DEBUG(llvm::dbgs()
-                 << "\nCCCCC rewriteBranchTracingEnum 02 MIDDLE 2\n");
-
-      SmallVector<TupleTypeElt, 4> newElements;
-      newElements.reserve(tt->getNumElements());
-      for (unsigned i = 0; i < tt->getNumElements(); ++i) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "\nCCCCC rewriteBranchTracingEnum 02 MIDDLE 3: i = " << i
-                   << ", type = '" << tt->getElementType(i) << "'\n");
-        Type type;
-        if (i == closureIdxInTuple) {
-          auto *ft = cast<AnyFunctionType>(tt->getElementType(i).getPointer());
-          SmallVector<TupleTypeElt, 4> paramTuple;
-          paramTuple.reserve(ft->getNumParams());
-          for (const AnyFunctionType::Param &param : ft->getParams())
-            paramTuple.emplace_back(param.getParameterType(), Identifier{});
-          type = TupleType::get(paramTuple, unbridged().getASTContext());
-        } else {
-          type = tt->getElementType(i);
-        }
-        LLVM_DEBUG(llvm::dbgs()
-                   << "\nCCCCC rewriteBranchTracingEnum 02 MIDDLE 4\n");
-        Identifier label = tt->getElement(i).getName();
-        newElements.emplace_back(type, label);
-      }
-      LLVM_DEBUG(llvm::dbgs()
-                 << "\nCCCCC rewriteBranchTracingEnum 02 MIDDLE 5\n");
-
-      Type newTupleType =
-          TupleType::get(newElements, unbridged().getASTContext());
-      LLVM_DEBUG(llvm::dbgs()
-                 << "\nCCCCC newTupleType = '" << newTupleType << "'\n\n");
-      p.setInterfaceType(newTupleType);
-      LLVM_DEBUG(llvm::dbgs() << "\nCCCCC new paramDecl = '");
-      p.print(llvm::dbgs());
-      LLVM_DEBUG(llvm::dbgs() << "'\n\n");
-      LLVM_DEBUG(llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum 02 END\n\n");
-
-      // MYTODO return
-    }
-    LLVM_DEBUG(llvm::dbgs()
-               << "\nCCCCC rewriteBranchTracingEnum AFTER LOOP 00\n");
-  }
-  LLVM_DEBUG(
-      llvm::dbgs() << "\nCCCCC rewriteBranchTracingEnum AFTER LOOP 01\n");
+  auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
+  Lowering::AbstractionPattern pattern(traceDeclType);
+  return unbridged().getModule().Types.getLoweredType(
+      pattern, traceDeclType, TypeExpansionContext::minimal());
 }
 
 BridgedInstruction BridgedBuilder::createSwitchEnumInst(BridgedValue enumVal, OptionalBridgedBasicBlock defaultBlock,
