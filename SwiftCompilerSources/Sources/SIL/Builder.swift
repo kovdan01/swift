@@ -357,9 +357,14 @@ public struct Builder {
     return notifyNew(tttf.getAs(ThinToThickFunctionInst.self))
   }
 
-  public func rewriteBranchTracingEnum(enumType: Type) {
-    bridged.rewriteBranchTracingEnum(enumType.bridged)
+//  public func analyzeBranchTracingEnum(enumType: Type) {
+//    bridged.analyzeBranchTracingEnum(enumType.bridged)
+//  }
+
+  public func rewriteBranchTracingEnum(enumType: Type, enumCaseIdx: Int, closureIdxInTuple: Int) {
+    bridged.rewriteBranchTracingEnum(enumType.bridged, enumCaseIdx, closureIdxInTuple)
   }
+
 
   public func createPartialApply(
     function: Value,
