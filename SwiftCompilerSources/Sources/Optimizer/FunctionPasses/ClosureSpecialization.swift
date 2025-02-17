@@ -161,7 +161,9 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
           rewriteApplyInstruction(using: specializedFunction, callSite: callSite, context)
         } else {
           // MYTODO
+          debugPrint("AAAAA rewriteApplyInstructionCFG BEFORE")
           rewriteApplyInstructionCFG(using: specializedFunction, callSite: callSite, enumClosure: enums[callSite.applySite as! PartialApplyInst]!, context)
+          debugPrint("AAAAA rewriteApplyInstructionCFG AFTER")
         }
       }
 
@@ -299,11 +301,15 @@ private func getOrCreateSpecializedFunction(basedOn callSite: CallSite, _ contex
 
 private func rewriteApplyInstructionCFG(using specializedCallee: Function, callSite: CallSite,
                                      enumClosure: EnumClosure, _ context: FunctionPassContext) {
+  debugPrint("AAAAA newApplyArgs BEGIN")
+  let newApplyArgs = callSite.getArgumentsForSpecializedApplyCFG(of: specializedCallee)
+  debugPrint("AAAAA newApplyArgs MIDDLE")
+  debugPrint(newApplyArgs)
+  debugPrint("AAAAA newApplyArgs END")
   let builder = Builder(before: callSite.applySite, context)
-  builder.rewriteBranchTracingEnum(enumType: enumClosure.enumType)
+  builder.rewriteBranchTracingEnum(enumType: enumClosure.enumType, enumCaseIdx: enumClosure.enumCase, closureIdxInTuple: enumClosure.closureIdxInTuple)
 
   return
-  let newApplyArgs = callSite.getArgumentsForSpecializedApply(of: specializedCallee)
 
   for newApplyArg in newApplyArgs {
     if case let .PreviouslyCaptured(capturedArg, needsRetain, parentClosureArgIndex) = newApplyArg,
@@ -1152,6 +1158,56 @@ private extension CallSite {
         return capturedArg
       }
     }
+  }
+
+  func getArgumentsForSpecializedApplyCFG(of specializedCallee: Function) -> [NewApplyArg]
+  {
+    var newApplyArgs: [NewApplyArg] = []
+
+    debugPrint("AAAAAAA getArgumentsForSpecializedApplyCFG 00")
+
+    // Original arguments
+    for (applySiteIndex, arg) in self.applySite.arguments.enumerated() {
+      debugPrint("AAAAAAA getArgumentsForSpecializedApplyCFG 01 BEGIN")
+      debugPrint(applySiteIndex)
+      debugPrint("AAAAAAA getArgumentsForSpecializedApplyCFG 01 MIDDLE 01")
+      debugPrint(arg)
+      debugPrint("AAAAAAA getArgumentsForSpecializedApplyCFG 01 MIDDLE 02")
+      let calleeArgIndex = self.applySite.unappliedArgumentCount + applySiteIndex
+      debugPrint("AAAAAAA getArgumentsForSpecializedApplyCFG 01 MIDDLE 03")
+//      if !self.hasClosureArg(at: calleeArgIndex) {
+        debugPrint("AAAAAAA getArgumentsForSpecializedApplyCFG 01 MIDDLE 04")
+        newApplyArgs.append(.Original(arg))
+//      }
+      debugPrint("AAAAAAA getArgumentsForSpecializedApplyCFG 01 END")
+    }
+
+    return newApplyArgs
+
+    debugPrint("AAAAAAA getArgumentsForSpecializedApplyCFG 02")
+    // Previously captured arguments
+    for closureArgDesc in self.closureArgDescriptors {
+      debugPrint("AAAAAAA getArgumentsForSpecializedApplyCFG 03 BEGIN")
+      for (applySiteIndex, capturedArg) in closureArgDesc.arguments.enumerated() {
+        debugPrint("AAAAAAA getArgumentsForSpecializedApplyCFG 04 BEGIN")
+        debugPrint(applySiteIndex)
+        debugPrint("AAAAAAA getArgumentsForSpecializedApplyCFG 04 MIDDLE 00")
+        debugPrint(capturedArg)
+        debugPrint("AAAAAAA getArgumentsForSpecializedApplyCFG 04 MIDDLE 01")
+        let needsRetain = closureArgDesc.isCapturedArgNonTrivialObjectType(applySiteIndex: applySiteIndex,
+                                                                           specializedCallee: specializedCallee)
+        debugPrint("AAAAAAA getArgumentsForSpecializedApplyCFG 04 MIDDLE 02")
+
+        // MYTODO: the following causes a crash
+        newApplyArgs.append(.PreviouslyCaptured(value: capturedArg, needsRetain: needsRetain,
+                                                parentClosureArgIndex: closureArgDesc.closureArgIndex!))
+        debugPrint("AAAAAAA getArgumentsForSpecializedApplyCFG 04 END")
+      }
+      debugPrint("AAAAAAA getArgumentsForSpecializedApplyCFG 03 END")
+    }
+    debugPrint("AAAAAAA getArgumentsForSpecializedApplyCFG 05")
+
+    return newApplyArgs
   }
 
   func getArgumentsForSpecializedApply(of specializedCallee: Function) -> [NewApplyArg]

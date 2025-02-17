@@ -1152,7 +1152,10 @@ struct BridgedBuilder{
   SWIFT_IMPORT_UNSAFE BridgedInstruction createSwitchEnumInst(BridgedValue enumVal,
                                           OptionalBridgedBasicBlock defaultBlock,
                                           const void * _Nullable enumCases, SwiftInt numEnumCases) const;
-  SWIFT_IMPORT_UNSAFE void rewriteBranchTracingEnum(BridgedType enumType) const;
+  SWIFT_IMPORT_UNSAFE void analyzeBranchTracingEnum(BridgedType enumType) const;
+  SWIFT_IMPORT_UNSAFE void
+  rewriteBranchTracingEnum(BridgedType enumType, SwiftInt enumCaseIdx,
+                           SwiftInt closureIdxInTuple) const;
   SWIFT_IMPORT_UNSAFE BridgedInstruction createSwitchEnumAddrInst(BridgedValue enumAddr,
                                           OptionalBridgedBasicBlock defaultBlock,
                                           const void * _Nullable enumCases, SwiftInt numEnumCases) const;
