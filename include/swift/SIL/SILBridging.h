@@ -864,6 +864,9 @@ struct BridgedArgument {
 
   BRIDGED_INLINE swift::SILArgument * _Nonnull getArgument() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedBasicBlock getParent() const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType getType() const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
+  getDefiningInstruction() const;
   BRIDGED_INLINE bool isReborrow() const;
   BRIDGED_INLINE bool FunctionArgument_isLexical() const;
   BRIDGED_INLINE void setReborrow(bool reborrow) const;
@@ -1191,6 +1194,10 @@ struct BridgedBuilder{
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createDestructureStruct(BridgedValue str) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTuple(BridgedType type,
                                                                     BridgedValueArray elements) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
+  createTuple(BridgedValueArray elements) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
+  createTupleWithPredecessor(BridgedValueArray elements) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleExtract(BridgedValue str,
                                                                            SwiftInt elementIndex) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleElementAddr(BridgedValue addr,

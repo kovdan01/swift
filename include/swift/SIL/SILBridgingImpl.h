@@ -675,6 +675,14 @@ BridgedBasicBlock BridgedArgument::getParent() const {
   return {getArgument()->getParent()};
 }
 
+BridgedType BridgedArgument::getType() const {
+  return {getArgument()->getType()};
+}
+
+BridgedInstruction BridgedArgument::getDefiningInstruction() const {
+  return {getArgument()->getDefiningInstruction()->asSILNode()};
+}
+
 bool BridgedArgument::isReborrow() const { return getArgument()->isReborrow(); }
 void BridgedArgument::setReborrow(bool reborrow) const {
   getArgument()->setReborrow(reborrow);
@@ -2291,6 +2299,44 @@ BridgedInstruction BridgedBuilder::createTuple(BridgedType type, BridgedValueArr
   llvm::SmallVector<swift::SILValue, 16> elementValues;
   return {unbridged().createTuple(regularLoc(), type.unbridged(),
                                   elements.getValues(elementValues))};
+}
+
+BridgedInstruction
+BridgedBuilder::createTuple(BridgedValueArray elements) const {
+  llvm::SmallVector<swift::SILValue, 16> elementValues;
+  llvm::ArrayRef<swift::SILValue> values = elements.getValues(elementValues);
+  llvm::SmallVector<swift::TupleTypeElt, 16> tupleTyElts;
+  tupleTyElts.reserve(values.size());
+  for (const swift::SILValue &value : values) {
+    tupleTyElts.emplace_back(value->getType().getASTType());
+  }
+  swift::Type tupleTy =
+      swift::TupleType::get(tupleTyElts, unbridged().getASTContext());
+  swift::SILType silTupleTy =
+      swift::SILType::getPrimitiveObjectType(tupleTy->getCanonicalType());
+
+  return {unbridged().createTuple(regularLoc(), silTupleTy, values)};
+}
+
+BridgedInstruction
+BridgedBuilder::createTupleWithPredecessor(BridgedValueArray elements) const {
+  llvm::SmallVector<swift::SILValue, 16> elementValues;
+  llvm::ArrayRef<swift::SILValue> values = elements.getValues(elementValues);
+  llvm::SmallVector<swift::TupleTypeElt, 16> tupleTyElts;
+  tupleTyElts.reserve(values.size());
+  assert(!values.empty());
+  tupleTyElts.emplace_back(
+      values.front()->getType().getASTType(),
+      unbridged().getASTContext().getIdentifier("predecessor"));
+  for (size_t i = 1; i < values.size(); ++i) {
+    tupleTyElts.emplace_back(values[i]->getType().getASTType());
+  }
+  swift::Type tupleTy =
+      swift::TupleType::get(tupleTyElts, unbridged().getASTContext());
+  swift::SILType silTupleTy =
+      swift::SILType::getPrimitiveObjectType(tupleTy->getCanonicalType());
+
+  return {unbridged().createTuple(regularLoc(), silTupleTy, values)};
 }
 
 BridgedInstruction BridgedBuilder::createTupleExtract(BridgedValue str, SwiftInt elementIndex) const {

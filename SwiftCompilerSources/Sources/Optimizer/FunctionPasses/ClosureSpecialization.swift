@@ -111,6 +111,19 @@ private func log(_ message: @autoclosure () -> String) {
   }
 }
 
+// MYTODO: proper hash
+extension Type: Hashable {
+    public func hash(into hasher: inout Hasher) {
+         hasher.combine(1)
+    }
+}
+
+//extension Type: Equatable {
+//    public static func ==(lhs: Type, rhs: Type) -> Bool {
+//        return ObjectIdentifier(lhs) == ObjectIdentifier(rhs)
+//    }
+//}
+
 // =========== Entry point =========== //
 let generalClosureSpecialization = FunctionPass(name: "experimental-swift-based-closure-specialization") {
   (function: Function, context: FunctionPassContext) in
@@ -127,10 +140,14 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     return
   }
 
+  debugPrint("AAAAAA AUTODIFF BEGIN")
+
   let isSingleBB = function.blocks.singleElement != nil
 
   var remainingSpecializationRounds = 1
   var callerModified = false
+
+  var enumDict = Dictionary<Type, Type>()
 
   repeat {
     var (callSites, enums) = gatherCallSites(in: function, context)
@@ -162,7 +179,9 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
         } else {
           // MYTODO
           debugPrint("AAAAA rewriteApplyInstructionCFG BEFORE")
-          rewriteApplyInstructionCFG(using: specializedFunction, callSite: callSite, enumClosure: enums[callSite.applySite as! PartialApplyInst]!, context)
+          rewriteApplyInstructionCFG(using: specializedFunction, callSite: callSite,
+                                     enumClosure: enums[callSite.applySite as! PartialApplyInst]!,
+                                     enumDict: &enumDict, context: context)
           debugPrint("AAAAA rewriteApplyInstructionCFG AFTER")
         }
       }
@@ -192,6 +211,9 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     callerModified = callSites.count > 0
     remainingSpecializationRounds -= 1
   } while callerModified && remainingSpecializationRounds > 0
+  debugPrint("AAAAAA AUTODIFF END")
+  debugPrint("")
+  debugPrint("")
 }
 
 // =========== Top-level functions ========== //
@@ -300,60 +322,151 @@ private func getOrCreateSpecializedFunction(basedOn callSite: CallSite, _ contex
 }
 
 private func rewriteApplyInstructionCFG(using specializedCallee: Function, callSite: CallSite,
-                                     enumClosure: EnumClosure, _ context: FunctionPassContext) {
-  debugPrint("AAAAA newApplyArgs BEGIN")
-  let newApplyArgs = callSite.getArgumentsForSpecializedApplyCFG(of: specializedCallee)
-  debugPrint("AAAAA newApplyArgs MIDDLE")
-  debugPrint(newApplyArgs)
-  debugPrint("AAAAA newApplyArgs END")
+                                     enumClosure: EnumClosure, enumDict: inout Dictionary<Type, Type>,
+                                     context: FunctionPassContext) {
+  debugPrint("AAAAA applySite BEGIN")
+  debugPrint(callSite.applySite)
+  debugPrint("AAAAA applySite END")
+//  debugPrint("AAAAA newApplyArgs BEGIN")
+//  let newApplyArgs = callSite.getArgumentsForSpecializedApplyCFG(of: specializedCallee)
+//  debugPrint("AAAAA newApplyArgs MIDDLE")
+//  debugPrint(newApplyArgs)
+//  debugPrint("AAAAA newApplyArgs END")
   let builder = Builder(before: callSite.applySite, context)
   // MYTODO: enums set not create each time
-  let newEnumType = builder.rewriteBranchTracingEnum(enumType: enumClosure.enumType, enumCaseIdx: enumClosure.enumCase,
+  // MYTODO: maybe each enum might be re-written multiple times
+  if enumDict[enumClosure.enumType] == nil {
+    debugPrint("AAAAA NOT FOUND enum spec BEGIN")
+    debugPrint(enumClosure)
+    debugPrint("AAAAA NOT FOUND enum spec END")
+    enumDict[enumClosure.enumType] = builder.rewriteBranchTracingEnum(enumType: enumClosure.enumType, enumCaseIdx: enumClosure.enumCase,
                                    closureIdxInTuple: enumClosure.closureIdxInTuple)
+  } else {
+    debugPrint("AAAAA FOUND enum spec BEGIN")
+    debugPrint(enumClosure)
+    debugPrint("AAAAA FOUND enum spec END")
+  }
+  let newEnumType = enumDict[enumClosure.enumType]
   debugPrint("AAAAA newEnumType BEGIN")
   debugPrint(newEnumType)
   debugPrint("AAAAA newEnumType END")
 
-  return
+//  return
 
-  for newApplyArg in newApplyArgs {
-    if case let .PreviouslyCaptured(capturedArg, needsRetain, parentClosureArgIndex) = newApplyArg,
-       needsRetain
-    {
-      let closureArgDesc = callSite.closureArgDesc(at: parentClosureArgIndex)!
-      var builder = Builder(before: closureArgDesc.closure, context)
+  for (applySiteIndex, arg) in callSite.applySite.arguments.enumerated() {
+    debugPrint("AAAAA arg BEGIN")
+    debugPrint(arg)
+    debugPrint("AAAAA arg END")
+    //debugPrint("AAAAA function BEGIN")
+    //debugPrint(callSite.applySite.parentFunction)
+    //debugPrint("AAAAA function END")
 
-      // TODO: Support only OSSA instructions once the OSSA elimination pass is moved after all function optimization
-      // passes.
-      if callSite.applySite.parentBlock != closureArgDesc.closure.parentBlock {
-        // Emit the retain and release that keeps the argument live across the callee using the closure.
-        builder.createRetainValue(operand: capturedArg)
-
-        for instr in closureArgDesc.lifetimeFrontier {
-          builder = Builder(before: instr, context)
-          builder.createReleaseValue(operand: capturedArg)
-        }
-
-        // Emit the retain that matches the captured argument by the partial_apply in the callee that is consumed by
-        // the partial_apply.
-        builder = Builder(before: callSite.applySite, context)
-        builder.createRetainValue(operand: capturedArg)
-      } else {
-        builder.createRetainValue(operand: capturedArg)
+    let bb = callSite.applySite.parentBlock
+    let preds = bb.predecessors
+    for pred in preds {
+      debugPrint("AAAAA PRED BEGIN")
+      debugPrint(pred.name)
+      debugPrint("AAAAA PRED MIDDLE 1")
+      for inst in pred.instructions {
+        debugPrint(inst)
       }
+      let brInst = pred.instructions.last! as! BranchInst
+      debugPrint(brInst)
+      debugPrint("AAAAA PRED MIDDLE 2")
+      var enumIdxInBranch = Optional<Int>(nil)
+      for (targetBBArgIdx, targetBBArg) in brInst.targetBlock.arguments.enumerated() {
+        let argType = targetBBArg.bridged.getType().type
+        if argType == enumClosure.enumType {
+          assert(enumIdxInBranch == nil)
+          enumIdxInBranch = targetBBArgIdx
+          //debugPrint(targetBBArg.bridged.getDefiningInstruction())
+        }
+      }
+      assert(enumIdxInBranch != nil)
+      debugPrint("AAAAA PRED MIDDLE 3")
+      let enumInstOld = brInst.operands[enumIdxInBranch!].value.definingInstruction! as! EnumInst
+      debugPrint(enumInstOld)
+      debugPrint("AAAAA PRED MIDDLE 4")
+      let oldPayload = enumInstOld.payload! as! TupleInst
+      debugPrint("AAAAA PRED MIDDLE 5 0")
+
+      // MYTODO: for some reason fail, but this is partial apply
+      // MYTODO: Found a null pointer in a value of type
+      // MYTODO: thin to thick
+      let pai = oldPayload.operands[enumClosure.closureIdxInTuple].value.definingInstruction!// as! PartialApplyInst
+      debugPrint(pai)
+      debugPrint("AAAAA PRED MIDDLE 5 1")
+      var tupleValues = Array<Value>()
+      for (opIdx, op) in pai.operands.enumerated() {
+        if opIdx == 0 {
+          continue
+        }
+        tupleValues.append(op.value)
+      }
+      debugPrint(tupleValues)
+      debugPrint("AAAAA PRED MIDDLE 6")
+      let tuple = builder.createTuple(elements: tupleValues)
+      debugPrint(tuple)
+      debugPrint("AAAAA PRED MIDDLE 7")
+      
+      var newPayloadValues = Array<Value>()
+      for (opIdx, op) in oldPayload.operands.enumerated() {
+        if opIdx == enumClosure.closureIdxInTuple {
+          newPayloadValues.append(tuple)
+          continue
+        }
+        newPayloadValues.append(op.value)
+      }
+      debugPrint("AAAAA PRED MIDDLE 8")
+      let newPayload = builder.createTupleWithPredecessor(elements: newPayloadValues)
+      debugPrint(newPayload)
+      debugPrint("AAAAA PRED MIDDLE 9")
+
+
+      let enumInstNew = builder.createEnum(caseIndex: enumInstOld.caseIndex, payload: newPayload, enumType: newEnumType!)
+      debugPrint(enumInstNew)
+      debugPrint("AAAAA PRED END")
     }
   }
 
+//  for newApplyArg in newApplyArgs {
+//    if case let .PreviouslyCaptured(capturedArg, needsRetain, parentClosureArgIndex) = newApplyArg,
+//       needsRetain
+//    {
+//      let closureArgDesc = callSite.closureArgDesc(at: parentClosureArgIndex)!
+//      var builder = Builder(before: closureArgDesc.closure, context)
+//
+//      // TODO: Support only OSSA instructions once the OSSA elimination pass is moved after all function optimization
+//      // passes.
+//      if callSite.applySite.parentBlock != closureArgDesc.closure.parentBlock {
+//        // Emit the retain and release that keeps the argument live across the callee using the closure.
+//        builder.createRetainValue(operand: capturedArg)
+//
+//        for instr in closureArgDesc.lifetimeFrontier {
+//          builder = Builder(before: instr, context)
+//          builder.createReleaseValue(operand: capturedArg)
+//        }
+//
+//        // Emit the retain that matches the captured argument by the partial_apply in the callee that is consumed by
+//        // the partial_apply.
+//        builder = Builder(before: callSite.applySite, context)
+//        builder.createRetainValue(operand: capturedArg)
+//      } else {
+//        builder.createRetainValue(operand: capturedArg)
+//      }
+//    }
+//  }
+
   // Rewrite apply instruction
   //let builder = Builder(before: callSite.applySite, context)
-  let oldApply = callSite.applySite as! PartialApplyInst
-  let funcRef = builder.createFunctionRef(specializedCallee)
-  let capturedArgs = Array(newApplyArgs.map { $0.value })
-
-  let newApply = builder.createPartialApply(function: funcRef, substitutionMap: SubstitutionMap(),
-                                            capturedArguments: capturedArgs, calleeConvention: oldApply.calleeConvention,
-                                            hasUnknownResultIsolation: oldApply.hasUnknownResultIsolation,
-                                            isOnStack: oldApply.isOnStack)
+//  let oldApply = callSite.applySite as! PartialApplyInst
+//  let funcRef = builder.createFunctionRef(specializedCallee)
+//  let capturedArgs = Array(newApplyArgs.map { $0.value })
+//
+//  let newApply = builder.createPartialApply(function: funcRef, substitutionMap: SubstitutionMap(),
+//                                            capturedArguments: capturedArgs, calleeConvention: oldApply.calleeConvention,
+//                                            hasUnknownResultIsolation: oldApply.hasUnknownResultIsolation,
+//                                            isOnStack: oldApply.isOnStack)
   // MYTODO
 }
 
