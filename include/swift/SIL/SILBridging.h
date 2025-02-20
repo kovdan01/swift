@@ -329,6 +329,7 @@ struct BridgedValue {
   BRIDGED_INLINE swift::ValueBase * _Nonnull getSILValue() const;
   BridgedOwnedString getDebugDescription() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE OptionalBridgedOperand getFirstUse() const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE SwiftBool hasOneUse() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType getType() const;
   BRIDGED_INLINE Ownership getOwnership() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedFunction SILUndef_getParentFunction() const;
@@ -863,6 +864,9 @@ struct BridgedArgument {
 
   BRIDGED_INLINE swift::SILArgument * _Nonnull getArgument() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedBasicBlock getParent() const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType getType() const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
+  getDefiningInstruction() const;
   BRIDGED_INLINE bool isReborrow() const;
   BRIDGED_INLINE bool FunctionArgument_isLexical() const;
   BRIDGED_INLINE void setReborrow(bool reborrow) const;
@@ -905,6 +909,10 @@ struct BridgedBasicBlock {
   BRIDGED_INLINE void moveAllInstructionsToBegin(BridgedBasicBlock dest) const;
   BRIDGED_INLINE void moveAllInstructionsToEnd(BridgedBasicBlock dest) const;
   BRIDGED_INLINE void moveArgumentsTo(BridgedBasicBlock dest) const;
+  BRIDGED_INLINE void insertInstruction(BridgedInstruction dest,
+                                        BridgedInstruction inst) const;
+  BRIDGED_INLINE void pushInstruction(BridgedInstruction inst) const;
+  BRIDGED_INLINE void eraseInstruction(BridgedInstruction inst) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE OptionalBridgedSuccessor getFirstPred() const;
 };
 
@@ -1151,6 +1159,9 @@ struct BridgedBuilder{
   SWIFT_IMPORT_UNSAFE BridgedInstruction createSwitchEnumInst(BridgedValue enumVal,
                                           OptionalBridgedBasicBlock defaultBlock,
                                           const void * _Nullable enumCases, SwiftInt numEnumCases) const;
+  SWIFT_IMPORT_UNSAFE BridgedType
+  rewriteBranchTracingEnum(BridgedType enumType, SwiftInt enumCaseIdx,
+                           SwiftInt closureIdxInTuple) const;
   SWIFT_IMPORT_UNSAFE BridgedInstruction createSwitchEnumAddrInst(BridgedValue enumAddr,
                                           OptionalBridgedBasicBlock defaultBlock,
                                           const void * _Nullable enumCases, SwiftInt numEnumCases) const;
@@ -1187,6 +1198,10 @@ struct BridgedBuilder{
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createDestructureStruct(BridgedValue str) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTuple(BridgedType type,
                                                                     BridgedValueArray elements) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
+  createTuple(BridgedValueArray elements) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
+  createTupleWithPredecessor(BridgedValueArray elements) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleExtract(BridgedValue str,
                                                                            SwiftInt elementIndex) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleElementAddr(BridgedValue addr,

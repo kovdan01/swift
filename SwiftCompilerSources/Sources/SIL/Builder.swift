@@ -357,6 +357,15 @@ public struct Builder {
     return notifyNew(tttf.getAs(ThinToThickFunctionInst.self))
   }
 
+//  public func analyzeBranchTracingEnum(enumType: Type) {
+//    bridged.analyzeBranchTracingEnum(enumType.bridged)
+//  }
+
+  public func rewriteBranchTracingEnum(enumType: Type, enumCaseIdx: Int, closureIdxInTuple: Int) -> Type {
+    return bridged.rewriteBranchTracingEnum(enumType.bridged, enumCaseIdx, closureIdxInTuple).type
+  }
+
+
   public func createPartialApply(
     function: Value,
     substitutionMap: SubstitutionMap, 
@@ -456,6 +465,21 @@ public struct Builder {
     }
     return notifyNew(tuple.getAs(TupleInst.self))
   }
+
+  public func createTuple(elements: [Value]) -> TupleInst {
+    let tuple = elements.withBridgedValues { valuesRef in
+      return bridged.createTuple(valuesRef)
+    }
+    return notifyNew(tuple.getAs(TupleInst.self))
+  }
+
+  public func createTupleWithPredecessor(elements: [Value]) -> TupleInst {
+    let tuple = elements.withBridgedValues { valuesRef in
+      return bridged.createTupleWithPredecessor(valuesRef)
+    }
+    return notifyNew(tuple.getAs(TupleInst.self))
+  }
+
 
   public func createTupleExtract(tuple: Value, elementIndex: Int) -> TupleExtractInst {
     return notifyNew(bridged.createTupleExtract(tuple.bridged, elementIndex).getAs(TupleExtractInst.self))

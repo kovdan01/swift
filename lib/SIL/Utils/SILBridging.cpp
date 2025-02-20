@@ -27,9 +27,14 @@
 #include "swift/SIL/SILGlobalVariable.h"
 #include "swift/SIL/SILNode.h"
 #include "swift/SIL/Test.h"
+
+#include "swift/AST/ParameterList.h"
+
 #include <string>
 #include <cstring>
 #include <stdio.h>
+
+#define DEBUG_TYPE "SILBRIDGINGDEBUG"
 
 using namespace swift;
 
@@ -491,6 +496,82 @@ convertCases(SILType enumTy, const void * _Nullable enumCases, SwiftInt numEnumC
     convertedCases.push_back({mappedElements[c.first], c.second.unbridged()});
   }
   return convertedCases;
+}
+
+BridgedType
+BridgedBuilder::rewriteBranchTracingEnum(BridgedType enumType,
+                                         SwiftInt enumCaseIdx,
+                                         SwiftInt closureIdxInTuple) const {
+  EnumDecl *oldED = enumType.unbridged().getEnumOrBoundGenericEnum();
+  assert(oldED && "Expected valid enum type");
+
+  ASTContext &astContext = unbridged().getASTContext();
+  Twine edNameStr = oldED->getNameStr() + "_specialized";
+  Identifier edName = astContext.getIdentifier(edNameStr.str());
+
+  auto *ed = new (astContext) EnumDecl(
+      /*EnumLoc*/ SourceLoc(), /*Name*/ edName, /*NameLoc*/ SourceLoc(),
+      /*Inherited*/ {}, /*GenericParams*/ nullptr,
+      /*DC*/
+      oldED->getDeclContext());
+  ed->setImplicit();
+
+  for (EnumCaseDecl *oldECD : oldED->getAllCases()) {
+    assert(oldECD->getElements().size() == 1);
+    EnumElementDecl *oldEED = oldECD->getElements().front();
+    auto *newPL = ParameterList::clone(astContext, oldEED->getParameterList());
+    auto *newEED = new (astContext) EnumElementDecl(
+        /*IdentifierLoc*/ SourceLoc(),
+        DeclName(astContext.getIdentifier(oldEED->getNameStr())), newPL,
+        SourceLoc(), /*RawValueExpr*/ nullptr, ed);
+    newEED->setImplicit();
+    auto *newECD = EnumCaseDecl::create(
+        /*CaseLoc*/ SourceLoc(), {newEED}, ed);
+    newECD->setImplicit();
+    ed->addMember(newEED);
+    ed->addMember(newECD);
+  }
+
+  bool first = true;
+  for (EnumCaseDecl *ecd : ed->getAllCases()) {
+    assert(ecd->getElements().size() == 1 && "MYTODO");
+    EnumElementDecl *eed = ecd->getElements().front();
+    if (unbridged().getModule().getCaseIndex(eed) != enumCaseIdx)
+      continue;
+
+    assert(first);
+    first = false;
+    assert(eed->getParameterList()->size() == 1 && "MYTODO");
+    ParamDecl &p = *eed->getParameterList()->front();
+
+    auto *tt = cast<TupleType>(p.getInterfaceType().getPointer());
+    SmallVector<TupleTypeElt, 4> newElements;
+    newElements.reserve(tt->getNumElements());
+    for (unsigned i = 0; i < tt->getNumElements(); ++i) {
+      Type type;
+      if (i == closureIdxInTuple) {
+        auto *ft = cast<AnyFunctionType>(tt->getElementType(i).getPointer());
+        SmallVector<TupleTypeElt, 4> paramTuple;
+        paramTuple.reserve(ft->getNumParams());
+        for (const AnyFunctionType::Param &param : ft->getParams())
+          paramTuple.emplace_back(param.getParameterType(), Identifier{});
+        type = TupleType::get(paramTuple, unbridged().getASTContext());
+      } else {
+        type = tt->getElementType(i);
+      }
+      Identifier label = tt->getElement(i).getName();
+      newElements.emplace_back(type, label);
+    }
+
+    Type newTupleType =
+        TupleType::get(newElements, unbridged().getASTContext());
+    p.setInterfaceType(newTupleType);
+  }
+
+  auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
+  Lowering::AbstractionPattern pattern(traceDeclType);
+  return unbridged().getModule().Types.getLoweredType(
+      pattern, traceDeclType, TypeExpansionContext::minimal());
 }
 
 BridgedInstruction BridgedBuilder::createSwitchEnumInst(BridgedValue enumVal, OptionalBridgedBasicBlock defaultBlock,
