@@ -550,6 +550,17 @@ convertCases(SILType enumTy, const void * _Nullable enumCases, SwiftInt numEnumC
   return convertedCases;
 }
 
+static SourceFile &getSourceFile(SILFunction *f) {
+  if (f->hasLocation())
+    if (auto *declContext = f->getLocation().getAsDeclContext())
+      if (auto *parentSourceFile = declContext->getParentSourceFile())
+        return *parentSourceFile;
+  for (auto *file : f->getModule().getSwiftModule()->getFiles())
+    if (auto *sourceFile = dyn_cast<SourceFile>(file))
+      return *sourceFile;
+  llvm_unreachable("Could not resolve SourceFile from SILFunction");
+}
+
 BridgedType
 BridgedBuilder::rewriteBranchTracingEnum(BridgedType enumType,
                                          SwiftInt enumCaseIdx,
@@ -622,6 +633,12 @@ BridgedBuilder::rewriteBranchTracingEnum(BridgedType enumType,
         TupleType::get(newElements, unbridged().getASTContext());
     p.setInterfaceType(newTupleType);
   }
+
+  ed->setAccess(AccessLevel::Public);
+  auto &file =
+      getSourceFile(&unbridged().getFunction()).getOrCreateSynthesizedFile();
+  file.addTopLevelDecl(ed);
+  file.getParentModule()->clearLookupCache();
 
   auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
   Lowering::AbstractionPattern pattern(traceDeclType);
