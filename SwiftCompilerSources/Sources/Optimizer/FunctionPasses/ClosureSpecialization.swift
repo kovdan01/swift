@@ -161,6 +161,9 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
           (specializedFunctionOpt, alreadyExistsOpt) = getOrCreateSpecializedFunctionCFG(basedOn: (callSite, enums[callSite.applySite as! PartialApplyInst]!), enumDict: &enumDict, context)
         }
         var specializedFunction = specializedFunctionOpt!
+        debugPrint("AAAAA specializedFunction BEGIN")
+        debugPrint(specializedFunction)
+        debugPrint("AAAAA specializedFunction END")
         var alreadyExists = alreadyExistsOpt!
         if !alreadyExists {
           context.notifyNewFunction(function: specializedFunction, derivedFrom: callSite.applyCallee)
@@ -173,6 +176,9 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
           let vjpToInline = rewriteApplyInstructionCFG(using: specializedFunction, callSite: callSite,
                                      enumClosure: enums[callSite.applySite as! PartialApplyInst]!,
                                      enumDict: &enumDict, context: context)
+          debugPrint("AAAAA VJP BEGIN")
+          debugPrint(callSite.applySite.parentFunction)
+          debugPrint("AAAAA VJP END")
         }
       }
 
@@ -322,11 +328,14 @@ private func getOrCreateSpecializedFunctionCFG(basedOn callSiteAndEnumClosure: (
 //    }
 //  }
 
+  debugPrint("AAAAA BEFORE cloneAndSpecializeFunctionBodyCFG")
+
   context.buildSpecializedFunction(specializedFunction: specializedFunction,
                                    buildFn: { (emptySpecializedFunction, functionPassContext) in
                                       let closureSpecCloner = SpecializationCloner(emptySpecializedFunction: emptySpecializedFunction, functionPassContext)
                                       closureSpecCloner.cloneAndSpecializeFunctionBodyCFG(using: callSite, enumClosure: enumClosure, enumDict: &enumDict)
                                    })
+  debugPrint("AAAAA AFTER cloneAndSpecializeFunctionBodyCFG")
 
   return (specializedFunction, false)
 }
@@ -359,7 +368,9 @@ private func getOrCreateSpecializedFunction(basedOn callSite: CallSite, _ contex
 private func rewriteApplyInstructionCFG(using specializedCallee: Function, callSite: CallSite,
                                      enumClosure: EnumClosure, enumDict: inout Dictionary<Type, Type>,
                                      context: FunctionPassContext) -> Function {
-  let builderSucc = Builder(before: callSite.applySite, context)
+  //let builderSucc = Builder(before: callSite.applySite, context)
+  //var builderSucc = Builder(before: callSite.applySite.parentBlock.instructions.first!, context)
+  var builderSucc = Builder(atEndOf: callSite.applySite.parentBlock, location: callSite.applySite.parentBlock.instructions.last!.location, context)
   // MYTODO: enums set not create each time
   // MYTODO: maybe each enum might be re-written multiple times
   if enumDict[enumClosure.enumType] == nil {
@@ -372,6 +383,7 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
 
   var vjpToInlineOpt = Optional<Function>(nil)
 
+  // MYTODO: assert that 1 arg? always should be just enum?
   for (applySiteIndex, arg) in callSite.applySite.arguments.enumerated() {
     let bb = callSite.applySite.parentBlock
     let preds = bb.predecessors
@@ -457,7 +469,71 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
       assert(e == vjpToInlineOpt!)
     }
     let succBB = callSite.applySite.parentBlock
+    
+    // MYTODO function ref to spec new pullback
 
+    let pai = callSite.applySite as! PartialApplyInst
+    assert(pai.numArguments == 1)
+    let paiFunction = pai.operands[0].value
+    let paiConvention = pai.calleeConvention
+    let paiHasUnknownResultIsolation = pai.hasUnknownResultIsolation
+    let paiSubstitutionMap = SubstitutionMap(bridged: pai.bridged.getSubstitutionMap())
+    let paiIsOnStack = pai.isOnStack
+    
+    let returnInst = succBB.terminator as! ReturnInst
+    let tupleInst = returnInst.returnedValue.definingInstruction as! TupleInst
+    let tupleElem = tupleInst.operands[0].value
+    let functionRefInst = paiFunction as! FunctionRefInst
+
+//    assert(pai.uses.count == 1)
+//    let tupleInst = pai.uses[0] as! TupleInst
+//    assert(tupleInst.operands.count == 2)
+//    assert(tupleInst.operands[1].value == pai)
+//    let tupleElem = tupleInst.operands[0].value
+//
+//    assert(tupleInst.uses.count == 1)
+//    let returnInst = tupleInst.uses[0] as! ReturnInst
+
+    debugPrint("AAAAA SUCC BB BEGIN")
+    debugPrint(succBB)
+    debugPrint("AAAAA SUCC BB MIDDLE 1")
+    succBB.bridged.eraseInstruction(returnInst.bridged)
+// MYTODO: assert no uses
+//    assert(tupleInst.uses.makeIterator().currentOpPtr == nil)
+    succBB.bridged.eraseInstruction(tupleInst.bridged)
+//    assert(pai.uses.makeIterator().currentOpPtr == nil)
+    succBB.bridged.eraseInstruction(pai.bridged)
+    debugPrint(succBB)
+    debugPrint("AAAAA SUCC BB MIDDLE 2 0")
+    let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
+//    let newFunctionRefInst = builderSucc.createFunctionRef(functionRefInst.referencedFunction)
+    debugPrint("AAAAA SUCC BB MIDDLE 2 1")
+    functionRefInst.replace(with: newFunctionRefInst, context)
+    //succBB.bridged.eraseInstruction(functionRefInst.bridged)
+    debugPrint(newFunctionRefInst)
+//    debugPrint(newFunctionRefInst.referencedFunction)
+    debugPrint("AAAAA SUCC BB MIDDLE 3")
+    debugPrint(succBB)
+    debugPrint("AAAAA SUCC BB MIDDLE 4")
+    for (argIndex, arg) in succBB.arguments.enumerated() {
+      if arg.type == enumClosure.enumType {
+        assert(argIndex == succBB.arguments.count - 1)
+//        succBB.bridged.eraseArgument(argIndex)
+        let newBBArg = succBB.bridged.recreateEnumBlockArgument(argIndex, newEnumType!.bridged).argument
+//        debugPrint(succBB)
+  //      debugPrint("AAAAA SUCC BB MIDDLE 5")
+        let newPai : PartialApplyInst = builderSucc.createPartialApply(function: newFunctionRefInst, substitutionMap: paiSubstitutionMap,
+                                                    capturedArguments: [newBBArg], calleeConvention: paiConvention,
+                                                    hasUnknownResultIsolation: paiHasUnknownResultIsolation, isOnStack: paiIsOnStack)
+        let newTupleInst = builderSucc.createTuple(elements: [tupleElem, newPai])
+        let newReturnInst = builderSucc.createReturn(of: newTupleInst)
+        
+        break
+      }
+    }
+    debugPrint("AAAAA SUCC BB MIDDLE 6")
+    debugPrint(succBB)
+    debugPrint("AAAAA SUCC BB END")
   }
   return vjpToInlineOpt!
 }
@@ -1031,6 +1107,10 @@ private extension SpecializationCloner {
   }
 
   func cloneAndSpecializeFunctionBodyCFG(using callSite: CallSite, enumClosure: EnumClosure, enumDict: inout Dictionary<Type, Type>) {
+    debugPrint("AAAAA vjp BEFORE rewrite")
+    debugPrint(callSite.applySite.parentFunction)
+    debugPrint("AAAAA vjp AFTER rewrite")
+
     self.cloneEntryBlockArgsWithoutOrigClosuresCFG(usingOrigCalleeAt: callSite, enumClosure: enumClosure, enumDict: &enumDict)
 //    let (allSpecializedEntryBlockArgs, closureArgIndexToAllClonedReleasableClosures) = cloneAllClosures(at: callSite)
 
@@ -1040,6 +1120,164 @@ private extension SpecializationCloner {
     }
 
     self.cloneFunctionBody(from: callSite.applyCallee, entryBlockArguments: args)
+
+    let entrySwitchEnum = self.entryBlock.terminator as! SwitchEnumInst
+    let builderEntry = Builder(before: entrySwitchEnum, self.context)
+
+//    debugPrint("AAAAA enumType BEGIN")
+    var enumCases = Array<(Int, BasicBlock)>()
+    for i in 0...entrySwitchEnum.bridged.SwitchEnumInst_getNumCases() {
+//      debugPrint("AAAAA BEGIN i = ", i)
+      let bbForCase = entrySwitchEnum.getUniqueSuccessor(forCaseIndex: i)
+//      debugPrint(bbForCase)
+//      debugPrint("AAAAA END i = ", i)
+      // MYTODO: ensure that identical indexes have identical textual values like bb1, bb2, ...
+      if bbForCase != nil {
+        enumCases.append((i, bbForCase!))
+      }
+    }
+//    debugPrint("AAAAA enumType MIDDLE 1")
+//    debugPrint(entrySwitchEnum)
+//    debugPrint("AAAAA enumType MIDDLE 2")
+//    debugPrint(enumClosure.enumType)
+//    debugPrint("AAAAA enumType MIDDLE 3")
+//    debugPrint(enumCases)
+//    debugPrint("AAAAA enumType MIDDLE 4")
+    let newEntrySwitchEnum = builderEntry.createSwitchEnum(enum: entrySwitchEnum.enumOp, cases: enumCases)
+//    debugPrint(newEntrySwitchEnum)
+    self.entryBlock.bridged.eraseInstruction(entrySwitchEnum.bridged)
+//    debugPrint("AAAAA enumType END")
+
+    debugPrint("AAAAAA applySite BEGIN")
+    debugPrint(callSite.applySite)
+    debugPrint("AAAAAA applySite END")
+
+    var enumIdxToVjp = Dictionary<Int, Function>()
+    for pred in callSite.applySite.parentBlock.predecessors {
+      var enumIdx = Optional<Int>(nil)
+      for op in pred.terminator.operands {
+        switch op.value.definingInstruction {
+          case let ei as EnumInst:
+            enumIdx = ei.caseIndex
+
+          default:
+            ()
+        }
+      }
+      assert(enumIdx != nil)
+      var vjpFn = Optional<Function>(nil)
+      for inst in pred.instructions {
+        let fri : FunctionRefInst? = inst as? FunctionRefInst
+        if fri == nil {
+          continue
+        }
+        vjpFn = fri!.referencedFunction
+        // MYTODO: erase this function ref inst, but later, after apply rewrite
+        break
+      }
+      assert(vjpFn != nil)
+      enumIdxToVjp[enumIdx!] = vjpFn!
+    }
+
+//    debugPrint("AAAAAA enumIdxToVjp BEGIN")
+//    debugPrint(enumIdxToVjp)
+//    debugPrint("AAAAAA enumIdxToVjp END")
+
+    debugPrint("AAAAAA PARENT FN BEGIN")
+    debugPrint(newEntrySwitchEnum.parentFunction)
+    debugPrint("AAAAAA PARENT FN END")
+
+    for (enumIdx, vjpFn) in enumIdxToVjp {
+      let succBB = newEntrySwitchEnum.getUniqueSuccessor(forCaseIndex: enumIdx)!
+//      debugPrint("AAAAAA SUCC BB BEGIN")
+//      debugPrint(succBB)
+//      debugPrint("AAAAAA SUCC BB END")
+      assert(succBB.arguments.count == 1)
+      // MYTODO: make less fragile
+      let dti = succBB.instructions.first as! DestructureTupleInst
+      let resToChange = dti.results[enumClosure.closureIdxInTuple]
+      for use in resToChange.uses {
+        switch use.instruction {
+          case let ai as ApplyInst:
+            ()
+//            let builder = Builder(before: ai, self.context)
+//            debugPrint("AAAAAA resToChange type BEGIN")
+//            debugPrint(resToChange)
+//            debugPrint("AAAAAA resToChange type MIDDLE")
+//            debugPrint(resToChange.type)
+//            debugPrint("AAAAAA resToChange type END")
+//            let dtiOfCapturedArgsTuple = builder.createDestructureTuple(tuple: resToChange)
+//            debugPrint("AAAAAA dtiOfCapturedArgsTuple BEGIN")
+//            debugPrint(dtiOfCapturedArgsTuple)
+//            debugPrint("AAAAAA dtiOfCapturedArgsTuple END")
+//            var newArgs = Array<Value>()
+//            for op in ai.argumentOperands {
+//              newArgs.append(op.value)
+//            }
+//            for res in dtiOfCapturedArgsTuple.results {
+//              newArgs.append(res)
+//            }
+//            debugPrint("AAAAAAA NEW ARGS BEGIN")
+//            debugPrint(newArgs)
+//            debugPrint("AAAAAAA NEW ARGS END")
+
+          case let _ as StrongReleaseInst:
+            ()
+          case let _ as DestroyValueInst:
+            ()
+          default:
+            assert(false)
+        }
+        debugPrint("AAAAA USE 00")
+        debugPrint(use)
+        debugPrint("AAAAA USE 01")
+      }
+    }
+
+    for succBB in self.entryBlock.successors {
+      for arg in succBB.arguments {
+        debugPrint("AAAAA arg type BEGIN")
+        debugPrint(arg.type)
+        debugPrint("AAAAA arg type MIDDLE")
+        debugPrint(enumDict[arg.type])
+        debugPrint("AAAAA arg type END")
+      }
+    }
+
+    // TODO: proper work with optional
+//    let succBB = sei.getUniqueSuccessor(forCaseIndex: enumClosure.enumCase)!
+//    assert(succBB.arguments.count == 1)
+//    var closureVal : Value? = nil
+//    for use in succBB.arguments[0].uses {
+//      switch use.instruction {
+//        case let tei as TupleExtractInst:
+//          if tei.fieldIndex == enumClosure.closureIdxInTuple {
+//            assert(closureVal == nil)
+//            closureVal = tei
+//          }
+//
+//        case let dti as DestructureTupleInst:
+//          assert(closureVal == nil)
+//          closureVal = dti.results[enumClosure.closureIdxInTuple]
+//
+//        default:
+//          assert(false)
+//      }
+//    }
+//    assert(closureVal != nil)
+//    for use in closureVal!.uses {
+//      switch use.instruction {
+//        case let ai as ApplyInst:
+//          return ai
+//        case let _ as StrongReleaseInst:
+//          ()
+//        case let _ as DestroyValueInst:
+//          ()
+//        default:
+//          assert(false)
+//      }
+//    }
+
   }
 
   private func cloneEntryBlockArgsWithoutOrigClosuresCFG(usingOrigCalleeAt callSite: CallSite, enumClosure: EnumClosure, enumDict: inout Dictionary<Type, Type>) {

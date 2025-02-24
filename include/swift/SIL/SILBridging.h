@@ -661,6 +661,9 @@ struct BridgedInstruction {
   bool mayBeDeinitBarrierNotConsideringSideEffects() const;
   BRIDGED_INLINE bool shouldBeForwarding() const;
 
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedSubstitutionMap
+  getSubstitutionMap() const;
+
   // =========================================================================//
   //                   Generalized instruction subclasses
   // =========================================================================//
@@ -904,6 +907,8 @@ struct BridgedBasicBlock {
   BRIDGED_INLINE SwiftInt getNumArguments() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument getArgument(SwiftInt index) const;
   SWIFT_IMPORT_UNSAFE  BRIDGED_INLINE BridgedArgument addBlockArgument(BridgedType type, BridgedValue::Ownership ownership) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument
+  recreateEnumBlockArgument(SwiftInt index, BridgedType type) const;
   SWIFT_IMPORT_UNSAFE  BRIDGED_INLINE BridgedArgument addFunctionArgument(BridgedType type) const;
   BRIDGED_INLINE void eraseArgument(SwiftInt index) const;
   BRIDGED_INLINE void moveAllInstructionsToBegin(BridgedBasicBlock dest) const;

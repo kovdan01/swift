@@ -1048,6 +1048,11 @@ BridgedOperandArray BridgedInstruction::getOperands() const {
   return {{operands.data()}, (SwiftInt)operands.size()};
 }
 
+BridgedSubstitutionMap BridgedInstruction::getSubstitutionMap() const {
+  auto *pai = llvm::cast<swift::PartialApplyInst>(unbridged());
+  return {pai->getSubstitutionMap()};
+}
+
 BridgedOperandArray BridgedInstruction::getTypeDependentOperands() const {
   auto typeOperands = unbridged()->getTypeDependentOperands();
   return {{typeOperands.data()}, (SwiftInt)typeOperands.size()};
@@ -1707,6 +1712,34 @@ BridgedArgument BridgedBasicBlock::getArgument(SwiftInt index) const {
 BridgedArgument BridgedBasicBlock::addBlockArgument(BridgedType type, BridgedValue::Ownership ownership) const {
   return {unbridged()->createPhiArgument(
       type.unbridged(), BridgedValue::unbridge(ownership))};
+}
+
+BridgedArgument
+BridgedBasicBlock::recreateEnumBlockArgument(SwiftInt index,
+                                             BridgedType type) const {
+  swift::ValueOwnershipKind oldOwnership =
+      unbridged()->getArgument(index)->getOwnershipKind();
+  BridgedValue::Ownership ownership;
+  switch (oldOwnership) {
+  case swift::OwnershipKind::Any:
+    assert(false);
+    break;
+  case swift::OwnershipKind::Unowned:
+    ownership = BridgedValue::Ownership::Unowned;
+    break;
+  case swift::OwnershipKind::Owned:
+    ownership = BridgedValue::Ownership::Owned;
+    break;
+  case swift::OwnershipKind::Guaranteed:
+    ownership = BridgedValue::Ownership::Guaranteed;
+    break;
+  case swift::OwnershipKind::None:
+    ownership = BridgedValue::Ownership::None;
+    break;
+  }
+  eraseArgument(index);
+
+  return addBlockArgument(type, ownership);
 }
 
 BridgedArgument BridgedBasicBlock::addFunctionArgument(BridgedType type) const {
