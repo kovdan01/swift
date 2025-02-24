@@ -192,12 +192,12 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
         deadClosures.deinitialize()
       }
 
-      while let deadClosure = deadClosures.pop() {
-        let isDeleted = context.tryDeleteDeadClosure(closure: deadClosure as! SingleValueInstruction)
-        if isDeleted {
-          context.notifyInvalidatedStackNesting()
-        }
-      }
+      //while let deadClosure = deadClosures.pop() {
+      //  let isDeleted = context.tryDeleteDeadClosure(closure: deadClosure as! SingleValueInstruction)
+      //  if isDeleted {
+      //    context.notifyInvalidatedStackNesting()
+      //  }
+      //}
 
       if context.needFixStackNesting {
         function.fixStackNesting(context)
@@ -1189,17 +1189,68 @@ private extension SpecializationCloner {
 
     for (enumIdx, vjpFn) in enumIdxToVjp {
       let succBB = newEntrySwitchEnum.getUniqueSuccessor(forCaseIndex: enumIdx)!
-//      debugPrint("AAAAAA SUCC BB BEGIN")
-//      debugPrint(succBB)
-//      debugPrint("AAAAAA SUCC BB END")
+      debugPrint("AAAAAA SUCC BB BEGIN")
+      //debugPrint(succBB)
+      debugPrint("AAAAAA SUCC BB MIDDLE 1")
+      succBB.bridged.recreateTupleBlockArgument(enumClosure.closureIdxInTuple)
+      debugPrint("AAAAAA SUCC BB MIDDLE 2")
+      //debugPrint(succBB)
+      debugPrint("AAAAAA SUCC BB END")
       assert(succBB.arguments.count == 1)
       // MYTODO: make less fragile
-      let dti = succBB.instructions.first as! DestructureTupleInst
-      let resToChange = dti.results[enumClosure.closureIdxInTuple]
-      for use in resToChange.uses {
-        switch use.instruction {
-          case let ai as ApplyInst:
-            ()
+      let oldDti = succBB.instructions.first as! DestructureTupleInst
+      let builderBeforeOldDti = Builder(before: oldDti, self.context)
+      let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
+      let resToChangeOld = oldDti.results[enumClosure.closureIdxInTuple]
+      
+      for (resultIdx, result) in oldDti.results.enumerated() {
+        for use in result.uses {
+          switch use.instruction {
+            case let ai as ApplyInst:
+              ()
+              let builder = Builder(before: ai, self.context)
+              if (resultIdx == enumClosure.closureIdxInTuple) {
+                let dtiOfCapturedArgsTuple = builder.createDestructureTuple(tuple: newDti.results[resultIdx])
+                var newArgs = Array<Value>()
+                for op in ai.argumentOperands {
+                  newArgs.append(op.value)
+                }
+                for res in dtiOfCapturedArgsTuple.results {
+                  newArgs.append(res)
+                }
+                let newFri = builder.createFunctionRef(vjpFn)
+                let newAi = builder.createApply(function: newFri, SubstitutionMap(), arguments: newArgs)
+                ai.replace(with: newAi, self.context)
+              } else {
+                var newArgs = Array<Value>()
+                for op in ai.argumentOperands {
+                  newArgs.append(op.value)
+                }
+                let newAi = builder.createApply(function: newDti.results[resultIdx], ai.substitutionMap, arguments: newArgs)
+                ai.replace(with: newAi, self.context)
+              }
+
+//            case let _ as StrongReleaseInst:
+//              ()
+            case let dti as DestroyValueInst:
+              if (resultIdx != enumClosure.closureIdxInTuple) {
+                let builder = Builder(before: dti, self.context)
+                let newDti = builder.createDestroyValue(operand: newDti.results[resultIdx])
+              }
+              dti.parentBlock.bridged.eraseInstruction(dti.bridged)
+            default:
+              assert(false)
+          }
+        }
+      }
+
+      oldDti.parentBlock.bridged.eraseInstruction(oldDti.bridged)
+
+//      let resToChangeNew = newDti.results[enumClosure.closureIdxInTuple]
+//      for use in resToChange.uses {
+//        switch use.instruction {
+//          case let ai as ApplyInst:
+//            ()
 //            let builder = Builder(before: ai, self.context)
 //            debugPrint("AAAAAA resToChange type BEGIN")
 //            debugPrint(resToChange)
@@ -1220,18 +1271,18 @@ private extension SpecializationCloner {
 //            debugPrint("AAAAAAA NEW ARGS BEGIN")
 //            debugPrint(newArgs)
 //            debugPrint("AAAAAAA NEW ARGS END")
-
-          case let _ as StrongReleaseInst:
-            ()
-          case let _ as DestroyValueInst:
-            ()
-          default:
-            assert(false)
-        }
-        debugPrint("AAAAA USE 00")
-        debugPrint(use)
-        debugPrint("AAAAA USE 01")
-      }
+//
+//          case let _ as StrongReleaseInst:
+//            ()
+//          case let _ as DestroyValueInst:
+//            ()
+//          default:
+//            assert(false)
+//        }
+//        debugPrint("AAAAA USE 00")
+//        debugPrint(use)
+//        debugPrint("AAAAA USE 01")
+//      }
     }
 
     for succBB in self.entryBlock.successors {

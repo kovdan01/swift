@@ -234,6 +234,58 @@ BridgedOwnedString BridgedBasicBlock::getDebugDescription() const {
   return BridgedOwnedString(str);
 }
 
+BridgedArgument
+BridgedBasicBlock::recreateTupleBlockArgument(SwiftInt closureIdx) const {
+  swift::SILBasicBlock *bb = unbridged();
+  assert(bb->getNumArguments() == 1);
+  swift::SILArgument *oldArg = bb->getArgument(0);
+  auto *oldTupleTy =
+      llvm::cast<swift::TupleType>(oldArg->getType().getASTType().getPointer());
+  llvm::SmallVector<swift::TupleTypeElt, 8> newTupleElTypes;
+  for (unsigned i = 0; i < oldTupleTy->getNumElements(); ++i) {
+    if (i != closureIdx) {
+      newTupleElTypes.emplace_back(oldTupleTy->getElementType(i),
+                                   oldTupleTy->getElement(i).getName());
+      continue;
+    }
+    // llvm::errs() << "\n\nXXXXXXXX BEGIN\n";
+    // oldTupleTy->getElementType(i).getPointer()->print(llvm::errs());
+    // llvm::errs() << "\nXXXXXXXX MIDDLE 1\n\n";
+    // llvm::errs() <<
+    // (int)(oldTupleTy->getElementType(i).getPointer()->getKind()) << "   " <<
+    // (int)(swift::TypeKind::GenericFunction) << "   " <<
+    // (int)(swift::TypeKind::SILFunction); llvm::errs() << "\nXXXXXXXX MIDDLE
+    // 2\n\n";
+
+    auto *ft = llvm::cast<swift::SILFunctionType>(
+        oldTupleTy->getElementType(i).getPointer());
+    //    llvm::errs() << "\nXXXXXXXX END\n\n";
+    llvm::SmallVector<swift::TupleTypeElt, 4> paramTuple;
+    // MYTODO FIX!!! SUPER DIRTY HACK
+    paramTuple.reserve(ft->getNumParameters() * 2);
+    for (const swift::SILParameterInfo &param : ft->getParameters())
+      paramTuple.emplace_back(param.getArgumentType(unbridged()->getParent()),
+                              swift::Identifier{});
+    for (const swift::SILParameterInfo &param : ft->getParameters())
+      paramTuple.emplace_back(param.getArgumentType(unbridged()->getParent()),
+                              swift::Identifier{});
+    newTupleElTypes.emplace_back(swift::TupleType::get(
+        paramTuple, unbridged()->getModule().getASTContext()));
+  }
+  auto newTupleTy = swift::SILType::getFromOpaqueValue(swift::TupleType::get(
+      newTupleElTypes, unbridged()->getModule().getASTContext()));
+
+  swift::ValueOwnershipKind oldOwnership =
+      unbridged()->getArgument(0)->getOwnershipKind();
+
+  swift::SILPhiArgument *newArg =
+      unbridged()->createPhiArgument(newTupleTy, oldOwnership);
+  oldArg->replaceAllUsesWith(newArg);
+  eraseArgument(0);
+
+  return {newArg};
+}
+
 //===----------------------------------------------------------------------===//
 //                                SILValue
 //===----------------------------------------------------------------------===//
@@ -532,15 +584,15 @@ BridgedBuilder::rewriteBranchTracingEnum(BridgedType enumType,
     ed->addMember(newECD);
   }
 
-  bool first = true;
+  // bool first = true;
   for (EnumCaseDecl *ecd : ed->getAllCases()) {
     assert(ecd->getElements().size() == 1 && "MYTODO");
     EnumElementDecl *eed = ecd->getElements().front();
-    if (unbridged().getModule().getCaseIndex(eed) != enumCaseIdx)
-      continue;
+    // if (unbridged().getModule().getCaseIndex(eed) != enumCaseIdx)
+    //   continue;
 
-    assert(first);
-    first = false;
+    // assert(first);
+    // first = false;
     assert(eed->getParameterList()->size() == 1 && "MYTODO");
     ParamDecl &p = *eed->getParameterList()->front();
 
@@ -553,6 +605,9 @@ BridgedBuilder::rewriteBranchTracingEnum(BridgedType enumType,
         auto *ft = cast<AnyFunctionType>(tt->getElementType(i).getPointer());
         SmallVector<TupleTypeElt, 4> paramTuple;
         paramTuple.reserve(ft->getNumParams());
+        // MYTODO DIRTY HACK!!!!!!!
+        for (const AnyFunctionType::Param &param : ft->getParams())
+          paramTuple.emplace_back(param.getParameterType(), Identifier{});
         for (const AnyFunctionType::Param &param : ft->getParams())
           paramTuple.emplace_back(param.getParameterType(), Identifier{});
         type = TupleType::get(paramTuple, unbridged().getASTContext());

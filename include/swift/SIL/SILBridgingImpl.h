@@ -1742,6 +1742,45 @@ BridgedBasicBlock::recreateEnumBlockArgument(SwiftInt index,
   return addBlockArgument(type, ownership);
 }
 
+// BridgedArgument
+// BridgedBasicBlock::recreateTupleBlockArgument(SwiftInt closureIdx) const {
+//   swift::SILBasicBlock *bb = unbridged();
+//   assert(bb->getNumArguments() == 1);
+//   swift::SILArgument *oldArg = bb->getArgument(0);
+//   auto *oldTupleTy =
+//   llvm::cast<swift::TupleType>(oldArg->getType().getASTType().getPointer());
+//   llvm::SmallVector<swift::TupleTypeElt, 8> newTupleElTypes;
+//   for (unsigned i = 0; i < oldTupleTy->getNumElements(); ++i) {
+//     if (i != closureIdx) {
+//       newTupleElTypes.emplace_back(oldTupleTy->getElementType(i));
+//       continue;
+//     }
+//     llvm::errs() << "\n\nXXXXXXXX BEGIN\n";
+//     oldTupleTy->getElementType(i).getPointer()->print(llvm::errs());
+//     llvm::errs() << "\nXXXXXXXX MIDDLE\n\n";
+//     auto *ft =
+//     llvm::cast<swift::AnyFunctionType>(oldTupleTy->getElementType(i).getPointer());
+//     llvm::errs() << "\nXXXXXXXX END\n\n";
+//     llvm::SmallVector<swift::TupleTypeElt, 4> paramTuple;
+//     paramTuple.reserve(ft->getNumParams());
+//     for (const swift::AnyFunctionType::Param &param : ft->getParams())
+//       paramTuple.emplace_back(param.getParameterType(), swift::Identifier{});
+//     newTupleElTypes.emplace_back(swift::TupleType::get(paramTuple,
+//     unbridged()->getModule().getASTContext()));
+//   }
+//   auto newTupleTy =
+//   swift::SILType::getFromOpaqueValue(swift::TupleType::get(newTupleElTypes,
+//   unbridged()->getModule().getASTContext()));
+
+//   swift::ValueOwnershipKind oldOwnership =
+//       unbridged()->getArgument(0)->getOwnershipKind();
+
+//   swift::SILPhiArgument *newArg = unbridged()->createPhiArgument(newTupleTy,
+//   oldOwnership); oldArg->replaceAllUsesWith(newArg); eraseArgument(0);
+
+//   return {newArg};
+// }
+
 BridgedArgument BridgedBasicBlock::addFunctionArgument(BridgedType type) const {
   return {unbridged()->createFunctionArgument(type.unbridged())};
 }

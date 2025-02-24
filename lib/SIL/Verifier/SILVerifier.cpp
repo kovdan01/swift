@@ -5521,6 +5521,11 @@ public:
             require(eltArgTy == bbArgTy.copyingMoveOnlyWrapper(eltArgTy),
                     "switch_enum destination bbarg must match case arg type");
           } else {
+            llvm::errs() << "\n\nYYYYYYYYY 00\n";
+            eltArgTy.print(llvm::errs());
+            llvm::errs() << "\n\nYYYYYYYYY 01\n";
+            bbArgTy.print(llvm::errs());
+            llvm::errs() << "\n\nYYYYYYYYY 02\n";
             require(eltArgTy == bbArgTy,
                     "switch_enum destination bbarg must match case arg type");
           }
