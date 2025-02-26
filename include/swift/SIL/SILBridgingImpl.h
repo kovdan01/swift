@@ -583,6 +583,8 @@ OptionalBridgedOperand BridgedValue::getFirstUse() const {
   return {*getSILValue()->use_begin()};
 }
 
+SwiftBool BridgedValue::hasOneUse() const { return getSILValue()->hasOneUse(); }
+
 BridgedType BridgedValue::getType() const {
   return getSILValue()->getType();
 }
@@ -671,6 +673,10 @@ swift::SILArgument * _Nonnull BridgedArgument::getArgument() const {
 
 BridgedBasicBlock BridgedArgument::getParent() const {
   return {getArgument()->getParent()};
+}
+
+BridgedType BridgedArgument::getType() const {
+  return {getArgument()->getType()};
 }
 
 bool BridgedArgument::isReborrow() const { return getArgument()->isReborrow(); }
@@ -1036,6 +1042,11 @@ bool BridgedInstruction::isInStaticInitializer() const {
 BridgedOperandArray BridgedInstruction::getOperands() const {
   auto operands = unbridged()->getAllOperands();
   return {{operands.data()}, (SwiftInt)operands.size()};
+}
+
+BridgedSubstitutionMap BridgedInstruction::getSubstitutionMap() const {
+  auto *pai = llvm::cast<swift::PartialApplyInst>(unbridged());
+  return {pai->getSubstitutionMap()};
 }
 
 BridgedOperandArray BridgedInstruction::getTypeDependentOperands() const {
@@ -1699,6 +1710,34 @@ BridgedArgument BridgedBasicBlock::addBlockArgument(BridgedType type, BridgedVal
       type.unbridged(), BridgedValue::unbridge(ownership))};
 }
 
+BridgedArgument
+BridgedBasicBlock::recreateEnumBlockArgument(SwiftInt index,
+                                             BridgedType type) const {
+  swift::ValueOwnershipKind oldOwnership =
+      unbridged()->getArgument(index)->getOwnershipKind();
+  BridgedValue::Ownership ownership;
+  switch (oldOwnership) {
+  case swift::OwnershipKind::Any:
+    assert(false);
+    break;
+  case swift::OwnershipKind::Unowned:
+    ownership = BridgedValue::Ownership::Unowned;
+    break;
+  case swift::OwnershipKind::Owned:
+    ownership = BridgedValue::Ownership::Owned;
+    break;
+  case swift::OwnershipKind::Guaranteed:
+    ownership = BridgedValue::Ownership::Guaranteed;
+    break;
+  case swift::OwnershipKind::None:
+    ownership = BridgedValue::Ownership::None;
+    break;
+  }
+  eraseArgument(index);
+
+  return addBlockArgument(type, ownership);
+}
+
 BridgedArgument BridgedBasicBlock::addFunctionArgument(BridgedType type) const {
   return {unbridged()->createFunctionArgument(type.unbridged())};
 }
@@ -1717,6 +1756,10 @@ void BridgedBasicBlock::moveAllInstructionsToEnd(BridgedBasicBlock dest) const {
 
 void BridgedBasicBlock::moveArgumentsTo(BridgedBasicBlock dest) const {
   dest.unbridged()->moveArgumentList(unbridged());
+}
+
+void BridgedBasicBlock::eraseInstruction(BridgedInstruction inst) const {
+  unbridged()->erase(inst.unbridged());
 }
 
 OptionalBridgedSuccessor BridgedBasicBlock::getFirstPred() const {
@@ -2289,6 +2332,44 @@ BridgedInstruction BridgedBuilder::createTuple(BridgedType type, BridgedValueArr
   llvm::SmallVector<swift::SILValue, 16> elementValues;
   return {unbridged().createTuple(regularLoc(), type.unbridged(),
                                   elements.getValues(elementValues))};
+}
+
+BridgedInstruction
+BridgedBuilder::createTuple(BridgedValueArray elements) const {
+  llvm::SmallVector<swift::SILValue, 16> elementValues;
+  llvm::ArrayRef<swift::SILValue> values = elements.getValues(elementValues);
+  llvm::SmallVector<swift::TupleTypeElt, 16> tupleTyElts;
+  tupleTyElts.reserve(values.size());
+  for (const swift::SILValue &value : values) {
+    tupleTyElts.emplace_back(value->getType().getASTType());
+  }
+  swift::Type tupleTy =
+      swift::TupleType::get(tupleTyElts, unbridged().getASTContext());
+  swift::SILType silTupleTy =
+      swift::SILType::getPrimitiveObjectType(tupleTy->getCanonicalType());
+
+  return {unbridged().createTuple(regularLoc(), silTupleTy, values)};
+}
+
+BridgedInstruction
+BridgedBuilder::createTupleWithPredecessor(BridgedValueArray elements) const {
+  llvm::SmallVector<swift::SILValue, 16> elementValues;
+  llvm::ArrayRef<swift::SILValue> values = elements.getValues(elementValues);
+  llvm::SmallVector<swift::TupleTypeElt, 16> tupleTyElts;
+  tupleTyElts.reserve(values.size());
+  assert(!values.empty());
+  tupleTyElts.emplace_back(
+      values.front()->getType().getASTType(),
+      unbridged().getASTContext().getIdentifier("predecessor"));
+  for (size_t i = 1; i < values.size(); ++i) {
+    tupleTyElts.emplace_back(values[i]->getType().getASTType());
+  }
+  swift::Type tupleTy =
+      swift::TupleType::get(tupleTyElts, unbridged().getASTContext());
+  swift::SILType silTupleTy =
+      swift::SILType::getPrimitiveObjectType(tupleTy->getCanonicalType());
+
+  return {unbridged().createTuple(regularLoc(), silTupleTy, values)};
 }
 
 BridgedInstruction BridgedBuilder::createTupleExtract(BridgedValue str, SwiftInt elementIndex) const {
