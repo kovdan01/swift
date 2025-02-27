@@ -219,7 +219,7 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 //private let specializationLevelLimit = 2
 private let specializationLevelLimit = 1
 
-private func gatherCallSites(in caller: Function, _ context: FunctionPassContext) -> ([CallSite], [PartialApplyInst: EnumClosure]) {
+private func gatherCallSites(in caller: Function, _ context: FunctionPassContext) -> ([CallSite], [SingleValueInstruction: EnumClosure]) {
   /// __Root__ closures created via `partial_apply` or `thin_to_thick_function` may be converted and reabstracted
   /// before finally being used at an apply site. We do not want to handle these intermediate closures separately
   /// as they are handled and cloned into the specialized function as part of the root closures. Therefore, we keep
@@ -252,7 +252,7 @@ private func gatherCallSites(in caller: Function, _ context: FunctionPassContext
   }
 
   var callSiteMap = CallSiteMap()
-  var rootClosureEnums = [PartialApplyInst: EnumClosure]()
+  var rootClosureEnums = [SingleValueInstruction: EnumClosure]()
 
   for inst in caller.instructions {
     if !convertedAndReabstractedClosures.contains(inst),
@@ -574,9 +574,10 @@ private func rewriteApplyInstruction(using specializedCallee: Function, callSite
 
 private func updateCallSites(for rootClosure: SingleValueInstruction, in callSiteMap: inout CallSiteMap,
                              convertedAndReabstractedClosures: inout InstructionSet,
-                             rootClosureEnums: inout [PartialApplyInst: EnumClosure],
+                             rootClosureEnums: inout [SingleValueInstruction: EnumClosure],
                              _ context: FunctionPassContext) {
   debugPrint("AAAAAA updateCallSites 00")
+  debugPrint(rootClosure)
   var rootClosurePossibleLiveRange = InstructionRange(begin: rootClosure, context)
   debugPrint("AAAAAA updateCallSites 01")
   defer {
@@ -646,7 +647,7 @@ private func updateCallSites(for rootClosure: SingleValueInstruction, in callSit
 private func handleNonApplies(for rootClosure: SingleValueInstruction,
                               rootClosureApplies: inout OperandWorklist,
                               rootClosurePossibleLiveRange: inout InstructionRange,
-                              rootClosureEnums: inout [PartialApplyInst: EnumClosure],
+                              rootClosureEnums: inout [SingleValueInstruction: EnumClosure],
                               _ context: FunctionPassContext)
   -> (foundUnexpectedUse: Bool, haveUsedReabstraction: Bool)
 {
@@ -692,7 +693,7 @@ private func handleNonApplies(for rootClosure: SingleValueInstruction,
     }
   }
 
-  var rootClosureEnumsLocal = Array<EnumClosure>()
+  var rootClosureEnumsLocal = Array<(enumType: Type, enumCase: Int, closureIdxInTuple: Int)>()
   var partialAppliesLocal = Array<PartialApplyInst>()
 
   while let use = rootClosureConversionsAndReabstractions.pop() {
@@ -833,19 +834,23 @@ private func handleNonApplies(for rootClosure: SingleValueInstruction,
       log("Found unexpected direct or transitive user of root closure MULTIPLE BB 05")
       return (foundUnexpectedUse, haveUsedReabstraction)
     }
-    rootClosureEnums[partialAppliesLocal[0]] = rootClosureEnumsLocal[0]
+  //  rootClosureEnums[partialAppliesLocal[0]] = rootClosureEnumsLocal[0]
+    rootClosureEnums[rootClosure] = (enumType: rootClosureEnumsLocal[0].enumType,
+                                     enumCase: rootClosureEnumsLocal[0].enumCase,
+                                     pbClosure: partialAppliesLocal[0],
+                                     closureIdxInTuple: rootClosureEnumsLocal[0].closureIdxInTuple)
   }
 
   return (foundUnexpectedUse, haveUsedReabstraction)
 }
 
 private typealias IntermediateClosureArgDescriptorDatum = (applySite: SingleValueInstruction, closureArgIndex: Int?, enumArgIndex: Int?, paramInfo: ParameterInfo)
-private typealias EnumClosure = (enumType: Type, enumCase: Int, closureIdxInTuple: Int)
+private typealias EnumClosure = (enumType: Type, enumCase: Int, pbClosure: PartialApplyInst, closureIdxInTuple: Int)
 
 private func handleApplies(for rootClosure: SingleValueInstruction, callSiteMap: inout CallSiteMap,
                            rootClosureApplies: inout OperandWorklist,
                            rootClosurePossibleLiveRange: inout InstructionRange,
-                           rootClosureEnums: inout [PartialApplyInst: EnumClosure],
+                           rootClosureEnums: inout [SingleValueInstruction: EnumClosure],
                            convertedAndReabstractedClosures: inout InstructionSet, haveUsedReabstraction: Bool,
                            _ context: FunctionPassContext) -> [IntermediateClosureArgDescriptorDatum]
 {
@@ -933,14 +938,14 @@ private func handleApplies(for rootClosure: SingleValueInstruction, callSiteMap:
       debugPrint("FFFFFF 08 BEGIN")
       debugPrint(rootClosureEnums[pai])
       debugPrint("FFFFFF 08 END")
-      if rootClosureEnums[pai] == nil {
-        continue
-      }
-      let ai = isClosureAppliedCFG(in: callee, info: rootClosureEnums[pai]!)
-      if ai == nil {
-        continue
-      } else {
-      }
+//      if rootClosureEnums[pai] == nil {
+//        continue
+//      }
+//      let ai = isClosureAppliedCFG(in: callee, info: rootClosureEnums[pai]!)
+//      if ai == nil {
+//        continue
+//      } else {
+//      }
     }
 
     debugPrint("FFFFFF 09")
