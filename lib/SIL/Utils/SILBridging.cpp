@@ -271,9 +271,17 @@ BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(
         for (const SILInstruction &inst : *predBB)
           if (const auto *pai = dyn_cast<PartialApplyInst>(&inst))
             pais.emplace_back(pai);
-        assert(pais.size() == 1);
-        newTupleElTypes.emplace_back(getPAICapturedArgTypes(
-            pais.front(), unbridged()->getModule().getASTContext()));
+        if (pais.empty()) {
+          // newTupleElTypes.emplace_back(
+          //     SILType::getEmptyTupleType(unbridged()->getModule().getASTContext()).getASTType());
+          newTupleElTypes.emplace_back(oldTupleTy->getElementType(i),
+                                       oldTupleTy->getElement(i).getName());
+        } else {
+          assert(pais.size() == 1);
+          newTupleElTypes.emplace_back(getPAICapturedArgTypes(
+              pais.front(), unbridged()->getModule().getASTContext()));
+        }
+
       }
     }
   }
@@ -629,12 +637,21 @@ BridgedType capturedTypes*/, BridgedFunction bigVjpFunction) const {
             assert(!found);
             found = true;
             SmallVector<const PartialApplyInst *, 1> pais;
+            llvm::errs() << "\n\nDDDDDDD 00 BEGIN\n\n";
+            predBB->print(llvm::errs());
+            llvm::errs() << "\n\nDDDDDDD 00 END\n\n";
             for (const SILInstruction &inst : *predBB)
               if (const auto *pai = dyn_cast<PartialApplyInst>(&inst))
                 pais.emplace_back(pai);
-            assert(pais.size() == 1);
-            type = getPAICapturedArgTypes(
-                pais.front(), unbridged().getModule().getASTContext());
+            if (pais.empty()) {
+              type = tt->getElementType(i);
+              //type = SILType::getEmptyTupleType(unbridged().getModule().getASTContext()).getASTType();
+            } else {
+              assert(pais.size() == 1);
+              // MYTODO: is this correct?
+              type = getPAICapturedArgTypes(
+                  pais.front(), unbridged().getModule().getASTContext());
+            }
           }
         }
         assert(found);
