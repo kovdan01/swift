@@ -583,7 +583,14 @@ OptionalBridgedOperand BridgedValue::getFirstUse() const {
   return {*getSILValue()->use_begin()};
 }
 
-SwiftBool BridgedValue::hasOneUse() const { return getSILValue()->hasOneUse(); }
+SwiftBool BridgedValue::hasOneUse() const {
+  llvm::errs() << "\n\nCCCCCCC 00 BEGIN\n";
+  llvm::errs() << getSILValue() << "\n\n";
+  llvm::errs() << "\n\nCCCCCCC 00 MIDDLE\n";
+  getSILValue()->print(llvm::errs());
+  llvm::errs() << "\n\nCCCCCCC 00 END\n";
+  return getSILValue()->hasOneUse();
+}
 
 BridgedType BridgedValue::getType() const {
   return getSILValue()->getType();
@@ -1715,27 +1722,26 @@ BridgedBasicBlock::recreateEnumBlockArgument(SwiftInt index,
                                              BridgedType type) const {
   swift::ValueOwnershipKind oldOwnership =
       unbridged()->getArgument(index)->getOwnershipKind();
-  BridgedValue::Ownership ownership;
-  switch (oldOwnership) {
-  case swift::OwnershipKind::Any:
-    assert(false);
-    break;
-  case swift::OwnershipKind::Unowned:
-    ownership = BridgedValue::Ownership::Unowned;
-    break;
-  case swift::OwnershipKind::Owned:
-    ownership = BridgedValue::Ownership::Owned;
-    break;
-  case swift::OwnershipKind::Guaranteed:
-    ownership = BridgedValue::Ownership::Guaranteed;
-    break;
-  case swift::OwnershipKind::None:
-    ownership = BridgedValue::Ownership::None;
-    break;
-  }
-  eraseArgument(index);
-
-  return addBlockArgument(type, ownership);
+  //BridgedValue::Ownership ownership;
+  //switch (oldOwnership) {
+  // case swift::OwnershipKind::Any:
+  //   assert(false);
+  //   break;
+  // case swift::OwnershipKind::Unowned:
+  //   ownership = BridgedValue::Ownership::Unowned;
+  //   break;
+  // case swift::OwnershipKind::Owned:
+  //   ownership = BridgedValue::Ownership::Owned;
+  //   break;
+  // case swift::OwnershipKind::Guaranteed:
+  //   ownership = BridgedValue::Ownership::Guaranteed;
+  //   break;
+  // case swift::OwnershipKind::None:
+  //   ownership = BridgedValue::Ownership::None;
+  //   break;
+  // }
+  auto x = unbridged()->replacePhiArgument(index, type.unbridged(), oldOwnership);
+  return {x};
 }
 
 BridgedArgument BridgedBasicBlock::addFunctionArgument(BridgedType type) const {

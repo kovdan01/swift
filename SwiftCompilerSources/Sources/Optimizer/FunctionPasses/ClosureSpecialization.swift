@@ -173,7 +173,7 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
           rewriteApplyInstruction(using: specializedFunction, callSite: callSite, context)
         } else {
           // MYTODO
-          let vjpToInline = rewriteApplyInstructionCFG(using: specializedFunction, callSite: callSite,
+          /*let vjpToInline = */rewriteApplyInstructionCFG(using: specializedFunction, callSite: callSite,
                                      enumClosure: enums[callSite.applySite as! PartialApplyInst]!,
                                      enumDict: &enumDict, context: context)
           debugPrint("AAAAA VJP BEGIN")
@@ -325,7 +325,7 @@ private func getOrCreateSpecializedFunction(basedOn callSite: CallSite, _ contex
 
 private func rewriteApplyInstructionCFG(using specializedCallee: Function, callSite: CallSite,
                                      enumClosure: EnumClosure, enumDict: inout Dictionary<Type, Type>,
-                                     context: FunctionPassContext) -> Function {
+                                     context: FunctionPassContext) /*-> Function */{
   var builderSucc = Builder(atEndOf: callSite.applySite.parentBlock, location: callSite.applySite.parentBlock.instructions.last!.location, context)
   // MYTODO: enums set not create each time
   // MYTODO: maybe each enum might be re-written multiple times
@@ -339,14 +339,20 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
 
   // MYTODO: assert that 1 arg? always should be just enum?
   for (applySiteIndex, arg) in callSite.applySite.arguments.enumerated() {
+    debugPrint("HHHHHH 00")
     let bb = callSite.applySite.parentBlock
+    debugPrint("HHHHHH 01")
     let preds = bb.predecessors
+    debugPrint("HHHHHH 02")
 
     var vjpsToInline = Array<Function>()
 
     for pred in preds {
+      debugPrint("HHHHHH 03")
       let brInst = pred.instructions.last! as! BranchInst
+      debugPrint("HHHHHH 04")
       var enumIdxInBranch = Optional<Int>(nil)
+      debugPrint("HHHHHH 05")
       for (targetBBArgIdx, targetBBArg) in brInst.targetBlock.arguments.enumerated() {
         let argType = targetBBArg.bridged.getType().type
         if argType == enumClosure.enumType {
@@ -354,17 +360,25 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
           enumIdxInBranch = targetBBArgIdx
         }
       }
+      debugPrint("HHHHHH 06")
       assert(enumIdxInBranch != nil)
+      debugPrint("HHHHHH 07")
       let enumInstOld = brInst.operands[enumIdxInBranch!].value.definingInstruction! as! EnumInst
+      debugPrint("HHHHHH 08")
       let oldPayload = enumInstOld.payload! as! TupleInst
+      debugPrint("HHHHHH 09")
 
       // MYTODO: for some reason fail, but this is partial apply
       // MYTODO: Found a null pointer in a value of type
       // MYTODO: thin to thick
       let paiOrThinToThickInstr = oldPayload.operands[enumClosure.closureIdxInTuple].value.definingInstruction!
+      debugPrint("HHHHHH 10")
       let maybeThinToThickInstr = paiOrThinToThickInstr as? ThinToThickFunctionInst
+      debugPrint("HHHHHH 11")
       var optionalPAI = Optional<PartialApplyInst>(nil)
+      debugPrint("HHHHHH 12")
       var optionalVJPToInline = Optional<Function>(nil)
+      debugPrint("HHHHHH 13")
       if maybeThinToThickInstr == nil {
         optionalPAI = paiOrThinToThickInstr as! PartialApplyInst
         let fri = optionalPAI!.operands[0].value.definingInstruction! as! FunctionRefInst
@@ -372,56 +386,77 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
       } else {
         let fri = maybeThinToThickInstr!.operands[0].value.definingInstruction! as! FunctionRefInst
         optionalVJPToInline = fri.referencedFunction
-        continue
+//        continue
       }
+      debugPrint("HHHHHH 14")
       // MYTODO: support thin to thick
-      assert(optionalPAI != nil)
-      let pai = optionalPAI!
-      var tupleValues = Array<Value>()
-      for (opIdx, op) in pai.operands.enumerated() {
-        if opIdx == 0 {
-          continue
+      if optionalPAI != nil {
+        let pai = optionalPAI!
+        var tupleValues = Array<Value>()
+        for (opIdx, op) in pai.operands.enumerated() {
+          if opIdx == 0 {
+            continue
+          }
+          tupleValues.append(op.value)
         }
-        tupleValues.append(op.value)
-      }
-      let builderPred = Builder(before: pai, context)
-      let tuple = builderPred.createTuple(elements: tupleValues)
+        let builderPred = Builder(before: pai, context)
+        let tuple = builderPred.createTuple(elements: tupleValues)
 
-      var newPayloadValues = Array<Value>()
-      for (opIdx, op) in oldPayload.operands.enumerated() {
-        if opIdx == enumClosure.closureIdxInTuple {
-          newPayloadValues.append(tuple)
-          continue
+        var newPayloadValues = Array<Value>()
+        for (opIdx, op) in oldPayload.operands.enumerated() {
+          if opIdx == enumClosure.closureIdxInTuple {
+            newPayloadValues.append(tuple)
+            continue
+          }
+          newPayloadValues.append(op.value)
         }
-        newPayloadValues.append(op.value)
-      }
-      let newPayload = builderPred.createTupleWithPredecessor(elements: newPayloadValues)
-      let enumInstNew = builderPred.createEnum(caseIndex: enumInstOld.caseIndex, payload: newPayload, enumType: newEnumType!)
+        let newPayload = builderPred.createTupleWithPredecessor(elements: newPayloadValues)
+        let enumInstNew = builderPred.createEnum(caseIndex: enumInstOld.caseIndex, payload: newPayload, enumType: newEnumType!)
 
-      let vjpToInline = optionalVJPToInline!
+        let vjpToInline = optionalVJPToInline!
 
-      var newBrOperandValues = Array<Value>()
-      for op in brInst.operands {
-        if brInst.getArgument(for: op).bridged.getType().type == enumClosure.enumType {
-          newBrOperandValues.append(enumInstNew)
-        } else {
-          newBrOperandValues.append(op.value)
+        var newBrOperandValues = Array<Value>()
+        for op in brInst.operands {
+          if brInst.getArgument(for: op).bridged.getType().type == enumClosure.enumType {
+            newBrOperandValues.append(enumInstNew)
+          } else {
+            newBrOperandValues.append(op.value)
+          }
         }
-      }
-      let newBrInst = builderPred.createBranch(to: brInst.targetBlock, arguments: newBrOperandValues)
+        let builderBr = Builder(before: brInst, context)
+        let newBrInst = builderBr.createBranch(to: brInst.targetBlock, arguments: newBrOperandValues)
 
-      vjpsToInline.append(vjpToInline)
-      pred.bridged.eraseInstruction(brInst.bridged)
-      pred.bridged.eraseInstruction(enumInstOld.bridged)
-      pred.bridged.eraseInstruction(oldPayload.bridged)
-      pred.bridged.eraseInstruction(pai.bridged)
+        vjpsToInline.append(vjpToInline)
+        pred.bridged.eraseInstruction(brInst.bridged)
+        pred.bridged.eraseInstruction(enumInstOld.bridged)
+        pred.bridged.eraseInstruction(oldPayload.bridged)
+        pred.bridged.eraseInstruction(pai.bridged)
+      } else { // thin to thick
+        let builderPred = Builder(before: enumInstOld, context)
+        let enumInstNew = builderPred.createEnum(caseIndex: enumInstOld.caseIndex, payload: oldPayload, enumType: newEnumType!)
+
+        var newBrOperandValues = Array<Value>()
+        for op in brInst.operands {
+          if brInst.getArgument(for: op).bridged.getType().type == enumClosure.enumType {
+            newBrOperandValues.append(enumInstNew)
+          } else {
+            newBrOperandValues.append(op.value)
+          }
+        }
+        let builderBr = Builder(before: brInst, context)
+        let newBrInst = builderBr.createBranch(to: brInst.targetBlock, arguments: newBrOperandValues)
+
+        vjpsToInline.append(optionalVJPToInline!)
+        pred.bridged.eraseInstruction(brInst.bridged)
+        pred.bridged.eraseInstruction(enumInstOld.bridged)
+      }
     }
-    assert(vjpToInlineOpt == nil)
-    vjpToInlineOpt = vjpsToInline[0]
-    // MYTODO: support arbitrary vjps; is it possible w/o creating multiple basic blocks?
-    for e in vjpsToInline {
-      assert(e == vjpToInlineOpt!)
-    }
+//    assert(vjpToInlineOpt == nil)
+//    vjpToInlineOpt = vjpsToInline[0]
+//    // MYTODO: support arbitrary vjps; is it possible w/o creating multiple basic blocks?
+//    for e in vjpsToInline {
+//      assert(e == vjpToInlineOpt!)
+//    }
     let succBB = callSite.applySite.parentBlock
     // MYTODO function ref to spec new pullback
 
@@ -458,7 +493,7 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
     debugPrint("AAAAA SUCC BB MIDDLE 4")
     for (argIndex, arg) in succBB.arguments.enumerated() {
       if arg.type == enumClosure.enumType {
-        assert(argIndex == succBB.arguments.count - 1)
+        //assert(argIndex == succBB.arguments.count - 1)
         let newBBArg = succBB.bridged.recreateEnumBlockArgument(argIndex, newEnumType!.bridged).argument
         let newPai : PartialApplyInst = builderSucc.createPartialApply(function: newFunctionRefInst, substitutionMap: paiSubstitutionMap,
                                                     capturedArguments: [newBBArg], calleeConvention: paiConvention,
@@ -472,7 +507,7 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
     debugPrint(succBB)
     debugPrint("AAAAA SUCC BB END")
   }
-  return vjpToInlineOpt!
+//  return vjpToInlineOpt!
 }
 
 
@@ -541,14 +576,22 @@ private func updateCallSites(for rootClosure: SingleValueInstruction, in callSit
                              convertedAndReabstractedClosures: inout InstructionSet,
                              rootClosureEnums: inout [PartialApplyInst: EnumClosure],
                              _ context: FunctionPassContext) {
+  debugPrint("AAAAAA updateCallSites 00")
   var rootClosurePossibleLiveRange = InstructionRange(begin: rootClosure, context)
+  debugPrint("AAAAAA updateCallSites 01")
   defer {
+  debugPrint("AAAAAA updateCallSites 02")
     rootClosurePossibleLiveRange.deinitialize()
+  debugPrint("AAAAAA updateCallSites 03")
   }
 
+  debugPrint("AAAAAA updateCallSites 04")
   var rootClosureApplies = OperandWorklist(context)
+  debugPrint("AAAAAA updateCallSites 05")
   defer {
+  debugPrint("AAAAAA updateCallSites 06")
     rootClosureApplies.deinitialize()
+  debugPrint("AAAAAA updateCallSites 07")
   }
 
   // A "root" closure undergoing conversions and/or reabstractions has additional restrictions placed upon it, in order
@@ -566,15 +609,19 @@ private func updateCallSites(for rootClosure: SingleValueInstruction, in callSit
   //    closure.
 
 
+  debugPrint("AAAAAA updateCallSites 08")
   let (foundUnexpectedUse, haveUsedReabstraction) =
     handleNonApplies(for: rootClosure, rootClosureApplies: &rootClosureApplies,
                      rootClosurePossibleLiveRange: &rootClosurePossibleLiveRange,
                      rootClosureEnums: &rootClosureEnums, context);
 
+  debugPrint("AAAAAA updateCallSites 09")
 
   if foundUnexpectedUse {
+  debugPrint("AAAAAA updateCallSites 10")
     return
   }
+  debugPrint("AAAAAA updateCallSites 11")
 
   let intermediateClosureArgDescriptorData =
     handleApplies(for: rootClosure, callSiteMap: &callSiteMap, rootClosureApplies: &rootClosureApplies,
@@ -582,10 +629,12 @@ private func updateCallSites(for rootClosure: SingleValueInstruction, in callSit
                   rootClosureEnums: &rootClosureEnums,
                   convertedAndReabstractedClosures: &convertedAndReabstractedClosures,
                   haveUsedReabstraction: haveUsedReabstraction, context)
+  debugPrint("AAAAAA updateCallSites 12")
 
   finalizeCallSites(for: rootClosure, in: &callSiteMap,
                     rootClosurePossibleLiveRange: rootClosurePossibleLiveRange,
                     intermediateClosureArgDescriptorData: intermediateClosureArgDescriptorData, context)
+  debugPrint("AAAAAA updateCallSites 13")
 }
 
 /// Handles all non-apply direct and transitive uses of `rootClosure`.
@@ -703,23 +752,66 @@ private func handleNonApplies(for rootClosure: SingleValueInstruction,
          ti == returnInst.returnedValue
       {
         // This is the pullback closure returned from an Autodiff VJP and we don't need to handle it.
-      } else {
-        assert(ti.bridged.hasOneUse())
+      } else if rootClosure.parentFunction.blocks.singleElement == nil {
+        debugPrint("BBBBB 00")
+        //assert(ti.bridged.hasOneUse())
+        debugPrint("BBBBB 01")
+        if !ti.bridged.hasOneUse() {
+          foundUnexpectedUse = true
+          log("Found unexpected direct or transitive user of root closure MULTIPLE BB 00")
+          return (foundUnexpectedUse, haveUsedReabstraction)
+        }
+
+
+//        if rootClosureEnumsLocal.count > 1 {
+//          foundUnexpectedUse = true
+//          log("Found unexpected direct or transitive user of root closure MULTIPLE BB 00")
+//          return (foundUnexpectedUse, haveUsedReabstraction)
+//        }
+
         let tupleFirstUse = ti.bridged.getFirstUse()
+        debugPrint("BBBBB 02")
         // TODO: proper work with optionals
         let possibleEnumInst = BridgedOperand(op: tupleFirstUse.op!).getUser().instruction
-        let ei = possibleEnumInst as! EnumInst
-
-        assert(ei.bridged.hasOneUse())
+        debugPrint("BBBBB 03")
+        debugPrint(possibleEnumInst)
+        let optionalEI = possibleEnumInst as? EnumInst
+        if optionalEI == nil {
+          foundUnexpectedUse = true
+          log("Found unexpected direct or transitive user of root closure MULTIPLE BB 01")
+          return (foundUnexpectedUse, haveUsedReabstraction)
+        }
+        let ei = optionalEI!
+        if !ei.bridged.hasOneUse() {
+          foundUnexpectedUse = true
+          log("Found unexpected direct or transitive user of root closure MULTIPLE BB 02")
+          return (foundUnexpectedUse, haveUsedReabstraction)
+        }
+        debugPrint("BBBBB 05")
         let firstEnumUse = ei.bridged.getFirstUse()
+        debugPrint("BBBBB 06")
         // TODO: proper work with optionals
         let possibleBranchInst = BridgedOperand(op: firstEnumUse.op!).getUser().instruction
-        let bi = possibleBranchInst as! BranchInst
+        debugPrint("BBBBB 07")
+        let optionalBI = possibleBranchInst as? BranchInst
+        if optionalBI == nil {
+          foundUnexpectedUse = true
+          log("Found unexpected direct or transitive user of root closure MULTIPLE BB 03")
+          return (foundUnexpectedUse, haveUsedReabstraction)
+        }
+        let bi = optionalBI!
+
+        debugPrint("BBBBB 08")
 
         let succBBArg = bi.getArgument(for: Operand(bridged: BridgedOperand(op: firstEnumUse.op!)))
+        debugPrint("BBBBB 09")
 
         rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: succBBArg.uses)
+        debugPrint("BBBBB 10")
         rootClosureEnumsLocal.append((enumType: ei.type, enumCase: ei.caseIndex, closureIdxInTuple: use.index))
+        debugPrint("BBBBB 11")
+      } else {
+        fallthrough
       }
 
     default:
@@ -729,9 +821,18 @@ private func handleNonApplies(for rootClosure: SingleValueInstruction,
     }
   }
 
-  assert(rootClosureEnumsLocal.count <= 1)
+  if rootClosureEnumsLocal.count > 1 {
+    foundUnexpectedUse = true
+    log("Found unexpected direct or transitive user of root closure MULTIPLE BB 04")
+    return (foundUnexpectedUse, haveUsedReabstraction)
+  }
+
   if rootClosureEnumsLocal.count == 1 {
-    assert(partialAppliesLocal.count == 1)
+    if partialAppliesLocal.count != 1 {
+      foundUnexpectedUse = true
+      log("Found unexpected direct or transitive user of root closure MULTIPLE BB 05")
+      return (foundUnexpectedUse, haveUsedReabstraction)
+    }
     rootClosureEnums[partialAppliesLocal[0]] = rootClosureEnumsLocal[0]
   }
 
@@ -752,22 +853,27 @@ private func handleApplies(for rootClosure: SingleValueInstruction, callSiteMap:
   let isSingleBB = rootClosure.parentFunction.blocks.singleElement != nil
 
   while let use = rootClosureApplies.pop() {
+    debugPrint("FFFFFF 00")
     rootClosurePossibleLiveRange.insert(use.instruction)
+    debugPrint("FFFFFF 01")
 
     // TODO [extend to general swift]: Handle full apply sites
     guard let pai = use.instruction as? PartialApplyInst else {
       continue
     }
+    debugPrint("FFFFFF 02")
 
     // TODO: Handling generic closures may be possible but is not yet implemented
     if pai.hasSubstitutions || !pai.calleeIsDynamicFunctionRef || !pai.isPullbackInResultOfAutodiffVJP {
       continue
     }
+    debugPrint("FFFFFF 03")
 
     // TODO: is callee always pullback?
     guard let callee = pai.referencedFunction else {
       continue
     }
+    debugPrint("FFFFFF 04")
 
     // Workaround for a problem with OSSA: https://github.com/swiftlang/swift/issues/78847
     // TODO: remove this if-statement once the underlying problem is fixed.
@@ -778,6 +884,7 @@ private func handleApplies(for rootClosure: SingleValueInstruction, callSiteMap:
     if callee.isDefinedExternally {
       continue
     }
+    debugPrint("FFFFFF 05")
 
     // Don't specialize non-fragile (read as non-serialized) callees if the caller is fragile; the specialized callee
     // will have shared linkage, and thus cannot be referenced from the fragile caller.
@@ -785,6 +892,7 @@ private func handleApplies(for rootClosure: SingleValueInstruction, callSiteMap:
     if caller.isSerialized && !callee.isSerialized {
       continue
     }
+    debugPrint("FFFFFF 06")
 
     // If the callee uses a dynamic Self, we cannot specialize it, since the resulting specialization might no longer
     // have 'self' as the last parameter.
@@ -794,6 +902,7 @@ private func handleApplies(for rootClosure: SingleValueInstruction, callSiteMap:
     if callee.mayBindDynamicSelf {
       continue
     }
+    debugPrint("FFFFFF 07")
 
     // Proceed if the closure is passed as an argument (and not called). If it is called we have nothing to do.
     //
@@ -811,6 +920,7 @@ private func handleApplies(for rootClosure: SingleValueInstruction, callSiteMap:
         continue
       }
     }
+    debugPrint("FFFFFF 08")
 
     // Ok, we know that we can perform the optimization but not whether or not the optimization is profitable. Check if
     // the closure is actually called in the callee (or in a function called by the callee).
@@ -820,6 +930,12 @@ private func handleApplies(for rootClosure: SingleValueInstruction, callSiteMap:
       }
     } else {
       // MYTODO
+      debugPrint("FFFFFF 08 BEGIN")
+      debugPrint(rootClosureEnums[pai])
+      debugPrint("FFFFFF 08 END")
+      if rootClosureEnums[pai] == nil {
+        continue
+      }
       let ai = isClosureAppliedCFG(in: callee, info: rootClosureEnums[pai]!)
       if ai == nil {
         continue
@@ -827,12 +943,14 @@ private func handleApplies(for rootClosure: SingleValueInstruction, callSiteMap:
       }
     }
 
+    debugPrint("FFFFFF 09")
     let onlyHaveThinToThickClosure = rootClosure is ThinToThickFunctionInst && !haveUsedReabstraction
 
     guard let closureParamInfo = pai.operandConventions[parameter: use.index] else {
       fatalError("While handling apply uses, parameter info not found for operand: \(use)!")
     }
 
+    debugPrint("FFFFFF 10")
     // If we are going to need to release the copied over closure, we must make sure that we understand all the exit
     // blocks, i.e., they terminate with an instruction that clearly indicates whether to release the copied over
     // closure or leak it.
@@ -843,6 +961,7 @@ private func handleApplies(for rootClosure: SingleValueInstruction, callSiteMap:
       continue
     }
 
+    debugPrint("FFFFFF 11")
     // Functions with a readnone, readonly or releasenone effect and a nontrivial context cannot be specialized.
     // Inserting a release in such a function results in miscompilation after other optimizations. For now, the
     // specialization is disabled.
@@ -853,6 +972,7 @@ private func handleApplies(for rootClosure: SingleValueInstruction, callSiteMap:
       continue
     }
 
+    debugPrint("FFFFFF 12")
     // Avoid an infinite specialization loop caused by repeated runs of ClosureSpecializer and CapturePropagation.
     // CapturePropagation propagates constant function-literals. Such function specializations can then be optimized
     // again by the ClosureSpecializer and so on. This happens if a closure argument is called _and_ referenced in
@@ -867,21 +987,26 @@ private func handleApplies(for rootClosure: SingleValueInstruction, callSiteMap:
                         ? (rootClosure as! PartialApplyInst).referencedFunction!
                         : (rootClosure as! ThinToThickFunctionInst).referencedFunction!
 
+    debugPrint("FFFFFF 13")
     if closureCallee.specializationLevel > specializationLevelLimit {
       continue
     }
 
+    debugPrint("FFFFFF 14")
     if haveUsedReabstraction {
       markConvertedAndReabstractedClosuresAsUsed(rootClosure: rootClosure, convertedAndReabstractedClosure: use.value,
                                                  convertedAndReabstractedClosures: &convertedAndReabstractedClosures)
     }
 
+    debugPrint("FFFFFF 15")
     if callSiteMap[pai] == nil {
       callSiteMap.insert(key: pai, value: CallSite(applySite: pai))
     }
 
+    debugPrint("FFFFFF 16")
     intermediateClosureArgDescriptorData
       .append((applySite: pai, closureArgIndex: closureArgumentIndex, enumArgIndex: enumArgumentIndex, paramInfo: closureParamInfo))
+    debugPrint("FFFFFF 17")
   }
 
   return intermediateClosureArgDescriptorData
@@ -908,9 +1033,12 @@ private func finalizeCallSites(for rootClosure: SingleValueInstruction, in callS
 }
 
 private func isClosureAppliedCFG(in callee: Function, info t: EnumClosure) -> ApplyInst? {
+  debugPrint("GGGGGGGG 00")
   for inst in callee.instructions {
+  debugPrint("GGGGGGGG 01")
     switch inst {
       case let sei as SwitchEnumInst:
+  debugPrint("GGGGGGGG 02")
         if sei.enumOp.type != t.enumType {
           continue
         }
@@ -921,6 +1049,8 @@ private func isClosureAppliedCFG(in callee: Function, info t: EnumClosure) -> Ap
         for use in succBB.arguments[0].uses {
           switch use.instruction {
             case let tei as TupleExtractInst:
+              return nil
+              // MYTODO: support this
               if tei.fieldIndex == t.closureIdxInTuple {
                 assert(closureVal == nil)
                 closureVal = tei
@@ -931,6 +1061,7 @@ private func isClosureAppliedCFG(in callee: Function, info t: EnumClosure) -> Ap
               closureVal = dti.results[t.closureIdxInTuple]
 
             default:
+  debugPrint("GGGGGGGG 03")
               assert(false)
           }
         }
@@ -944,6 +1075,7 @@ private func isClosureAppliedCFG(in callee: Function, info t: EnumClosure) -> Ap
             case let _ as DestroyValueInst:
               ()
             default:
+  debugPrint("GGGGGGGG 04")
               assert(false)
           }
         }
@@ -951,6 +1083,7 @@ private func isClosureAppliedCFG(in callee: Function, info t: EnumClosure) -> Ap
         continue
     }
   }
+  debugPrint("GGGGGGGG 05")
   return nil
 }
 
@@ -1082,6 +1215,9 @@ private extension SpecializationCloner {
       }
       assert(enumIdx != nil)
       var vjpFn = Optional<Function>(nil)
+      debugPrint("IIIIII 00 BEGIN")
+      debugPrint(pred)
+      debugPrint("IIIIII 00 END")
       for inst in pred.instructions {
         let fri : FunctionRefInst? = inst as? FunctionRefInst
         if fri == nil {
@@ -1091,25 +1227,35 @@ private extension SpecializationCloner {
         // MYTODO: erase this function ref inst, but later, after apply rewrite
         break
       }
-      assert(vjpFn != nil)
-      enumIdxToVjp[enumIdx!] = vjpFn!
+      if vjpFn != nil {
+        enumIdxToVjp[enumIdx!] = vjpFn!
+      }
     }
 
     for (enumIdx, vjpFn) in enumIdxToVjp {
+      debugPrint("JJJJJJJ 00")
       let succBB = newEntrySwitchEnum.getUniqueSuccessor(forCaseIndex: enumIdx)!
+      debugPrint("JJJJJJJ 01")
       succBB.bridged.recreateTupleBlockArgument(enumClosure.closureIdxInTuple, enumIdx, callSite.applySite.parentFunction.bridged)
+      debugPrint("JJJJJJJ 02")
       assert(succBB.arguments.count == 1)
+      debugPrint("JJJJJJJ 03 BEGIN")
       // MYTODO: make less fragile
+      debugPrint(succBB)
+      debugPrint("JJJJJJJ 03 END")
       let oldDti = succBB.instructions.first as! DestructureTupleInst
+      debugPrint("JJJJJJJ 04")
       let builderBeforeOldDti = Builder(before: oldDti, self.context)
+      debugPrint("JJJJJJJ 05")
       let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
+      debugPrint("JJJJJJJ 06")
       let resToChangeOld = oldDti.results[enumClosure.closureIdxInTuple]
+      debugPrint("JJJJJJJ 07")
 
       for (resultIdx, result) in oldDti.results.enumerated() {
         for use in result.uses {
           switch use.instruction {
             case let ai as ApplyInst:
-              ()
               let builder = Builder(before: ai, self.context)
               if (resultIdx == enumClosure.closureIdxInTuple) {
                 let dtiOfCapturedArgsTuple = builder.createDestructureTuple(tuple: newDti.results[resultIdx])
@@ -1135,10 +1281,22 @@ private extension SpecializationCloner {
             case let dti as DestroyValueInst:
               if (resultIdx != enumClosure.closureIdxInTuple) {
                 let builder = Builder(before: dti, self.context)
-                let newDti = builder.createDestroyValue(operand: newDti.results[resultIdx])
+                builder.createDestroyValue(operand: newDti.results[resultIdx])
               }
               dti.parentBlock.bridged.eraseInstruction(dti.bridged)
+            case let uedi as UncheckedEnumDataInst:
+              assert(resultIdx != enumClosure.closureIdxInTuple)
+              let builder = Builder(before: uedi, self.context)
+              let newUedi = builder.createUncheckedEnumData(enum: newDti.results[resultIdx], caseIndex: uedi.caseIndex,
+                                              resultType: uedi.type)//newDti.results[resultIdx].type)
+              uedi.replace(with: newUedi, self.context)
+//              uedi.parentBlock.bridged.eraseInstruction(uedi.bridged)
             default:
+              debugPrint("AAAAA use.instruction BEGIN")
+              debugPrint(use.instruction.parentFunction)
+              debugPrint("AAAAA use.instruction MIDDLE")
+              debugPrint(use.instruction)
+              debugPrint("AAAAA use.instruction END")
               assert(false)
           }
         }

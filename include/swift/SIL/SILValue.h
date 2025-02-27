@@ -375,9 +375,14 @@ protected:
       : SILNode(SILNodeKind(kind)), Type(type) {}
 
 public:
-  ~ValueBase() {
+  ~ValueBase(); /*{
+    llvm::errs() << "\n\nEEEEE 00 BEGIN\n\n";
+    this->print(llvm::errs());
+    llvm::errs() << "\n\nEEEEE 00 MIDDLE\n\n";
+    this->getParentBlock()->getParent()->print(llvm::errs());
+    llvm::errs() << "\n\nEEEEE 00 END\n\n";
     assert(use_empty() && "Cannot destroy a value that still has uses!");
-  }
+  }*/
 
   LLVM_ATTRIBUTE_ALWAYS_INLINE
   ValueKind getKind() const { return ValueKind(SILNode::getKind()); }
