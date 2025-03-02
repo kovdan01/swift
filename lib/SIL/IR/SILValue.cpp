@@ -226,6 +226,24 @@ bool ValueBase::isFromVarDecl() {
   return false;
 }
 
+ValueBase::~ValueBase() {
+  // llvm::errs() << "\n\nEEEEE 00 BEGIN\n\n";
+  // this->print(llvm::errs());
+  // llvm::errs() << "\n\nEEEEE 00 MIDDLE\n\n";
+  // this->getParentBlock()->getParent()->print(llvm::errs());
+  // llvm::errs() << "\n\nEEEEE 00 END\n\n";
+
+
+  // llvm::errs() << "\n\nEEEEE 00 BEGIN\n\n";
+  // for (auto *use : getUses()) {
+  //   llvm::errs() << "\n\nEEEEE 00 MIDDLE 00\n\n";
+  //   use->print(llvm::dbgs());
+  //   llvm::errs() << "\n\nEEEEE 00 MIDDLE 01\n\n";
+  // }
+  // llvm::errs() << "\n\nEEEEE 00 END\n\n";
+  assert(use_empty() && "Cannot destroy a value that still has uses!");
+}
+
 SILBasicBlock *SILNode::getParentBlock() const {
   if (auto *Inst = dyn_cast<SILInstruction>(this))
     return Inst->getParent();

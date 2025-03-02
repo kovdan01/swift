@@ -91,6 +91,7 @@ SWIFT_BEGIN_NULLABILITY_ANNOTATIONS
 
 typedef intptr_t SwiftInt;
 typedef uintptr_t SwiftUInt;
+typedef bool SwiftBool;
 
 // Define a bridging wrapper that wraps an underlying C++ pointer type. When
 // importing into Swift, we expose an initializer and accessor that works with
