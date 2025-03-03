@@ -18,6 +18,7 @@
 #endif
 
 #include "swift/AST/Attr.h"
+#include "swift/AST/ParameterList.h"
 #include "swift/AST/SemanticAttrs.h"
 #include "swift/Basic/Assertions.h"
 #include "swift/SIL/MemAccessUtils.h"
@@ -27,9 +28,9 @@
 #include "swift/SIL/SILGlobalVariable.h"
 #include "swift/SIL/SILNode.h"
 #include "swift/SIL/Test.h"
-#include <string>
 #include <cstring>
 #include <stdio.h>
+#include <string>
 
 using namespace swift;
 
@@ -169,6 +170,170 @@ BridgedFunction BridgedTestArguments::takeFunction() const {
 static_assert((int)BridgedType::MetatypeRepresentation::Thin == (int)swift::MetatypeRepresentation::Thin);
 static_assert((int)BridgedType::MetatypeRepresentation::Thick == (int)swift::MetatypeRepresentation::Thick);
 static_assert((int)BridgedType::MetatypeRepresentation::ObjC == (int)swift::MetatypeRepresentation::ObjC);
+
+static SourceFile &getSourceFile(SILFunction *f) {
+  if (f->hasLocation())
+    if (auto *declContext = f->getLocation().getAsDeclContext())
+      if (auto *parentSourceFile = declContext->getParentSourceFile())
+        return *parentSourceFile;
+  for (auto *file : f->getModule().getSwiftModule()->getFiles())
+    if (auto *sourceFile = dyn_cast<SourceFile>(file))
+      return *sourceFile;
+  llvm_unreachable("Could not resolve SourceFile from SILFunction");
+}
+
+static Type getPAICapturedArgTypes(const PartialApplyInst *pai,
+                                   ASTContext &ctx) {
+  SmallVector<TupleTypeElt, 4> paramTuple;
+  paramTuple.reserve(pai->getArguments().size());
+  for (const SILValue &arg : pai->getArguments())
+    paramTuple.emplace_back(arg->getType().getASTType(), Identifier{});
+  return TupleType::get(paramTuple, ctx);
+}
+
+static EnumDecl *cloneEnumDecl(EnumDecl *oldED) {
+  assert(oldED && "Expected valid enum type");
+
+  ASTContext &astContext = oldED->getASTContext();
+  Twine edNameStr = oldED->getNameStr() + "_specialized";
+  Identifier edName = astContext.getIdentifier(edNameStr.str());
+
+  auto *ed = new (astContext) EnumDecl(
+      /*EnumLoc*/ SourceLoc(), /*Name*/ edName, /*NameLoc*/ SourceLoc(),
+      /*Inherited*/ {}, /*GenericParams*/ nullptr,
+      /*DC*/
+      oldED->getDeclContext());
+  ed->setImplicit();
+
+  for (EnumCaseDecl *oldECD : oldED->getAllCases()) {
+    assert(oldECD->getElements().size() == 1);
+    EnumElementDecl *oldEED = oldECD->getElements().front();
+    auto *newPL = ParameterList::clone(astContext, oldEED->getParameterList());
+    auto *newEED = new (astContext) EnumElementDecl(
+        /*IdentifierLoc*/ SourceLoc(),
+        DeclName(astContext.getIdentifier(oldEED->getNameStr())), newPL,
+        SourceLoc(), /*RawValueExpr*/ nullptr, ed);
+    newEED->setImplicit();
+    auto *newECD = EnumCaseDecl::create(
+        /*CaseLoc*/ SourceLoc(), {newEED}, ed);
+    newECD->setImplicit();
+    ed->addMember(newEED);
+    ed->addMember(newECD);
+  }
+
+  return ed;
+}
+
+namespace {
+struct SpecializeCandidateInfo {
+  unsigned closureIdxInPayloadTuple;
+  llvm::SmallVector<SILValue, 8> capturedArgs;
+};
+
+using SpecializeCandidate =
+    llvm::DenseMap<SILInstruction *, SpecializeCandidateInfo>;
+using BranchTracingEnumCases = llvm::DenseMap<unsigned, SpecializeCandidate>;
+
+} // namespace
+
+static BranchTracingEnumCases
+findSpecializeCandidatesForBranchTracingEnum(SILType enumType,
+                                             SILFunction *fn) {
+  for (const SILBasicBlock &bb : *fn) {
+    auto *brInst = dyn_cast<BranchInst>(bb.getTerminator());
+    if (brInst == nullptr)
+      continue;
+    EnumInst *enumInst = nullptr;
+    for (SILValue arg : brInst->getArgs()) {
+      auto *definingEnum = dyn_cast<EnumInst>(arg.getDefiningInstruction());
+      if (definingEnum == nullptr)
+        continue;
+      if (definingEnum->getElement()->getParentEnum() !=
+          enumType.getEnumOrBoundGenericEnum())
+        continue;
+      enumInst = definingEnum;
+    }
+    if (enumInst == nullptr)
+      continue;
+  }
+  return BranchTracingEnumCases{};
+}
+
+BridgedType
+BridgedType::specializeBranchTracingEnum(BridgedFunction topVjp) const {
+  EnumDecl *ed = cloneEnumDecl(unbridged().getEnumOrBoundGenericEnum());
+
+  SILModule &module = topVjp.getFunction()->getModule();
+  ASTContext &astContext = unbridged().getASTContext();
+
+  for (EnumCaseDecl *ecd : ed->getAllCases()) {
+    assert(ecd->getElements().size() == 1 && "MYTODO");
+    EnumElementDecl *eed = ecd->getElements().front();
+    assert(eed->getParameterList()->size() == 1 && "MYTODO");
+    ParamDecl &p = *eed->getParameterList()->front();
+
+    auto *tt = cast<TupleType>(p.getInterfaceType().getPointer());
+    SmallVector<TupleTypeElt, 4> newElements;
+    newElements.reserve(tt->getNumElements());
+    for (unsigned i = 0; i < tt->getNumElements(); ++i) {
+      Type type;
+      // TODO
+      unsigned closureIdxInTuple = 0;
+      if (i == closureIdxInTuple) {
+        SmallVector<TupleTypeElt, 4> paramTuple;
+        unsigned enumIdx = module.getCaseIndex(eed);
+        const SILBasicBlock &vjpExitBB = *topVjp.getFunction()->rbegin();
+        bool found = false;
+        for (SILBasicBlock *predBB : vjpExitBB.getPredecessorBlocks()) {
+          auto *branchInst = cast<BranchInst>(predBB->getTerminator());
+          for (const Operand &op : branchInst->getAllOperands()) {
+            auto *ei = dyn_cast<EnumInst>(op.get().getDefiningInstruction());
+            if (ei == nullptr)
+              continue;
+            if (ei->getCaseIndex() != enumIdx)
+              break;
+            assert(!found);
+            found = true;
+            SmallVector<const PartialApplyInst *, 1> pais;
+            llvm::errs() << "\n\nDDDDDDD 00 BEGIN\n\n";
+            predBB->print(llvm::errs());
+            llvm::errs() << "\n\nDDDDDDD 00 END\n\n";
+            for (const SILInstruction &inst : *predBB)
+              if (const auto *pai = dyn_cast<PartialApplyInst>(&inst))
+                pais.emplace_back(pai);
+            if (pais.empty()) {
+              type = tt->getElementType(i);
+              // type = SILType::getEmptyTupleType(astContext.getASTType();
+            } else {
+              assert(pais.size() == 1);
+              // MYTODO: is this correct?
+              type = getPAICapturedArgTypes(pais.front(), astContext);
+            }
+          }
+        }
+        assert(found);
+      } else {
+        type = tt->getElementType(i);
+      }
+      Identifier label = tt->getElement(i).getName();
+      newElements.emplace_back(type, label);
+    }
+
+    Type newTupleType =
+        TupleType::get(newElements, unbridged().getASTContext());
+    p.setInterfaceType(newTupleType);
+  }
+
+  ed->setAccess(AccessLevel::Public);
+  auto &file = getSourceFile(topVjp.getFunction()).getOrCreateSynthesizedFile();
+  file.addTopLevelDecl(ed);
+  file.getParentModule()->clearLookupCache();
+
+  auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
+  Lowering::AbstractionPattern pattern(traceDeclType);
+  return module.Types.getLoweredType(pattern, traceDeclType,
+                                     TypeExpansionContext::minimal());
+}
 
 //===----------------------------------------------------------------------===//
 //                                SILFunction
