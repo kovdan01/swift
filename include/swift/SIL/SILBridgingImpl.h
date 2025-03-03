@@ -495,6 +495,8 @@ OptionalBridgedOperand BridgedValue::getFirstUse() const {
   return {*getSILValue()->use_begin()};
 }
 
+SwiftBool BridgedValue::hasOneUse() const { return getSILValue()->hasOneUse(); }
+
 BridgedType BridgedValue::getType() const {
   return getSILValue()->getType();
 }
@@ -987,6 +989,11 @@ bool BridgedInstruction::shouldBeForwarding() const {
   return llvm::isa<swift::OwnershipForwardingSingleValueInstruction>(unbridged()) ||
          llvm::isa<swift::OwnershipForwardingTermInst>(unbridged()) ||
          llvm::isa<swift::OwnershipForwardingMultipleValueInstruction>(unbridged());
+}
+
+BridgedSubstitutionMap BridgedInstruction::getSubstitutionMap() const {
+  auto *pai = llvm::cast<swift::PartialApplyInst>(unbridged());
+  return {pai->getSubstitutionMap()};
 }
 
 SwiftInt BridgedInstruction::MultipleValueInstruction_getNumResults() const {
@@ -1707,6 +1714,10 @@ void BridgedBasicBlock::moveArgumentsTo(BridgedBasicBlock dest) const {
   dest.unbridged()->moveArgumentList(unbridged());
 }
 
+void BridgedBasicBlock::eraseInstruction(BridgedInstruction inst) const {
+  unbridged()->erase(inst.unbridged());
+}
+
 OptionalBridgedSuccessor BridgedBasicBlock::getFirstPred() const {
   return {unbridged()->pred_begin().getSuccessorRef()};
 }
@@ -2322,6 +2333,44 @@ BridgedInstruction BridgedBuilder::createTuple(BridgedType type, BridgedValueArr
                                   elements.getValues(elementValues))};
 }
 
+BridgedInstruction
+BridgedBuilder::createTuple(BridgedValueArray elements) const {
+  llvm::SmallVector<swift::SILValue, 16> elementValues;
+  llvm::ArrayRef<swift::SILValue> values = elements.getValues(elementValues);
+  llvm::SmallVector<swift::TupleTypeElt, 16> tupleTyElts;
+  tupleTyElts.reserve(values.size());
+  for (const swift::SILValue &value : values) {
+    tupleTyElts.emplace_back(value->getType().getASTType());
+  }
+  swift::Type tupleTy =
+      swift::TupleType::get(tupleTyElts, unbridged().getASTContext());
+  swift::SILType silTupleTy =
+      swift::SILType::getPrimitiveObjectType(tupleTy->getCanonicalType());
+
+  return {unbridged().createTuple(regularLoc(), silTupleTy, values)};
+}
+
+BridgedInstruction
+BridgedBuilder::createTupleWithPredecessor(BridgedValueArray elements) const {
+  llvm::SmallVector<swift::SILValue, 16> elementValues;
+  llvm::ArrayRef<swift::SILValue> values = elements.getValues(elementValues);
+  llvm::SmallVector<swift::TupleTypeElt, 16> tupleTyElts;
+  tupleTyElts.reserve(values.size());
+  assert(!values.empty());
+  tupleTyElts.emplace_back(
+      values.front()->getType().getASTType(),
+      unbridged().getASTContext().getIdentifier("predecessor"));
+  for (size_t i = 1; i < values.size(); ++i) {
+    tupleTyElts.emplace_back(values[i]->getType().getASTType());
+  }
+  swift::Type tupleTy =
+      swift::TupleType::get(tupleTyElts, unbridged().getASTContext());
+  swift::SILType silTupleTy =
+      swift::SILType::getPrimitiveObjectType(tupleTy->getCanonicalType());
+
+  return {unbridged().createTuple(regularLoc(), silTupleTy, values)};
+}
+
 BridgedInstruction BridgedBuilder::createTupleExtract(BridgedValue str, SwiftInt elementIndex) const {
   swift::SILValue v = str.getSILValue();
   return {unbridged().createTupleExtract(regularLoc(), v, elementIndex)};
@@ -2398,6 +2447,15 @@ return {unbridged().createConvertFunction(regularLoc(), originalFunction.getSILV
 
 BridgedInstruction BridgedBuilder::createConvertEscapeToNoEscape(BridgedValue originalFunction, BridgedType resultType, bool isLifetimeGuaranteed) const {
   return {unbridged().createConvertEscapeToNoEscape(regularLoc(), originalFunction.getSILValue(), resultType.unbridged(), isLifetimeGuaranteed)};
+}
+
+SwiftInt BridgedClosureArray::count() const {
+  return closureArray.unbridged<swift::SILInstruction>().size();
+}
+
+BridgedInstruction
+BridgedClosureArray::at(SwiftInt index) const {
+  return {const_cast<swift::SingleValueInstruction*>(llvm::cast<swift::SingleValueInstruction>(&closureArray.unbridged<swift::SILInstruction>()[index]))};
 }
 
 SWIFT_END_NULLABILITY_ANNOTATIONS
