@@ -296,6 +296,9 @@ struct BridgedType {
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType getFunctionTypeWithNoEscape(bool withNoEscape) const;
   BRIDGED_INLINE BridgedArgumentConvention getCalleeConvention() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType getSuperClassType() const;
+
+  SWIFT_IMPORT_UNSAFE BridgedType
+  specializeBranchTracingEnum(BridgedFunction topVjp) const;
 };
 
 // SIL Bridging
