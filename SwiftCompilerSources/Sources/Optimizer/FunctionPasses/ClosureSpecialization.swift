@@ -525,6 +525,44 @@ private func handleNonApplies(for rootClosure: SingleValueInstruction,
          ti == returnInst.returnedValue
       {
         // This is the pullback closure returned from an Autodiff VJP and we don't need to handle it.
+//      } else if rootClosure.parentFunction.blocks.singleElement == nil {
+//        //assert(ti.bridged.hasOneUse())
+//        if !ti.bridged.hasOneUse() {
+//          foundUnexpectedUse = true
+//          log("Found unexpected direct or transitive user of root closure MULTIPLE BB 00")
+//          return (foundUnexpectedUse, haveUsedReabstraction)
+//        }
+//
+//        let tupleFirstUse = ti.bridged.getFirstUse()
+//        // TODO: proper work with optionals
+//        let possibleEnumInst = BridgedOperand(op: tupleFirstUse.op!).getUser().instruction
+//        let optionalEI = possibleEnumInst as? EnumInst
+//        if optionalEI == nil {
+//          foundUnexpectedUse = true
+//          log("Found unexpected direct or transitive user of root closure MULTIPLE BB 01")
+//          return (foundUnexpectedUse, haveUsedReabstraction)
+//        }
+//        let ei = optionalEI!
+//        if !ei.bridged.hasOneUse() {
+//          foundUnexpectedUse = true
+//          log("Found unexpected direct or transitive user of root closure MULTIPLE BB 02")
+//          return (foundUnexpectedUse, haveUsedReabstraction)
+//        }
+//        let firstEnumUse = ei.bridged.getFirstUse()
+//        // TODO: proper work with optionals
+//        let possibleBranchInst = BridgedOperand(op: firstEnumUse.op!).getUser().instruction
+//        let optionalBI = possibleBranchInst as? BranchInst
+//        if optionalBI == nil {
+//          foundUnexpectedUse = true
+//          log("Found unexpected direct or transitive user of root closure MULTIPLE BB 03")
+//          return (foundUnexpectedUse, haveUsedReabstraction)
+//        }
+//        let bi = optionalBI!
+//
+//        let succBBArg = bi.getArgument(for: Operand(bridged: BridgedOperand(op: firstEnumUse.op!)))
+//
+//        rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: succBBArg.uses)
+//        rootClosureEnumsLocal.append((enumType: ei.type, enumCase: ei.caseIndex, closureIdxInTuple: use.index))
       } else {
         fallthrough
       }
@@ -1355,10 +1393,26 @@ private struct ClosureArgDescriptor {
   }
 }
 
+struct EnumTypeAndCase {
+  var enumType : Type
+  var caseIdx : Int
+}
+
+// MYTODO: proper hash
+extension EnumTypeAndCase: Hashable {
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(1)
+  }
+}
+
+typealias ClosureInfoCFG = (closure: SingleValueInstruction, idxInEnumPayload: Int, capturedArgs: [Value], applyInPb: ApplySite)
+typealias EnumToClosureInfoCFG = Dictionary<EnumTypeAndCase, (closureInfos: [ClosureInfoCFG], pbBB: BasicBlock)>
+
 /// Represents a callsite containing one or more closure arguments.
 private struct CallSite {
   let applySite: ApplySite
   var closureArgDescriptors: [ClosureArgDescriptor] = []
+  var enumToClosureInfoCFG : EnumToClosureInfoCFG = [:]
 
   init(applySite: ApplySite) {
     self.applySite = applySite
