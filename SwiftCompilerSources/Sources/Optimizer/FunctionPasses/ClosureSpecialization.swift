@@ -118,12 +118,69 @@ let generalClosureSpecialization = FunctionPass(name: "experimental-swift-based-
   print("NOT IMPLEMENTED")
 }
 
+func isFunctionSimpleIfElse(function: Function) -> Bool {
+  var blocksCount = 0
+  for (idx, block) in function.blocks.enumerated() {
+    blocksCount += 1
+    if idx == 0 {
+      let successors = block.successors
+      if successors.count != 2 {
+        return false
+      }
+      if !((successors[0].index == 1 && successors[1].index == 2) ||
+           (successors[0].index == 2 && successors[1].index == 1)) {
+        return false
+      }
+      let condBranchInst = block.terminator as? CondBranchInst
+      if condBranchInst == nil {
+        return false
+      }
+    } else if idx == 1 || idx == 2 {
+      if block.singlePredecessor == nil {
+        return false
+      }
+      if block.singlePredecessor!.index != 0 {
+        return false
+      }
+      if block.arguments.count != 0 {
+        return false
+      }
+    } else if idx == 3 {
+      var predecessorIndexes = Array<Int>()
+      for predecessor in block.predecessors {
+        predecessorIndexes.append(predecessor.index)
+      }
+      if predecessorIndexes.count != 2 {
+        return false
+      }
+      if !((predecessorIndexes[0] == 1 && predecessorIndexes[1] == 2) ||
+           (predecessorIndexes[0] == 2 && predecessorIndexes[1] == 1)) {
+        return false
+      }
+      let returnInst = block.terminator as? ReturnInst
+      if returnInst == nil {
+        return false
+      }
+    } else {
+      return false
+    }
+  }
+  if blocksCount != 4 {
+    return false
+  }
+  return true
+}
+
 let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-specialization") {
   (function: Function, context: FunctionPassContext) in
 
   guard !function.isDefinedExternally,
-        function.isAutodiffVJP,
-        function.blocks.singleElement != nil else {
+        function.isAutodiffVJP else {
+    return
+  }
+
+  let isSingleBB = function.blocks.singleElement != nil
+  if !isSingleBB && !isFunctionSimpleIfElse(function: function) {
     return
   }
   
