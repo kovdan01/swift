@@ -171,6 +171,21 @@ func isFunctionSimpleIfElse(function: Function) -> Bool {
   return true
 }
 
+struct EnumTypeAndCase {
+  var enumType : Type
+  var caseIdx : Int
+}
+
+// MYTODO: proper hash
+extension EnumTypeAndCase: Hashable {
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(1)
+  }
+}
+
+typealias ClosureInfoCFG = (closure: SingleValueInstruction, idxInEnumPayload: Int, capturedArgs: [Value], enumTypeAndCase: EnumTypeAndCase)
+typealias ClosureInfoWithApplyCFG = (closureInfo: ClosureInfoCFG, applyInPb: ApplyInst)
+
 let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-specialization") {
   (function: Function, context: FunctionPassContext) in
 
@@ -184,7 +199,11 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     return
   }
   
-  var remainingSpecializationRounds = 5
+
+  debugPrint("AAAAA AUTODIFF PASS BEGIN")
+
+  //var remainingSpecializationRounds = 5
+  var remainingSpecializationRounds = 1
 
   repeat {
     let callSiteOpt = gatherCallSite(in: function, context)
@@ -226,6 +245,7 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 
     remainingSpecializationRounds -= 1
   } while remainingSpecializationRounds > 0
+  debugPrint("AAAAA AUTODIFF PASS END")
 }
 
 // =========== Top-level functions ========== //
@@ -265,13 +285,18 @@ private func gatherCallSite(in caller: Function, _ context: FunctionPassContext)
   }
 
   var callSiteOpt = Optional<CallSite>(nil)
+  let isSingleBB = caller.blocks.singleElement != nil
 
   for inst in caller.instructions {
     if !convertedAndReabstractedClosures.contains(inst),
        let rootClosure = inst.asSupportedClosure
     {
-      updateCallSite(for: rootClosure, in: &callSiteOpt,
-                     convertedAndReabstractedClosures: &convertedAndReabstractedClosures, context)
+      if isSingleBB {
+        updateCallSite(for: rootClosure, in: &callSiteOpt,
+                       convertedAndReabstractedClosures: &convertedAndReabstractedClosures, context)
+      } else {
+        updateCallSiteCFG(for: rootClosure, in: &callSiteOpt, context)
+      }
     }
   }
 
@@ -363,20 +388,91 @@ private func rewriteApplyInstruction(using specializedCallee: Function, callSite
 
 // ===================== Utility functions and extensions ===================== //
 
+private func updateCallSiteCFG(for rootClosure: SingleValueInstruction,
+                               in callSiteOpt: inout Optional<CallSite>,
+                               _ context: FunctionPassContext) {
+  let tupleOpt = handleNonAppliesCFG(for: rootClosure, context)
+  if tupleOpt == nil {
+    return
+  }
+
+  let closureInfo = tupleOpt!.closureInfo
+  let pbApplyOperand = tupleOpt!.pbApplyOperand
+
+  guard let pbPAI = pbApplyOperand.instruction as? PartialApplyInst else {
+    return
+  }
+
+  guard let pb = pbPAI.referencedFunction else {
+    return
+  }
+
+  let argType = pbApplyOperand.value.type
+  var argIdxOpt = Optional<Int>(nil)
+  // MYTODO: make argIdx computation less fragile
+  for (idx, arg) in pb.arguments.enumerated() {
+    if arg.type == argType {
+      argIdxOpt = idx
+    }
+  }
+
+  let arg = pb.argument(at: argIdxOpt!)
+  if !arg.bridged.hasOneUse() {
+    return
+  }
+  let argFirstUse = arg.bridged.getFirstUse()
+  let possibleSwitchEnumInst = BridgedOperand(op: argFirstUse.op!).getUser().instruction
+  let optionalSwitchEnumInst = possibleSwitchEnumInst as? SwitchEnumInst
+  if optionalSwitchEnumInst == nil {
+    return
+  }
+
+  let succBB = optionalSwitchEnumInst!.getUniqueSuccessor(forCaseIndex: closureInfo.enumTypeAndCase.caseIdx)!
+  assert(succBB.arguments.count == 1)
+  var closureValInPbOpt = Optional<Value>(nil)
+  if succBB.arguments[0].bridged.hasOneUse() {
+    let possibleDestructureTupleInst = BridgedOperand(op: succBB.arguments[0].bridged.getFirstUse().op!).getUser().instruction
+    let optionalDestructureTupleInst = possibleDestructureTupleInst as? DestructureTupleInst
+    assert(optionalDestructureTupleInst != nil)
+    closureValInPbOpt = optionalDestructureTupleInst!.results[closureInfo.idxInEnumPayload]
+  } else {
+    for use in succBB.arguments[0].uses {
+      let tupleExtractInstOpt = use.instruction as? TupleExtractInst
+      if tupleExtractInstOpt == nil {
+        continue
+      }
+      if tupleExtractInstOpt!.fieldIndex == closureInfo.idxInEnumPayload {
+        assert(closureValInPbOpt == nil)
+        closureValInPbOpt = tupleExtractInstOpt!.results[0]
+      }
+    }
+  }
+  assert(closureValInPbOpt != nil)
+
+  var applyInPbOpt = Optional<ApplyInst>(nil)
+  for use in closureValInPbOpt!.uses {
+    let applyInstOpt = use.instruction as? ApplyInst
+    if applyInstOpt == nil {
+      continue
+    }
+    assert(applyInPbOpt == nil)
+    applyInPbOpt = applyInstOpt!
+  }
+  assert(applyInPbOpt != nil)
+
+  if callSiteOpt == nil {
+    callSiteOpt = CallSite(applySite: pbPAI)
+  } else {
+    assert(callSiteOpt!.applySite == pbPAI)
+  }
+
+  callSiteOpt!.closureInfosWithApplyCFG.append((closureInfo: closureInfo, applyInPb: applyInPbOpt!))
+}
+
 private func updateCallSite(for rootClosure: SingleValueInstruction,
                             in callSiteOpt: inout Optional<CallSite>,
                             convertedAndReabstractedClosures: inout InstructionSet,
                             _ context: FunctionPassContext) {
-  var rootClosurePossibleLiveRange = InstructionRange(begin: rootClosure, context)
-  defer {
-    rootClosurePossibleLiveRange.deinitialize()
-  }
-
-  var rootClosureApplies = OperandWorklist(context)                            
-  defer {
-    rootClosureApplies.deinitialize()
-  }
-
   // A "root" closure undergoing conversions and/or reabstractions has additional restrictions placed upon it, in order
   // for a call site to be specialized against it. We handle conversion/reabstraction uses before we handle apply uses
   // to gather the parameters required to evaluate these restrictions or to skip call site uses of "unsupported" 
@@ -391,8 +487,18 @@ private func updateCallSite(for rootClosure: SingleValueInstruction,
   //    bases for it will be available in the specialized callee in case the call site is specialized against this root
   //    closure.
 
+  var rootClosurePossibleLiveRange = InstructionRange(begin: rootClosure, context)
+  defer {
+    rootClosurePossibleLiveRange.deinitialize()
+  }
+
+  var rootClosureApplies = OperandWorklist(context)
+  defer {
+    rootClosureApplies.deinitialize()
+  }
+
   let (foundUnexpectedUse, haveUsedReabstraction) = 
-    handleNonApplies(for: rootClosure, rootClosureApplies: &rootClosureApplies,
+       handleNonApplies(for: rootClosure, rootClosureApplies: &rootClosureApplies,
                      rootClosurePossibleLiveRange: &rootClosurePossibleLiveRange, context);
 
 
@@ -413,6 +519,88 @@ private func updateCallSite(for rootClosure: SingleValueInstruction,
   finalizeCallSite(for: rootClosure, in: &callSiteOpt,
                    rootClosurePossibleLiveRange: rootClosurePossibleLiveRange,
                    intermediateClosureArgDescriptorData: intermediateClosureArgDescriptorData, context)
+}
+
+private func handleNonAppliesCFG(for rootClosure: SingleValueInstruction,
+                                 _ context: FunctionPassContext)
+  -> Optional<(closureInfo: ClosureInfoCFG, pbApplyOperand: Operand)>
+{
+  var foundUnexpectedUse = false
+
+  var rootClosureConversionsAndReabstractions = OperandWorklist(context)
+  rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: rootClosure.uses)
+  defer {
+    rootClosureConversionsAndReabstractions.deinitialize()
+  }
+
+  var closureInfoOpt = Optional<ClosureInfoCFG>(nil)
+  var pbApplyOperandOpt = Optional<Operand>(nil)
+
+  while let use = rootClosureConversionsAndReabstractions.pop() {
+    switch use.instruction {
+    case let pai as PartialApplyInst:
+      assert(pai.isPullbackInResultOfAutodiffVJP)
+      assert(pbApplyOperandOpt == nil)
+      pbApplyOperandOpt = use
+
+    case let ti as TupleInst:
+      if ti.parentFunction.isAutodiffVJP,
+         let returnInst = ti.parentFunction.returnInstruction,
+         ti == returnInst.returnedValue
+      {
+        // This is the pullback closure returned from an Autodiff VJP and we don't need to handle it.
+      } else if rootClosure.parentFunction.blocks.singleElement == nil {
+        if !ti.bridged.hasOneUse() {
+          return nil
+        }
+        let tupleFirstUse = ti.bridged.getFirstUse()
+        let possibleEnumInst = BridgedOperand(op: tupleFirstUse.op!).getUser().instruction
+        let optionalEI = possibleEnumInst as? EnumInst
+        if optionalEI == nil {
+          return nil
+        }
+        let ei = optionalEI!
+        if !ei.bridged.hasOneUse() {
+          return nil
+        }
+        let firstEnumUse = ei.bridged.getFirstUse()
+        let possibleBranchInst = BridgedOperand(op: firstEnumUse.op!).getUser().instruction
+        let optionalBI = possibleBranchInst as? BranchInst
+        if optionalBI == nil {
+          return nil
+        }
+        let bi = optionalBI!
+
+        let succBBArg = bi.getArgument(for: Operand(bridged: BridgedOperand(op: firstEnumUse.op!)))
+
+        if use.value != rootClosure {
+          return nil
+        }
+        rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: succBBArg.uses)
+        var capturedArgs = Array<Value>()
+        var idxInEnumPayload = use.index
+        var paiOpt = rootClosure as? PartialApplyInst
+        if paiOpt != nil {
+          for argOp in paiOpt!.argumentOperands {
+            capturedArgs.append(argOp.value)
+          }
+        }
+        assert(closureInfoOpt == nil)
+        let enumTypeAndCase = EnumTypeAndCase(enumType: ei.type, caseIdx: ei.caseIndex)
+        closureInfoOpt = (closure: rootClosure, idxInEnumPayload: idxInEnumPayload, capturedArgs: capturedArgs, enumTypeAndCase: enumTypeAndCase)
+      } else {
+        fallthrough
+      }
+
+    default:
+      return nil
+    }
+  }
+  assert((closureInfoOpt == nil) == (pbApplyOperandOpt == nil))
+  if closureInfoOpt == nil {
+    return nil
+  }
+  return (closureInfo: closureInfoOpt!, pbApplyOperand: pbApplyOperandOpt!)
 }
 
 /// Handles all non-apply direct and transitive uses of `rootClosure`.
@@ -525,44 +713,6 @@ private func handleNonApplies(for rootClosure: SingleValueInstruction,
          ti == returnInst.returnedValue
       {
         // This is the pullback closure returned from an Autodiff VJP and we don't need to handle it.
-//      } else if rootClosure.parentFunction.blocks.singleElement == nil {
-//        //assert(ti.bridged.hasOneUse())
-//        if !ti.bridged.hasOneUse() {
-//          foundUnexpectedUse = true
-//          log("Found unexpected direct or transitive user of root closure MULTIPLE BB 00")
-//          return (foundUnexpectedUse, haveUsedReabstraction)
-//        }
-//
-//        let tupleFirstUse = ti.bridged.getFirstUse()
-//        // TODO: proper work with optionals
-//        let possibleEnumInst = BridgedOperand(op: tupleFirstUse.op!).getUser().instruction
-//        let optionalEI = possibleEnumInst as? EnumInst
-//        if optionalEI == nil {
-//          foundUnexpectedUse = true
-//          log("Found unexpected direct or transitive user of root closure MULTIPLE BB 01")
-//          return (foundUnexpectedUse, haveUsedReabstraction)
-//        }
-//        let ei = optionalEI!
-//        if !ei.bridged.hasOneUse() {
-//          foundUnexpectedUse = true
-//          log("Found unexpected direct or transitive user of root closure MULTIPLE BB 02")
-//          return (foundUnexpectedUse, haveUsedReabstraction)
-//        }
-//        let firstEnumUse = ei.bridged.getFirstUse()
-//        // TODO: proper work with optionals
-//        let possibleBranchInst = BridgedOperand(op: firstEnumUse.op!).getUser().instruction
-//        let optionalBI = possibleBranchInst as? BranchInst
-//        if optionalBI == nil {
-//          foundUnexpectedUse = true
-//          log("Found unexpected direct or transitive user of root closure MULTIPLE BB 03")
-//          return (foundUnexpectedUse, haveUsedReabstraction)
-//        }
-//        let bi = optionalBI!
-//
-//        let succBBArg = bi.getArgument(for: Operand(bridged: BridgedOperand(op: firstEnumUse.op!)))
-//
-//        rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: succBBArg.uses)
-//        rootClosureEnumsLocal.append((enumType: ei.type, enumCase: ei.caseIndex, closureIdxInTuple: use.index))
       } else {
         fallthrough
       }
@@ -1393,26 +1543,11 @@ private struct ClosureArgDescriptor {
   }
 }
 
-struct EnumTypeAndCase {
-  var enumType : Type
-  var caseIdx : Int
-}
-
-// MYTODO: proper hash
-extension EnumTypeAndCase: Hashable {
-  public func hash(into hasher: inout Hasher) {
-    hasher.combine(1)
-  }
-}
-
-typealias ClosureInfoCFG = (closure: SingleValueInstruction, idxInEnumPayload: Int, capturedArgs: [Value], applyInPb: ApplySite)
-typealias EnumToClosureInfoCFG = Dictionary<EnumTypeAndCase, (closureInfos: [ClosureInfoCFG], pbBB: BasicBlock)>
-
 /// Represents a callsite containing one or more closure arguments.
 private struct CallSite {
   let applySite: ApplySite
   var closureArgDescriptors: [ClosureArgDescriptor] = []
-  var enumToClosureInfoCFG : EnumToClosureInfoCFG = [:]
+  var closureInfosWithApplyCFG: [ClosureInfoWithApplyCFG] = []
 
   init(applySite: ApplySite) {
     self.applySite = applySite

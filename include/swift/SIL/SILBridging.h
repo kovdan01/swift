@@ -332,6 +332,7 @@ struct BridgedValue {
   BRIDGED_INLINE swift::ValueBase * _Nonnull getSILValue() const;
   BridgedOwnedString getDebugDescription() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE OptionalBridgedOperand getFirstUse() const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE SwiftBool hasOneUse() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType getType() const;
   BRIDGED_INLINE Ownership getOwnership() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedFunction SILUndef_getParentFunction() const;
