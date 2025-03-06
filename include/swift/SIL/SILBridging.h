@@ -297,8 +297,8 @@ struct BridgedType {
   BRIDGED_INLINE BridgedArgumentConvention getCalleeConvention() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType getSuperClassType() const;
 
-  SWIFT_IMPORT_UNSAFE BridgedType
-  specializeBranchTracingEnum(BridgedFunction topVjp) const;
+  // SWIFT_IMPORT_UNSAFE BridgedType
+  // specializeBranchTracingEnum(BridgedFunction topVjp) const;
 };
 
 // SIL Bridging
@@ -923,11 +923,15 @@ struct BridgedBasicBlock {
   BRIDGED_INLINE SwiftInt getNumArguments() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument getArgument(SwiftInt index) const;
   SWIFT_IMPORT_UNSAFE  BRIDGED_INLINE BridgedArgument addBlockArgument(BridgedType type, BridgedValue::Ownership ownership) const;
+  SWIFT_IMPORT_UNSAFE BridgedArgument
+  recreateTupleBlockArgument(SwiftInt idxInEnumPayload, SwiftInt enumIdx,
+                             BridgedInstruction closure) const;
   SWIFT_IMPORT_UNSAFE  BRIDGED_INLINE BridgedArgument addFunctionArgument(BridgedType type) const;
   BRIDGED_INLINE void eraseArgument(SwiftInt index) const;
   BRIDGED_INLINE void moveAllInstructionsToBegin(BridgedBasicBlock dest) const;
   BRIDGED_INLINE void moveAllInstructionsToEnd(BridgedBasicBlock dest) const;
   BRIDGED_INLINE void moveArgumentsTo(BridgedBasicBlock dest) const;
+  BRIDGED_INLINE void eraseInstruction(BridgedInstruction inst) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE OptionalBridgedSuccessor getFirstPred() const;
 };
 
@@ -1184,6 +1188,9 @@ struct BridgedBuilder{
                                           BridgedDeclRef member, BridgedType methodType) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createReturn(BridgedValue op) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createThrow(BridgedValue op) const;
+  SWIFT_IMPORT_UNSAFE BridgedType rewriteBranchTracingEnum(
+      BridgedType enumType, BridgedInstruction closure0, SwiftInt idx0,
+      BridgedInstruction closure1, SwiftInt idx1, BridgedFunction topVjp) const;
   SWIFT_IMPORT_UNSAFE BridgedInstruction createSwitchEnumInst(BridgedValue enumVal,
                                           OptionalBridgedBasicBlock defaultBlock,
                                           const void * _Nullable enumCases, SwiftInt numEnumCases) const;
