@@ -1721,6 +1721,10 @@ void BridgedBasicBlock::moveArgumentsTo(BridgedBasicBlock dest) const {
   dest.unbridged()->moveArgumentList(unbridged());
 }
 
+void BridgedBasicBlock::eraseInstruction(BridgedInstruction inst) const {
+  unbridged()->erase(inst.unbridged());
+}
+
 OptionalBridgedSuccessor BridgedBasicBlock::getFirstPred() const {
   return {unbridged()->pred_begin().getSuccessorRef()};
 }
