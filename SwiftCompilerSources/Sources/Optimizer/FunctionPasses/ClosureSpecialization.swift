@@ -253,6 +253,14 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
         function.fixStackNesting(context)
       }
     } else {
+      if callSite.closureInfosWithApplyCFG.count != 2 {
+        break
+      }
+      if callSite.closureInfosWithApplyCFG[0].closureInfo.enumTypeAndCase.caseIdx ==
+         callSite.closureInfosWithApplyCFG[1].closureInfo.enumTypeAndCase.caseIdx {
+        break
+      }
+
       var (specializedFunction, alreadyExists) =
           getOrCreateSpecializedFunctionCFG(basedOn: callSite, enumDict: &enumDict, context)
 
