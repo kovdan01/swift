@@ -253,14 +253,16 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
         function.fixStackNesting(context)
       }
     } else {
-      //var (specializedFunction, alreadyExists) =
-      getOrCreateSpecializedFunctionCFG(basedOn: callSite, enumDict: &enumDict, context)
+      var (specializedFunction, alreadyExists) =
+          getOrCreateSpecializedFunctionCFG(basedOn: callSite, enumDict: &enumDict, context)
 
-      //if !alreadyExists {
-      //  context.notifyNewFunction(function: specializedFunction, derivedFrom: callSite.applyCallee)
-      //}
+      if !alreadyExists {
+        context.notifyNewFunction(function: specializedFunction, derivedFrom: callSite.applyCallee)
+      }
 
-      //rewriteApplyInstruction(using: specializedFunction, callSite: callSite, context)
+      rewriteApplyInstructionCFG(using: specializedFunction, callSite: callSite,
+                                 enumType: callSite.closureInfosWithApplyCFG[0].closureInfo.enumTypeAndCase.enumType,
+                                 enumDict: enumDict, context: context)
     }
 
     remainingSpecializationRounds -= 1
@@ -349,7 +351,7 @@ private func getOrCreateSpecializedFunction(basedOn callSite: CallSite, _ contex
 }
 
 private func getOrCreateSpecializedFunctionCFG(basedOn callSite: CallSite, enumDict: inout EnumDict, _ context: FunctionPassContext)
-  -> Optional<(function: Function, alreadyExists: Bool)>
+  -> (function: Function, alreadyExists: Bool)
 {
   assert(callSite.closureArgDescriptors.count == 0)
   let closureInfos = callSite.closureInfosWithApplyCFG
@@ -357,7 +359,7 @@ private func getOrCreateSpecializedFunctionCFG(basedOn callSite: CallSite, enumD
   assert(closureInfos[0].closureInfo.enumTypeAndCase.enumType == closureInfos[1].closureInfo.enumTypeAndCase.enumType)
   let enumType = closureInfos[0].closureInfo.enumTypeAndCase.enumType
 
-  let specializedPbName = callSite.specializedCalleeNameCFG(enumType: enumType, context)
+  let specializedPbName = callSite.specializedCalleeNameCFG(context)
   if let specializedPb = context.lookupFunction(name: specializedPbName) {
     return (specializedPb, true)
   }
@@ -379,6 +381,204 @@ private func getOrCreateSpecializedFunctionCFG(basedOn callSite: CallSite, enumD
   debugPrint(specializedPb)
 
   return (specializedPb, false)
+}
+
+private func rewriteApplyInstructionCFG(using specializedCallee: Function, callSite: CallSite,
+                                     enumType: Type, enumDict: EnumDict,
+                                     context: FunctionPassContext) {
+  var builderSucc = Builder(atEndOf: callSite.applySite.parentBlock, location: callSite.applySite.parentBlock.instructions.last!.location, context)
+  // MYTODO: enums set not create each time
+  // MYTODO: maybe each enum might be re-written multiple times
+  assert(enumDict[enumType] != nil)
+  let newEnumType = enumDict[enumType]!
+
+  var vjpToInlineOpt = Optional<Function>(nil)
+
+  var applyArgOpt = Optional<Value>(nil)
+  for (argIdx, arg) in callSite.applySite.arguments.enumerated() {
+    assert(argIdx == 0)
+    assert(applyArgOpt == nil)
+    applyArgOpt = arg
+  }
+  assert(applyArgOpt != nil)
+  let applyArg = applyArgOpt!
+
+  debugPrint("HHHHHH 00")
+  let bb = callSite.applySite.parentBlock
+  debugPrint("HHHHHH 01")
+  let preds = bb.predecessors
+  debugPrint("HHHHHH 02")
+
+  var vjpsToInline = Array<Function>()
+
+  for pred in preds {
+    debugPrint("HHHHHH 03")
+    let brInst = pred.instructions.last! as! BranchInst
+    debugPrint("HHHHHH 04")
+    var enumIdxInBranch = Optional<Int>(nil)
+    debugPrint("HHHHHH 05")
+    for (targetBBArgIdx, targetBBArg) in brInst.targetBlock.arguments.enumerated() {
+      let argType = targetBBArg.bridged.getType().type
+      if argType == enumType {
+        assert(enumIdxInBranch == nil)
+        enumIdxInBranch = targetBBArgIdx
+      }
+    }
+    debugPrint("HHHHHH 06")
+    assert(enumIdxInBranch != nil)
+    debugPrint("HHHHHH 07")
+    let enumInstOld = brInst.operands[enumIdxInBranch!].value.definingInstruction! as! EnumInst
+    debugPrint("HHHHHH 08")
+    let oldPayload = enumInstOld.payload! as! TupleInst
+    debugPrint("HHHHHH 09")
+
+    // MYTODO: for some reason fail, but this is partial apply
+    // MYTODO: Found a null pointer in a value of type
+    // MYTODO: thin to thick
+    var idxInPayload = Optional<Int>(nil)
+    for closureInfo in callSite.closureInfosWithApplyCFG {
+      if closureInfo.closureInfo.closure.parentBlock == pred {
+        assert(idxInPayload == nil)
+        idxInPayload = closureInfo.closureInfo.idxInEnumPayload
+      }
+    }
+    assert(idxInPayload != nil)
+    let paiOrThinToThickInstr = oldPayload.operands[idxInPayload!].value.definingInstruction!
+    debugPrint("HHHHHH 10")
+    let maybeThinToThickInstr = paiOrThinToThickInstr as? ThinToThickFunctionInst
+    debugPrint("HHHHHH 11")
+    var optionalPAI = Optional<PartialApplyInst>(nil)
+    debugPrint("HHHHHH 12")
+    var optionalVJPToInline = Optional<Function>(nil)
+    debugPrint("HHHHHH 13")
+    if maybeThinToThickInstr == nil {
+      optionalPAI = paiOrThinToThickInstr as! PartialApplyInst
+      let fri = optionalPAI!.operands[0].value.definingInstruction! as! FunctionRefInst
+      optionalVJPToInline = fri.referencedFunction
+    } else {
+      let fri = maybeThinToThickInstr!.operands[0].value.definingInstruction! as! FunctionRefInst
+      optionalVJPToInline = fri.referencedFunction
+//        continue
+    }
+    debugPrint("HHHHHH 14")
+    // MYTODO: support thin to thick
+    if optionalPAI != nil {
+      let pai = optionalPAI!
+      var tupleValues = Array<Value>()
+      for (opIdx, op) in pai.operands.enumerated() {
+        if opIdx == 0 {
+          continue
+        }
+        tupleValues.append(op.value)
+      }
+      let builderPred = Builder(before: pai, context)
+      let tuple = builderPred.createTuple(elements: tupleValues)
+
+      var newPayloadValues = Array<Value>()
+      for (opIdx, op) in oldPayload.operands.enumerated() {
+        if opIdx == idxInPayload! {
+          newPayloadValues.append(tuple)
+          continue
+        }
+        newPayloadValues.append(op.value)
+      }
+      let newPayload = builderPred.createTupleWithPredecessor(elements: newPayloadValues)
+      let enumInstNew = builderPred.createEnum(caseIndex: enumInstOld.caseIndex, payload: newPayload, enumType: newEnumType)
+
+      let vjpToInline = optionalVJPToInline!
+
+      var newBrOperandValues = Array<Value>()
+      for op in brInst.operands {
+        if brInst.getArgument(for: op).bridged.getType().type == enumType {
+          newBrOperandValues.append(enumInstNew)
+        } else {
+          newBrOperandValues.append(op.value)
+        }
+      }
+      let builderBr = Builder(before: brInst, context)
+      let newBrInst = builderBr.createBranch(to: brInst.targetBlock, arguments: newBrOperandValues)
+
+      vjpsToInline.append(vjpToInline)
+      pred.bridged.eraseInstruction(brInst.bridged)
+      pred.bridged.eraseInstruction(enumInstOld.bridged)
+      pred.bridged.eraseInstruction(oldPayload.bridged)
+      pred.bridged.eraseInstruction(pai.bridged)
+    } else { // thin to thick
+      let builderPred = Builder(before: enumInstOld, context)
+      let enumInstNew = builderPred.createEnum(caseIndex: enumInstOld.caseIndex, payload: oldPayload, enumType: newEnumType)
+
+      var newBrOperandValues = Array<Value>()
+      for op in brInst.operands {
+        if brInst.getArgument(for: op).bridged.getType().type == enumType {
+          newBrOperandValues.append(enumInstNew)
+        } else {
+          newBrOperandValues.append(op.value)
+        }
+      }
+      let builderBr = Builder(before: brInst, context)
+      let newBrInst = builderBr.createBranch(to: brInst.targetBlock, arguments: newBrOperandValues)
+
+      vjpsToInline.append(optionalVJPToInline!)
+      pred.bridged.eraseInstruction(brInst.bridged)
+      pred.bridged.eraseInstruction(enumInstOld.bridged)
+    }
+  }
+//    assert(vjpToInlineOpt == nil)
+//    vjpToInlineOpt = vjpsToInline[0]
+//    // MYTODO: support arbitrary vjps; is it possible w/o creating multiple basic blocks?
+//    for e in vjpsToInline {
+//      assert(e == vjpToInlineOpt!)
+//    }
+  let succBB = callSite.applySite.parentBlock
+  // MYTODO function ref to spec new pullback
+
+  let pai = callSite.applySite as! PartialApplyInst
+  assert(pai.numArguments == 1)
+  let paiFunction = pai.operands[0].value
+  let paiConvention = pai.calleeConvention
+  let paiHasUnknownResultIsolation = pai.hasUnknownResultIsolation
+  let paiSubstitutionMap = SubstitutionMap(bridged: pai.bridged.getSubstitutionMap())
+  let paiIsOnStack = pai.isOnStack
+
+  let returnInst = succBB.terminator as! ReturnInst
+  let tupleInst = returnInst.returnedValue.definingInstruction as! TupleInst
+  let tupleElem = tupleInst.operands[0].value
+  let functionRefInst = paiFunction as! FunctionRefInst
+
+  debugPrint("AAAAA SUCC BB BEGIN")
+  debugPrint(succBB)
+  debugPrint("AAAAA SUCC BB MIDDLE 1")
+  succBB.bridged.eraseInstruction(returnInst.bridged)
+// MYTODO: assert no uses
+//    assert(tupleInst.uses.makeIterator().currentOpPtr == nil)
+  succBB.bridged.eraseInstruction(tupleInst.bridged)
+//    assert(pai.uses.makeIterator().currentOpPtr == nil)
+  succBB.bridged.eraseInstruction(pai.bridged)
+  debugPrint(succBB)
+  debugPrint("AAAAA SUCC BB MIDDLE 2 0")
+  let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
+  debugPrint("AAAAA SUCC BB MIDDLE 2 1")
+  functionRefInst.replace(with: newFunctionRefInst, context)
+  debugPrint(newFunctionRefInst)
+  debugPrint("AAAAA SUCC BB MIDDLE 3")
+  debugPrint(succBB)
+  debugPrint("AAAAA SUCC BB MIDDLE 4")
+  for (argIndex, arg) in succBB.arguments.enumerated() {
+    if arg.type == enumType {
+      //assert(argIndex == succBB.arguments.count - 1)
+      let newBBArg = succBB.bridged.recreateEnumBlockArgument(argIndex, newEnumType.bridged).argument
+      let newPai : PartialApplyInst = builderSucc.createPartialApply(function: newFunctionRefInst, substitutionMap: paiSubstitutionMap,
+                                                  capturedArguments: [newBBArg], calleeConvention: paiConvention,
+                                                  hasUnknownResultIsolation: paiHasUnknownResultIsolation, isOnStack: paiIsOnStack)
+      let newTupleInst = builderSucc.createTuple(elements: [tupleElem, newPai])
+      let newReturnInst = builderSucc.createReturn(of: newTupleInst)
+      break
+    }
+  }
+  debugPrint("AAAAA SUCC BB MIDDLE 6")
+  debugPrint(succBB)
+  debugPrint("AAAAA SUCC BB END")
+//  return vjpToInlineOpt!
 }
 
 private func rewriteApplyInstruction(using specializedCallee: Function, callSite: CallSite, 
@@ -1837,9 +2037,23 @@ private struct CallSite {
                           from: applyCallee)
   }
 
-  func specializedCalleeNameCFG(enumType: Type, _ context: FunctionPassContext) -> String {
-    return applyCallee.name.string + "_specialized_" + enumType.description
+  func specializedCalleeNameCFG(_ context: FunctionPassContext) -> String {
+    // MYTODO: this should be enums and not closures
+//    let enumArgs = Array(self.closureInfosWithApplyCFG.map { $0.closureInfo.closure })
+//    let enumIndices = Array(self.closureInfosWithApplyCFG.map { $0.closureInfo.idxInEnumPayload })
+
+    //return context.mangle(withEnumArguments: enumArgs, enumArgIndices: enumIndices,
+    return context.mangle(withEnumArguments: [closureInfosWithApplyCFG[0].closureInfo.closure], enumArgIndices: [0],
+                          from: applyCallee)
   }
+
+  //func specializedCalleeNameCFG(enumType: Type, _ context: FunctionPassContext) -> String {
+  //  let closureArgs = Array(self.closureArgDescriptors.map { $0.closure })
+  //  let closureIndices = Array(self.closureArgDescriptors.map { $0.closureArgIndex })
+
+  //  return context.mangle(withClosureArguments: closureArgs, closureArgIndices: closureIndices, 
+  //                        from: applyCallee)
+  //}
 }
 
 // ===================== Unit tests ===================== //

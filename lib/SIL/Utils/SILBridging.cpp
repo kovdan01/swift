@@ -216,6 +216,34 @@ static EnumDecl *cloneEnumDecl(EnumDecl *oldED) {
   return ed;
 }
 
+BridgedArgument
+BridgedBasicBlock::recreateEnumBlockArgument(SwiftInt index,
+                                             BridgedType type) const {
+  swift::ValueOwnershipKind oldOwnership =
+      unbridged()->getArgument(index)->getOwnershipKind();
+  // BridgedValue::Ownership ownership;
+  // switch (oldOwnership) {
+  //  case swift::OwnershipKind::Any:
+  //    assert(false);
+  //    break;
+  //  case swift::OwnershipKind::Unowned:
+  //    ownership = BridgedValue::Ownership::Unowned;
+  //    break;
+  //  case swift::OwnershipKind::Owned:
+  //    ownership = BridgedValue::Ownership::Owned;
+  //    break;
+  //  case swift::OwnershipKind::Guaranteed:
+  //    ownership = BridgedValue::Ownership::Guaranteed;
+  //    break;
+  //  case swift::OwnershipKind::None:
+  //    ownership = BridgedValue::Ownership::None;
+  //    break;
+  //  }
+  auto x =
+      unbridged()->replacePhiArgument(index, type.unbridged(), oldOwnership);
+  return {x};
+}
+
 BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(
     SwiftInt idxInEnumPayload, SwiftInt enumIdx,
     BridgedInstruction closure) const {
