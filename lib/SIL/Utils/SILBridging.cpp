@@ -183,62 +183,11 @@ static Type getPAICapturedArgTypes(const PartialApplyInst *pai,
   return TupleType::get(paramTuple, ctx);
 }
 
-static EnumDecl *cloneEnumDecl(EnumDecl *oldED) {
-  assert(oldED && "Expected valid enum type");
-
-  ASTContext &astContext = oldED->getASTContext();
-  Twine edNameStr = oldED->getNameStr() + "_specialized";
-  Identifier edName = astContext.getIdentifier(edNameStr.str());
-
-  auto *ed = new (astContext) EnumDecl(
-      /*EnumLoc*/ SourceLoc(), /*Name*/ edName, /*NameLoc*/ SourceLoc(),
-      /*Inherited*/ {}, /*GenericParams*/ nullptr,
-      /*DC*/
-      oldED->getDeclContext());
-  ed->setImplicit();
-
-  for (EnumCaseDecl *oldECD : oldED->getAllCases()) {
-    assert(oldECD->getElements().size() == 1);
-    EnumElementDecl *oldEED = oldECD->getElements().front();
-    auto *newPL = ParameterList::clone(astContext, oldEED->getParameterList());
-    auto *newEED = new (astContext) EnumElementDecl(
-        /*IdentifierLoc*/ SourceLoc(),
-        DeclName(astContext.getIdentifier(oldEED->getNameStr())), newPL,
-        SourceLoc(), /*RawValueExpr*/ nullptr, ed);
-    newEED->setImplicit();
-    auto *newECD = EnumCaseDecl::create(
-        /*CaseLoc*/ SourceLoc(), {newEED}, ed);
-    newECD->setImplicit();
-    ed->addMember(newEED);
-    // ed->addMember(newECD);
-  }
-
-  return ed;
-}
-
 BridgedArgument
 BridgedBasicBlock::recreateEnumBlockArgument(SwiftInt index,
                                              BridgedType type) const {
   swift::ValueOwnershipKind oldOwnership =
       unbridged()->getArgument(index)->getOwnershipKind();
-  // BridgedValue::Ownership ownership;
-  // switch (oldOwnership) {
-  //  case swift::OwnershipKind::Any:
-  //    assert(false);
-  //    break;
-  //  case swift::OwnershipKind::Unowned:
-  //    ownership = BridgedValue::Ownership::Unowned;
-  //    break;
-  //  case swift::OwnershipKind::Owned:
-  //    ownership = BridgedValue::Ownership::Owned;
-  //    break;
-  //  case swift::OwnershipKind::Guaranteed:
-  //    ownership = BridgedValue::Ownership::Guaranteed;
-  //    break;
-  //  case swift::OwnershipKind::None:
-  //    ownership = BridgedValue::Ownership::None;
-  //    break;
-  //  }
   auto x =
       unbridged()->replacePhiArgument(index, type.unbridged(), oldOwnership);
   return {x};
@@ -261,14 +210,9 @@ BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(
     }
 
     if (auto *pai = dyn_cast<PartialApplyInst>(closure.unbridged())) {
-      llvm::errs() << "AAAAAA PAI BEGIN\n";
-      llvm::errs() << getPAICapturedArgTypes(
-          pai, unbridged()->getModule().getASTContext());
-      llvm::errs() << "\nAAAAAA PAI END\n";
       newTupleElTypes.emplace_back(getPAICapturedArgTypes(
           pai, unbridged()->getModule().getASTContext()));
     } else {
-      llvm::errs() << "AAAAAA NOT PAI\n";
       newTupleElTypes.emplace_back(
           TupleType::get({}, unbridged()->getModule().getASTContext()));
     }
@@ -787,15 +731,8 @@ BridgedType BridgedBuilder::rewriteBranchTracingEnum(
     auto *newParamDecl = ParamDecl::cloneWithoutType(astContext, &oldParamDecl);
     newParamDecl->setInterfaceType(newTupleType);
 
-    // SmallVector<ParamDecl*, 4> params;
-    // params.reserve(oldEED->getParameterList()->size());
-    // for (auto p : *oldEED->getParameterList()) {
-    //   params.push_back(ParamDecl::clone(astContext, p));
-    // }
     auto *newPL = ParameterList::create(astContext, {newParamDecl});
 
-    // auto *newPL = ParameterList::clone(astContext,
-    // oldEED->getParameterList());
     auto *newEED = new (astContext) EnumElementDecl(
         /*IdentifierLoc*/ SourceLoc(),
         DeclName(astContext.getIdentifier(oldEED->getNameStr())), newPL,
@@ -805,61 +742,7 @@ BridgedType BridgedBuilder::rewriteBranchTracingEnum(
         /*CaseLoc*/ SourceLoc(), {newEED}, ed);
     newECD->setImplicit();
     ed->addMember(newEED);
-    // ed->addMember(newECD);
-
-    llvm::errs() << "\n\nOLD IDX = " << enumIdx
-                 << ", NEW IDX = " << module.getCaseIndex(oldEED) << "\n\n";
   }
-
-  // for (EnumCaseDecl *ecd : ed->getAllCases()) {
-  //   assert(ecd->getElements().size() == 1 && "MYTODO");
-  //   EnumElementDecl *eed = ecd->getElements().front();
-
-  // for (EnumElementDecl *eed : ed->getAllElements()) {
-  //   unsigned enumIdx = module.getCaseIndex(eed);
-  //   assert((enumIdx == 0 || enumIdx == 1) && "MYTODO");
-
-  //   unsigned idxInPayload = -1;
-  //   SILInstruction *closure = nullptr;
-  //   switch (enumIdx) {
-  //   case 0:
-  //     idxInPayload = idx0;
-  //     closure = closure0.unbridged();
-  //     break;
-  //   case 1:
-  //     idxInPayload = idx1;
-  //     closure = closure1.unbridged();
-  //     break;
-  //   default:
-  //     assert(false);
-  //   }
-
-  //   assert(eed->getParameterList()->size() == 1 && "MYTODO");
-  //   ParamDecl &p = *eed->getParameterList()->front();
-
-  //   auto *tt = cast<TupleType>(p.getInterfaceType().getPointer());
-  //   SmallVector<TupleTypeElt, 4> newElements;
-  //   newElements.reserve(tt->getNumElements());
-
-  //   for (unsigned i = 0; i < tt->getNumElements(); ++i) {
-  //     Type type;
-  //     if (i == idxInPayload) {
-  //       if (auto *PAI = dyn_cast<PartialApplyInst>(closure)) {
-  //         type = getPAICapturedArgTypes(PAI, astContext);
-  //       } else {
-  //         type = TupleType::get({}, astContext);
-  //       }
-  //     } else {
-  //       type = tt->getElementType(i);
-  //     }
-  //     Identifier label = tt->getElement(i).getName();
-  //     newElements.emplace_back(type, label);
-  //   }
-
-  //   Type newTupleType =
-  //       TupleType::get(newElements, unbridged().getASTContext());
-  //   p.setInterfaceType(newTupleType);
-  // }
 
   ed->setAccess(AccessLevel::Public);
   auto &file =
@@ -869,15 +752,6 @@ BridgedType BridgedBuilder::rewriteBranchTracingEnum(
 
   auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
   Lowering::AbstractionPattern pattern(traceDeclType);
-
-  llvm::errs() << "\nAAAAA OLD ENUM BEGIN\n";
-  enumType.unbridged().getEnumOrBoundGenericEnum()->print(llvm::errs());
-  llvm::errs() << "\nAAAAA OLD ENUM END\n";
-  llvm::errs() << "\nAAAAA NEW ENUM BEGIN\n";
-  ed->print(llvm::errs());
-  llvm::errs() << "\nAAAAA NEW ENUM MIDDLE\n";
-  traceDeclType->print(llvm::errs());
-  llvm::errs() << "\nAAAAA NEW ENUM END\n";
 
   return unbridged().getModule().Types.getLoweredType(
       pattern, traceDeclType, TypeExpansionContext::minimal());

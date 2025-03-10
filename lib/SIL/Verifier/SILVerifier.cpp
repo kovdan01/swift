@@ -5520,18 +5520,9 @@ public:
           // trivial move only wrapped types earlier in the pipeline than
           // non-trivial types.
           if (bbArgTy.isTrivial(F)) {
-            llvm::errs() << "\n\nBBBB 00 BEGIN\n"
-                         << eltArgTy << "\nBBBB 00 MIDDLE\n"
-                         << bbArgTy << "\nBBBB 00 END\n\n";
             require(eltArgTy == bbArgTy.copyingMoveOnlyWrapper(eltArgTy),
                     "switch_enum destination bbarg must match case arg type");
           } else {
-
-            llvm::errs() << "\n\nBBBB 01 BEGIN\n" << eltArgTy << "\n";
-            elt->print(llvm::errs());
-            llvm::errs() << "\nBBBB 01 MIDDLE\n"
-                         << bbArgTy << "\n"
-                         << dest->getDebugID() << "\nBBBB 01 END\n\n";
             require(eltArgTy == bbArgTy,
                     "switch_enum destination bbarg must match case arg type");
           }

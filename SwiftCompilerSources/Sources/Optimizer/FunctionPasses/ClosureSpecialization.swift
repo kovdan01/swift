@@ -396,8 +396,9 @@ private func getOrCreateSpecializedFunctionCFG(basedOn callSite: CallSite, enumD
                                       let closureSpecCloner = SpecializationCloner(emptySpecializedFunction: emptySpecializedFunction, functionPassContext)
                                       closureSpecCloner.cloneAndSpecializeFunctionBodyCFG(using: callSite, enumType: enumType, enumDict: &enumDict)
                                    })
-
+  debugPrint("AAAAAA PB AFTER BEGIN")
   debugPrint(specializedPb)
+  debugPrint("AAAAAA PB AFTER END")
 
   return (specializedPb, false)
 }
@@ -422,20 +423,14 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
   assert(applyArgOpt != nil)
   let applyArg = applyArgOpt!
 
-  debugPrint("HHHHHH 00")
   let bb = callSite.applySite.parentBlock
-  debugPrint("HHHHHH 01")
   let preds = bb.predecessors
-  debugPrint("HHHHHH 02")
 
   var vjpsToInline = Array<Function>()
 
   for pred in preds {
-    debugPrint("HHHHHH 03")
     let brInst = pred.instructions.last! as! BranchInst
-    debugPrint("HHHHHH 04")
     var enumIdxInBranch = Optional<Int>(nil)
-    debugPrint("HHHHHH 05")
     for (targetBBArgIdx, targetBBArg) in brInst.targetBlock.arguments.enumerated() {
       let argType = targetBBArg.bridged.getType().type
       if argType == enumType {
@@ -443,13 +438,9 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
         enumIdxInBranch = targetBBArgIdx
       }
     }
-    debugPrint("HHHHHH 06")
     assert(enumIdxInBranch != nil)
-    debugPrint("HHHHHH 07")
     let enumInstOld = brInst.operands[enumIdxInBranch!].value.definingInstruction! as! EnumInst
-    debugPrint("HHHHHH 08")
     let oldPayload = enumInstOld.payload! as! TupleInst
-    debugPrint("HHHHHH 09")
 
     // MYTODO: for some reason fail, but this is partial apply
     // MYTODO: Found a null pointer in a value of type
@@ -463,13 +454,9 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
     }
     assert(idxInPayload != nil)
     let paiOrThinToThickInstr = oldPayload.operands[idxInPayload!].value.definingInstruction!
-    debugPrint("HHHHHH 10")
     let maybeThinToThickInstr = paiOrThinToThickInstr as? ThinToThickFunctionInst
-    debugPrint("HHHHHH 11")
     var optionalPAI = Optional<PartialApplyInst>(nil)
-    debugPrint("HHHHHH 12")
     var optionalVJPToInline = Optional<Function>(nil)
-    debugPrint("HHHHHH 13")
     if maybeThinToThickInstr == nil {
       optionalPAI = paiOrThinToThickInstr as! PartialApplyInst
       let fri = optionalPAI!.operands[0].value.definingInstruction! as! FunctionRefInst
@@ -479,7 +466,6 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
       optionalVJPToInline = fri.referencedFunction
 //        continue
     }
-    debugPrint("HHHHHH 14")
     // MYTODO: support thin to thick
     if optionalPAI != nil {
       let pai = optionalPAI!
@@ -524,9 +510,6 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
       pred.bridged.eraseInstruction(pai.bridged)
     } else { // thin to thick
       assert(maybeThinToThickInstr != nil)
-      debugPrint("AAAAA thin to thick BEGIN")
-      debugPrint(maybeThinToThickInstr!)
-      debugPrint("AAAAA thin to thick END")
       let builderPred = Builder(before: enumInstOld, context)
 
       var tupleValues = Array<Value>()
@@ -586,24 +569,14 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
   let tupleElem = tupleInst.operands[0].value
   let functionRefInst = paiFunction as! FunctionRefInst
 
-  debugPrint("AAAAA SUCC BB BEGIN")
-  debugPrint(succBB)
-  debugPrint("AAAAA SUCC BB MIDDLE 1")
   succBB.bridged.eraseInstruction(returnInst.bridged)
 // MYTODO: assert no uses
 //    assert(tupleInst.uses.makeIterator().currentOpPtr == nil)
   succBB.bridged.eraseInstruction(tupleInst.bridged)
 //    assert(pai.uses.makeIterator().currentOpPtr == nil)
   succBB.bridged.eraseInstruction(pai.bridged)
-  debugPrint(succBB)
-  debugPrint("AAAAA SUCC BB MIDDLE 2 0")
   let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
-  debugPrint("AAAAA SUCC BB MIDDLE 2 1")
   functionRefInst.replace(with: newFunctionRefInst, context)
-  debugPrint(newFunctionRefInst)
-  debugPrint("AAAAA SUCC BB MIDDLE 3")
-  debugPrint(succBB)
-  debugPrint("AAAAA SUCC BB MIDDLE 4")
   for (argIndex, arg) in succBB.arguments.enumerated() {
     if arg.type == enumType {
       //assert(argIndex == succBB.arguments.count - 1)
@@ -616,9 +589,6 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
       break
     }
   }
-  debugPrint("AAAAA SUCC BB MIDDLE 6")
-  debugPrint(succBB)
-  debugPrint("AAAAA SUCC BB END")
 //  return vjpToInlineOpt!
 }
 
@@ -753,9 +723,6 @@ private func updateCallSiteCFG(for rootClosure: SingleValueInstruction,
     applyInPbOpt = applyInstOpt!
   }
 
-  debugPrint("AAAAA succBB BEGIN")
-  debugPrint(succBB)
-  debugPrint("AAAAA succBB END")
 
   assert(applyInPbOpt != nil)
 
@@ -1279,15 +1246,8 @@ private extension SpecializationCloner {
     for closureInfo in closureInfos {
       let enumIdx = closureInfo.closureInfo.enumTypeAndCase.caseIdx
       let succBB = newEntrySwitchEnum.getUniqueSuccessor(forCaseIndex: enumIdx)!
-      debugPrint("AAAAA cloneAndSpecializeFunctionBodyCFG 00")
-      debugPrint(enumIdx)
-      debugPrint("AAAAA cloneAndSpecializeFunctionBodyCFG 01")
-      debugPrint(succBB)
-      debugPrint("AAAAA cloneAndSpecializeFunctionBodyCFG 02")
-
 
       succBB.bridged.recreateTupleBlockArgument(closureInfo.closureInfo.idxInEnumPayload, enumIdx, closureInfo.closureInfo.closure.bridged)
-      debugPrint("AAAAA cloneAndSpecializeFunctionBodyCFG 03")
 
       let applyInPbOriginal = closureInfo.applyInPb
       let pbOriginal = applyInPbOriginal.parentFunction
