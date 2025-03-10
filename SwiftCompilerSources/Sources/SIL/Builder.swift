@@ -407,8 +407,8 @@ public struct Builder {
     return notifyNew(tttf.getAs(ThinToThickFunctionInst.self))
   }
 
-  public func rewriteBranchTracingEnum(enumType: Type, closure0: SingleValueInstruction, idx0: Int, closure1: SingleValueInstruction, idx1: Int, topVjpFunction: Function) -> Type {
-    return bridged.rewriteBranchTracingEnum(enumType.bridged, closure0.bridged, idx0, closure1.bridged, idx1, topVjpFunction.bridged).type
+  public func rewriteBranchTracingEnum(enumType: Type, closure0: SingleValueInstruction, idx0: Int, case0: Int, closure1: SingleValueInstruction, idx1: Int, case1: Int, topVjpFunction: Function) -> Type {
+    return bridged.rewriteBranchTracingEnum(enumType.bridged, closure0.bridged, idx0, case0, closure1.bridged, idx1, case1, topVjpFunction.bridged).type
   }
 
   public func createPartialApply(

@@ -161,6 +161,11 @@ func isFunctionSimpleIfElse(function: Function) -> Bool {
       if returnInst == nil {
         return false
       }
+      for arg in block.arguments {
+        if arg.type.description.hasSuffix("_specialized") {
+          return false
+        }
+      }
     } else {
       return false
     }
@@ -200,14 +205,16 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     return
   }
 
+  debugPrint("AAAAA AUTODIFF PASS BEGIN")
+  debugPrint("AAAAA VJP BEFORE BEGIN")
+  debugPrint(function)
+  debugPrint("AAAAA VJP BEFORE END")
+
   let isSingleBB = function.blocks.singleElement != nil
   if !isSingleBB && !isFunctionSimpleIfElse(function: function) {
     return
   }
   
-
-  debugPrint("AAAAA AUTODIFF PASS BEGIN")
-
   //var remainingSpecializationRounds = 5
   var remainingSpecializationRounds = 1
 
@@ -260,6 +267,10 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
          callSite.closureInfosWithApplyCFG[1].closureInfo.enumTypeAndCase.caseIdx {
         break
       }
+
+      debugPrint("AAAAA PB BEFORE BEGIN")
+      debugPrint(callSite.applyCallee)
+      debugPrint("AAAAA PB BEFORE END")
 
       var (specializedFunction, alreadyExists) =
           getOrCreateSpecializedFunctionCFG(basedOn: callSite, enumDict: &enumDict, context)
@@ -512,8 +523,28 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
       pred.bridged.eraseInstruction(oldPayload.bridged)
       pred.bridged.eraseInstruction(pai.bridged)
     } else { // thin to thick
+      assert(maybeThinToThickInstr != nil)
+      debugPrint("AAAAA thin to thick BEGIN")
+      debugPrint(maybeThinToThickInstr!)
+      debugPrint("AAAAA thin to thick END")
       let builderPred = Builder(before: enumInstOld, context)
-      let enumInstNew = builderPred.createEnum(caseIndex: enumInstOld.caseIndex, payload: oldPayload, enumType: newEnumType)
+
+      var tupleValues = Array<Value>()
+      let tuple = builderPred.createTuple(elements: tupleValues)
+
+      var newPayloadValues = Array<Value>()
+      for (opIdx, op) in oldPayload.operands.enumerated() {
+        if opIdx == idxInPayload! {
+          newPayloadValues.append(tuple)
+          continue
+        }
+        newPayloadValues.append(op.value)
+      }
+      let newPayload = builderPred.createTupleWithPredecessor(elements: newPayloadValues)
+
+
+
+      let enumInstNew = builderPred.createEnum(caseIndex: enumInstOld.caseIndex, payload: newPayload, enumType: newEnumType)
 
       var newBrOperandValues = Array<Value>()
       for op in brInst.operands {
@@ -529,6 +560,8 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
       vjpsToInline.append(optionalVJPToInline!)
       pred.bridged.eraseInstruction(brInst.bridged)
       pred.bridged.eraseInstruction(enumInstOld.bridged)
+      pred.bridged.eraseInstruction(oldPayload.bridged)
+      pred.bridged.eraseInstruction(maybeThinToThickInstr!.bridged)
     }
   }
 //    assert(vjpToInlineOpt == nil)
@@ -719,6 +752,11 @@ private func updateCallSiteCFG(for rootClosure: SingleValueInstruction,
     assert(applyInPbOpt == nil)
     applyInPbOpt = applyInstOpt!
   }
+
+  debugPrint("AAAAA succBB BEGIN")
+  debugPrint(succBB)
+  debugPrint("AAAAA succBB END")
+
   assert(applyInPbOpt != nil)
 
   if callSiteOpt == nil {
@@ -1241,7 +1279,15 @@ private extension SpecializationCloner {
     for closureInfo in closureInfos {
       let enumIdx = closureInfo.closureInfo.enumTypeAndCase.caseIdx
       let succBB = newEntrySwitchEnum.getUniqueSuccessor(forCaseIndex: enumIdx)!
+      debugPrint("AAAAA cloneAndSpecializeFunctionBodyCFG 00")
+      debugPrint(enumIdx)
+      debugPrint("AAAAA cloneAndSpecializeFunctionBodyCFG 01")
+      debugPrint(succBB)
+      debugPrint("AAAAA cloneAndSpecializeFunctionBodyCFG 02")
+
+
       succBB.bridged.recreateTupleBlockArgument(closureInfo.closureInfo.idxInEnumPayload, enumIdx, closureInfo.closureInfo.closure.bridged)
+      debugPrint("AAAAA cloneAndSpecializeFunctionBodyCFG 03")
 
       let applyInPbOriginal = closureInfo.applyInPb
       let pbOriginal = applyInPbOriginal.parentFunction
@@ -1712,8 +1758,10 @@ private func getSpecializedParametersCFG(basedOn callSite: CallSite, pb: Functio
         enumDict[enumType] = builder.rewriteBranchTracingEnum(enumType: enumType,
                                                               closure0: callSite.closureInfosWithApplyCFG[0].closureInfo.closure,
                                                               idx0: callSite.closureInfosWithApplyCFG[0].closureInfo.idxInEnumPayload,
+                                                              case0: callSite.closureInfosWithApplyCFG[0].closureInfo.enumTypeAndCase.caseIdx,
                                                               closure1: callSite.closureInfosWithApplyCFG[1].closureInfo.closure,
                                                               idx1: callSite.closureInfosWithApplyCFG[1].closureInfo.idxInEnumPayload,
+                                                              case1: callSite.closureInfosWithApplyCFG[1].closureInfo.enumTypeAndCase.caseIdx,
                                                               topVjpFunction: callSite.applySite.parentFunction)
       }
       let newEnumType = enumDict[enumType]!

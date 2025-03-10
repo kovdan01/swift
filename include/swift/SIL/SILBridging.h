@@ -1195,7 +1195,8 @@ struct BridgedBuilder{
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createThrow(BridgedValue op) const;
   SWIFT_IMPORT_UNSAFE BridgedType rewriteBranchTracingEnum(
       BridgedType enumType, BridgedInstruction closure0, SwiftInt idx0,
-      BridgedInstruction closure1, SwiftInt idx1, BridgedFunction topVjp) const;
+      SwiftInt case0, BridgedInstruction closure1, SwiftInt idx1,
+      SwiftInt case1, BridgedFunction topVjp) const;
   SWIFT_IMPORT_UNSAFE BridgedInstruction createSwitchEnumInst(BridgedValue enumVal,
                                           OptionalBridgedBasicBlock defaultBlock,
                                           const void * _Nullable enumCases, SwiftInt numEnumCases) const;
