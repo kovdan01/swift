@@ -808,7 +808,9 @@ private func handleNonAppliesCFG(for rootClosure: SingleValueInstruction,
   while let use = rootClosureConversionsAndReabstractions.pop() {
     switch use.instruction {
     case let pai as PartialApplyInst:
-      assert(pai.isPullbackInResultOfAutodiffVJP)
+      if !pai.isPullbackInResultOfAutodiffVJP {
+        return nil
+      }
       assert(pbApplyOperandOpt == nil)
       assert(pai.parentBlock.index == 3)
       pbApplyOperandOpt = use
@@ -1713,16 +1715,17 @@ private func getSpecializedParametersCFG(basedOn callSite: CallSite, pb: Functio
     if paramInfo.type.type.bridged.type == enumType.astType.type.bridged.type {
       assert(!found)
       found = true
-      let builder = Builder(before: callSite.applySite, context)
       if enumDict[enumType] == nil {
-        enumDict[enumType] = builder.rewriteBranchTracingEnum(enumType: enumType,
-                                                              closure0: callSite.closureInfosWithApplyCFG[0].closureInfo.closure,
-                                                              idx0: callSite.closureInfosWithApplyCFG[0].closureInfo.idxInEnumPayload,
-                                                              case0: callSite.closureInfosWithApplyCFG[0].closureInfo.enumTypeAndCase.caseIdx,
-                                                              closure1: callSite.closureInfosWithApplyCFG[1].closureInfo.closure,
-                                                              idx1: callSite.closureInfosWithApplyCFG[1].closureInfo.idxInEnumPayload,
-                                                              case1: callSite.closureInfosWithApplyCFG[1].closureInfo.enumTypeAndCase.caseIdx,
-                                                              topVjpFunction: callSite.applySite.parentFunction)
+        var rewriter = BridgedEnumRewriter()
+        rewriter.appendToClosuresBuffer(0, callSite.closureInfosWithApplyCFG[0].closureInfo.closure.bridged)
+        rewriter.appendToClosuresBuffer(1, callSite.closureInfosWithApplyCFG[1].closureInfo.closure.bridged)
+        enumDict[enumType] = rewriter.rewriteBranchTracingEnum(/*enumType: */enumType.bridged,
+                                                               /*idx0: */callSite.closureInfosWithApplyCFG[0].closureInfo.idxInEnumPayload,
+                                                               /*case0: */callSite.closureInfosWithApplyCFG[0].closureInfo.enumTypeAndCase.caseIdx,
+                                                               /*idx1: */callSite.closureInfosWithApplyCFG[1].closureInfo.idxInEnumPayload,
+                                                               /*case1: */callSite.closureInfosWithApplyCFG[1].closureInfo.enumTypeAndCase.caseIdx,
+                                                               /*topVjp: */callSite.applySite.parentFunction.bridged).type
+        rewriter.clearClosuresBuffer()
       }
       let newEnumType = enumDict[enumType]!
       let newParamInfo = ParameterInfo(type: newEnumType.astType, convention: paramInfo.convention,

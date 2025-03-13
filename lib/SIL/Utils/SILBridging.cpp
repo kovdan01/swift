@@ -666,10 +666,40 @@ convertCases(SILType enumTy, const void * _Nullable enumCases, SwiftInt numEnumC
   return convertedCases;
 }
 
-BridgedType BridgedBuilder::rewriteBranchTracingEnum(
-    BridgedType enumType, BridgedInstruction closure0, SwiftInt idx0,
-    SwiftInt case0, BridgedInstruction closure1, SwiftInt idx1, SwiftInt case1,
+static llvm::SmallVector<BridgedInstruction, 8> closuresBuffer0;
+static llvm::SmallVector<BridgedInstruction, 8> closuresBuffer1;
+
+void BridgedEnumRewriter::appendToClosuresBuffer(
+    SwiftInt idx, BridgedInstruction closure) {
+  switch (idx) {
+  case 0:
+    closuresBuffer0.emplace_back(closure);
+    break;
+  case 1:
+    closuresBuffer1.emplace_back(closure);
+    break;
+  default:
+    assert(false);
+  }
+}
+
+void BridgedEnumRewriter::clearClosuresBuffer() {
+  closuresBuffer0.clear();
+  closuresBuffer1.clear();
+}
+
+BridgedType BridgedEnumRewriter::rewriteBranchTracingEnum(
+    BridgedType enumType, SwiftInt idx0,
+    SwiftInt case0, SwiftInt idx1, SwiftInt case1,
     BridgedFunction topVjp) const {
+  assert(closuresBuffer0.size() == 1);
+  assert(closuresBuffer1.size() == 1);
+  llvm::errs() << "\n\nBBBBB 00\n";
+  const SILInstruction *closure0 = closuresBuffer0.front().unbridged();
+  llvm::errs() << "BBBBB 01\n";
+  const SILInstruction *closure1 = closuresBuffer1.front().unbridged();
+  llvm::errs() << "BBBBB 02\n\n";
+
   EnumDecl *oldED = enumType.unbridged().getEnumOrBoundGenericEnum();
   assert(oldED && "Expected valid enum type");
 
@@ -693,14 +723,14 @@ BridgedType BridgedBuilder::rewriteBranchTracingEnum(
     assert((enumIdx == 0 || enumIdx == 1) && "MYTODO");
 
     unsigned idxInPayload = -1;
-    SILInstruction *closure = nullptr;
+    const SILInstruction *closure = nullptr;
     if (enumIdx == case0) {
       idxInPayload = idx0;
-      closure = closure0.unbridged();
+      closure = closure0;
     } else {
       assert(enumIdx == case1);
       idxInPayload = idx1;
-      closure = closure1.unbridged();
+      closure = closure1;
     }
 
     assert(oldEED->getParameterList()->size() == 1);
@@ -713,7 +743,7 @@ BridgedType BridgedBuilder::rewriteBranchTracingEnum(
     for (unsigned i = 0; i < tt->getNumElements(); ++i) {
       Type type;
       if (i == idxInPayload) {
-        if (auto *PAI = dyn_cast<PartialApplyInst>(closure)) {
+        if (const auto *PAI = dyn_cast<PartialApplyInst>(closure)) {
           type = getPAICapturedArgTypes(PAI, astContext);
         } else {
           type = TupleType::get({}, astContext);
@@ -726,7 +756,7 @@ BridgedType BridgedBuilder::rewriteBranchTracingEnum(
     }
 
     Type newTupleType =
-        TupleType::get(newElements, unbridged().getASTContext());
+        TupleType::get(newElements, astContext);
 
     auto *newParamDecl = ParamDecl::cloneWithoutType(astContext, &oldParamDecl);
     newParamDecl->setInterfaceType(newTupleType);
@@ -746,14 +776,14 @@ BridgedType BridgedBuilder::rewriteBranchTracingEnum(
 
   ed->setAccess(AccessLevel::Public);
   auto &file =
-      getSourceFile(&unbridged().getFunction()).getOrCreateSynthesizedFile();
+      getSourceFile(topVjp.getFunction()).getOrCreateSynthesizedFile();
   file.addTopLevelDecl(ed);
   file.getParentModule()->clearLookupCache();
 
   auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
   Lowering::AbstractionPattern pattern(traceDeclType);
 
-  return unbridged().getModule().Types.getLoweredType(
+  return topVjp.getFunction()->getModule().Types.getLoweredType(
       pattern, traceDeclType, TypeExpansionContext::minimal());
 }
 

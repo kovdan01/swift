@@ -2533,6 +2533,15 @@ BridgedInstruction BridgedBuilder::createConvertEscapeToNoEscape(BridgedValue or
   return {unbridged().createConvertEscapeToNoEscape(regularLoc(), originalFunction.getSILValue(), resultType.unbridged(), isLifetimeGuaranteed)};
 }
 
+SwiftInt BridgedClosureArray::count() const {
+  return closureArray.unbridged<swift::SILInstruction>().size();
+}
+
+BridgedInstruction
+BridgedClosureArray::at(SwiftInt index) const {
+  return {const_cast<swift::SingleValueInstruction*>(llvm::cast<swift::SingleValueInstruction>(&closureArray.unbridged<swift::SILInstruction>()[index]))};
+}
+
 SWIFT_END_NULLABILITY_ANNOTATIONS
 
 #endif
