@@ -937,9 +937,9 @@ struct BridgedBasicBlock {
   SWIFT_IMPORT_UNSAFE  BRIDGED_INLINE BridgedArgument addBlockArgument(BridgedType type, BridgedValue::Ownership ownership) const;
   SWIFT_IMPORT_UNSAFE BridgedArgument
   recreateEnumBlockArgument(SwiftInt index, BridgedType type) const;
-  SWIFT_IMPORT_UNSAFE BridgedArgument
-  recreateTupleBlockArgument(SwiftInt idxInEnumPayload, SwiftInt enumIdx,
-                             BridgedInstruction closure) const;
+  SWIFT_IMPORT_UNSAFE BridgedArgument recreateTupleBlockArgument(
+      /*SwiftInt idxInEnumPayload, */ SwiftInt enumIdx
+      /*BridgedInstruction closure*/) const;
   SWIFT_IMPORT_UNSAFE  BRIDGED_INLINE BridgedArgument addFunctionArgument(BridgedType type) const;
   BRIDGED_INLINE void eraseArgument(SwiftInt index) const;
   BRIDGED_INLINE void moveAllInstructionsToBegin(BridgedBasicBlock dest) const;
@@ -1100,13 +1100,12 @@ struct OptionalBridgedDefaultWitnessTable {
 };
 
 struct BridgedEnumRewriter {
-  SWIFT_IMPORT_UNSAFE void appendToClosuresBuffer(
-      SwiftInt idx, BridgedInstruction closure);
+  SWIFT_IMPORT_UNSAFE void appendToClosuresBuffer(SwiftInt caseIdx,
+                                                  BridgedInstruction closure,
+                                                  SwiftInt idxInPayload);
   SWIFT_IMPORT_UNSAFE void clearClosuresBuffer();
-  SWIFT_IMPORT_UNSAFE BridgedType rewriteBranchTracingEnum(
-      BridgedType enumType, SwiftInt idx0,
-      SwiftInt case0, SwiftInt idx1,
-      SwiftInt case1, BridgedFunction topVjp) const;
+  SWIFT_IMPORT_UNSAFE BridgedType
+  rewriteBranchTracingEnum(BridgedType enumType, BridgedFunction topVjp) const;
 };
 
 struct BridgedBuilder{

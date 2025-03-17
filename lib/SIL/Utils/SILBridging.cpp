@@ -57,6 +57,11 @@ SwiftMetatype SILNode::getSILNodeMetatype(SILNodeKind kind) {
   return metatype;
 }
 
+static llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
+    closuresBuffer0;
+static llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
+    closuresBuffer1;
+
 //===----------------------------------------------------------------------===//
 //                          Class registration
 //===----------------------------------------------------------------------===//
@@ -194,8 +199,18 @@ BridgedBasicBlock::recreateEnumBlockArgument(SwiftInt index,
 }
 
 BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(
-    SwiftInt idxInEnumPayload, SwiftInt enumIdx,
-    BridgedInstruction closure) const {
+    /*SwiftInt idxInEnumPayload*/ SwiftInt enumIdx
+    /*BridgedInstruction closure*/) const {
+  llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
+      *closuresBuffer = nullptr;
+  if (enumIdx == 0) {
+    closuresBuffer = &closuresBuffer0;
+  } else {
+    assert(enumIdx == 1);
+    closuresBuffer = &closuresBuffer1;
+  }
+  assert(closuresBuffer != nullptr);
+
   swift::SILBasicBlock *bb = unbridged();
   assert(bb->getNumArguments() == 1);
   swift::SILArgument *oldArg = bb->getArgument(0);
@@ -203,13 +218,22 @@ BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(
       llvm::cast<swift::TupleType>(oldArg->getType().getASTType().getPointer());
   llvm::SmallVector<swift::TupleTypeElt, 8> newTupleElTypes;
   for (unsigned i = 0; i < oldTupleTy->getNumElements(); ++i) {
-    if (i != idxInEnumPayload) {
+    unsigned idxInClosuresBuffer = -1;
+    for (unsigned j = 0; j < closuresBuffer->size(); ++j) {
+      if ((*closuresBuffer)[j].second == i) {
+        assert(idxInClosuresBuffer == unsigned(-1));
+        idxInClosuresBuffer = j;
+      }
+    }
+
+    if (idxInClosuresBuffer == unsigned(-1)) {
       newTupleElTypes.emplace_back(oldTupleTy->getElementType(i),
                                    oldTupleTy->getElement(i).getName());
       continue;
     }
 
-    if (auto *pai = dyn_cast<PartialApplyInst>(closure.unbridged())) {
+    if (auto *pai = dyn_cast<PartialApplyInst>(
+            (*closuresBuffer)[idxInClosuresBuffer].first.unbridged())) {
       newTupleElTypes.emplace_back(getPAICapturedArgTypes(
           pai, unbridged()->getModule().getASTContext()));
     } else {
@@ -666,17 +690,15 @@ convertCases(SILType enumTy, const void * _Nullable enumCases, SwiftInt numEnumC
   return convertedCases;
 }
 
-static llvm::SmallVector<BridgedInstruction, 8> closuresBuffer0;
-static llvm::SmallVector<BridgedInstruction, 8> closuresBuffer1;
-
-void BridgedEnumRewriter::appendToClosuresBuffer(
-    SwiftInt idx, BridgedInstruction closure) {
-  switch (idx) {
+void BridgedEnumRewriter::appendToClosuresBuffer(SwiftInt caseIdx,
+                                                 BridgedInstruction closure,
+                                                 SwiftInt idxInPayload) {
+  switch (caseIdx) {
   case 0:
-    closuresBuffer0.emplace_back(closure);
+    closuresBuffer0.emplace_back(closure, idxInPayload);
     break;
   case 1:
-    closuresBuffer1.emplace_back(closure);
+    closuresBuffer1.emplace_back(closure, idxInPayload);
     break;
   default:
     assert(false);
@@ -688,17 +710,18 @@ void BridgedEnumRewriter::clearClosuresBuffer() {
   closuresBuffer1.clear();
 }
 
-BridgedType BridgedEnumRewriter::rewriteBranchTracingEnum(
-    BridgedType enumType, SwiftInt idx0,
-    SwiftInt case0, SwiftInt idx1, SwiftInt case1,
-    BridgedFunction topVjp) const {
-  assert(closuresBuffer0.size() == 1);
-  assert(closuresBuffer1.size() == 1);
-  llvm::errs() << "\n\nBBBBB 00\n";
-  const SILInstruction *closure0 = closuresBuffer0.front().unbridged();
-  llvm::errs() << "BBBBB 01\n";
-  const SILInstruction *closure1 = closuresBuffer1.front().unbridged();
-  llvm::errs() << "BBBBB 02\n\n";
+BridgedType
+BridgedEnumRewriter::rewriteBranchTracingEnum(BridgedType enumType,
+                                              BridgedFunction topVjp) const {
+  // assert(closuresBuffer0.size() == 1);
+  // assert(closuresBuffer1.size() == 1);
+  // llvm::errs() << "\n\nBBBBB 00\n";
+  // const SILInstruction *closure0 = closuresBuffer0.front().first.unbridged();
+  // unsigned idx0 = closuresBuffer0.front().second;
+  // llvm::errs() << "BBBBB 01\n";
+  // const SILInstruction *closure1 = closuresBuffer1.front().first.unbridged();
+  // unsigned idx1 = closuresBuffer1.front().second;
+  // llvm::errs() << "BBBBB 02\n\n";
 
   EnumDecl *oldED = enumType.unbridged().getEnumOrBoundGenericEnum();
   assert(oldED && "Expected valid enum type");
@@ -722,16 +745,21 @@ BridgedType BridgedEnumRewriter::rewriteBranchTracingEnum(
     unsigned enumIdx = module.getCaseIndex(oldEED);
     assert((enumIdx == 0 || enumIdx == 1) && "MYTODO");
 
-    unsigned idxInPayload = -1;
-    const SILInstruction *closure = nullptr;
-    if (enumIdx == case0) {
-      idxInPayload = idx0;
-      closure = closure0;
+    // unsigned idxInPayload = -1;
+    // const SILInstruction *closure = nullptr;
+    llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
+        *closuresBuffer = nullptr;
+    if (enumIdx == 0) {
+      closuresBuffer = &closuresBuffer0;
+      // idxInPayload = idx0;
+      // closure = closure0;
     } else {
-      assert(enumIdx == case1);
-      idxInPayload = idx1;
-      closure = closure1;
+      assert(enumIdx == 1);
+      closuresBuffer = &closuresBuffer1;
+      // idxInPayload = idx1;
+      // closure = closure1;
     }
+    assert(closuresBuffer != nullptr);
 
     assert(oldEED->getParameterList()->size() == 1);
     ParamDecl &oldParamDecl = *oldEED->getParameterList()->front();
@@ -742,8 +770,16 @@ BridgedType BridgedEnumRewriter::rewriteBranchTracingEnum(
 
     for (unsigned i = 0; i < tt->getNumElements(); ++i) {
       Type type;
-      if (i == idxInPayload) {
-        if (const auto *PAI = dyn_cast<PartialApplyInst>(closure)) {
+      unsigned idxInClosuresBuffer = -1;
+      for (unsigned j = 0; j < closuresBuffer->size(); ++j) {
+        if ((*closuresBuffer)[j].second == i) {
+          assert(idxInClosuresBuffer == unsigned(-1));
+          idxInClosuresBuffer = j;
+        }
+      }
+      if (idxInClosuresBuffer != unsigned(-1)) {
+        if (const auto *PAI = dyn_cast<PartialApplyInst>(
+                (*closuresBuffer)[idxInClosuresBuffer].first.unbridged())) {
           type = getPAICapturedArgTypes(PAI, astContext);
         } else {
           type = TupleType::get({}, astContext);
@@ -751,6 +787,16 @@ BridgedType BridgedEnumRewriter::rewriteBranchTracingEnum(
       } else {
         type = tt->getElementType(i);
       }
+
+      // if (i == idxInPayload) {
+      //   if (const auto *PAI = dyn_cast<PartialApplyInst>(closure)) {
+      //     type = getPAICapturedArgTypes(PAI, astContext);
+      //   } else {
+      //     type = TupleType::get({}, astContext);
+      //   }
+      // } else {
+      //   type = tt->getElementType(i);
+      // }
       Identifier label = tt->getElement(i).getName();
       newElements.emplace_back(type, label);
     }

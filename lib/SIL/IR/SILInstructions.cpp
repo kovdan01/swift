@@ -592,6 +592,9 @@ ApplyInst::create(SILDebugLocation loc, SILValue callee, SubstitutionMap subs,
                   SILFunction &parentFunction,
                   const GenericSpecializationInformation *specializationInfo,
                   std::optional<ApplyIsolationCrossing> isolationCrossing) {
+  // llvm::errs() << "\n\nXXXXX 00 BEGIN\n"
+  //              << callee
+  //              << "\nXXXXXX 00 END\n\n";
   SILType substCalleeSILTy = callee->getType().substGenericArgs(
       parentFunction.getModule(), subs,
       parentFunction.getTypeExpansionContext());
