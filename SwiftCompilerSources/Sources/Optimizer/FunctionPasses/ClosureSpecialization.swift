@@ -446,13 +446,18 @@ private func rewriteApplyInstructionCFG(
   var vjpToInlineOpt = Function?(nil)
 
   var applyArgOpt = Value?(nil)
+  var applyArgIdxOpt = Int?(nil)
   for (argIdx, arg) in callSite.applySite.arguments.enumerated() {
-    assert(argIdx == 0)
-    assert(applyArgOpt == nil)
-    applyArgOpt = arg
+    if arg.type == enumType {
+      assert(argIdx == 0)
+      assert(applyArgOpt == nil)
+      applyArgOpt = arg
+      applyArgIdxOpt = argIdx
+    }
   }
   assert(applyArgOpt != nil)
   let applyArg = applyArgOpt!
+  let applyArgIdx = applyArgIdxOpt!
 
   let bb = callSite.applySite.parentBlock
   let preds = bb.predecessors
@@ -591,7 +596,6 @@ private func rewriteApplyInstructionCFG(
   // MYTODO function ref to spec new pullback
 
   let pai = callSite.applySite as! PartialApplyInst
-  assert(pai.numArguments == 1)
   let paiFunction = pai.operands[0].value
   let paiConvention = pai.calleeConvention
   let paiHasUnknownResultIsolation = pai.hasUnknownResultIsolation
@@ -603,6 +607,11 @@ private func rewriteApplyInstructionCFG(
   let tupleElem = tupleInst.operands[0].value
   let functionRefInst = paiFunction as! FunctionRefInst
 
+  var newCapturedArgs = [Value]()
+  for paiArg in pai.arguments {
+    newCapturedArgs.append(paiArg)
+  }
+
   succBB.bridged.eraseInstruction(returnInst.bridged)
   // MYTODO: assert no uses
   succBB.bridged.eraseInstruction(tupleInst.bridged)
@@ -613,9 +622,10 @@ private func rewriteApplyInstructionCFG(
     if arg.type == enumType {
       let newBBArg = succBB.bridged.recreateEnumBlockArgument(argIndex, newEnumType.bridged)
         .argument
+      newCapturedArgs[applyArgIdx] = newBBArg
       let newPai: PartialApplyInst = builderSucc.createPartialApply(
         function: newFunctionRefInst, substitutionMap: paiSubstitutionMap,
-        capturedArguments: [newBBArg], calleeConvention: paiConvention,
+        capturedArguments: newCapturedArgs, calleeConvention: paiConvention,
         hasUnknownResultIsolation: paiHasUnknownResultIsolation, isOnStack: paiIsOnStack)
       let newTupleInst = builderSucc.createTuple(elements: [tupleElem, newPai])
       let newReturnInst = builderSucc.createReturn(of: newTupleInst)
