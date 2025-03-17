@@ -260,14 +260,6 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
         function.fixStackNesting(context)
       }
     } else {
-//      if callSite.closureInfosWithApplyCFG.count != 2 {
-//        break
-//      }
-//      if callSite.closureInfosWithApplyCFG[0].closureInfo.enumTypeAndCase.caseIdx ==
-//         callSite.closureInfosWithApplyCFG[1].closureInfo.enumTypeAndCase.caseIdx {
-//        break
-//      }
-
       debugPrint("AAAAA PB BEFORE BEGIN")
       debugPrint(callSite.applyCallee)
       debugPrint("AAAAA PB BEFORE END")
@@ -374,7 +366,6 @@ private func getOrCreateSpecializedFunctionCFG(basedOn callSite: CallSite, enumD
 {
   assert(callSite.closureArgDescriptors.count == 0)
   let closureInfos = callSite.closureInfosWithApplyCFG
-  //assert(closureInfos.count == 2)
   let enumType = closureInfos[0].closureInfo.enumTypeAndCase.enumType
   for closureInfo in closureInfos {
     assert(closureInfo.closureInfo.enumTypeAndCase.enumType == closureInfos[1].closureInfo.enumTypeAndCase.enumType)
@@ -449,25 +440,12 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
     var idxInPayloadArray = Array<Int>()
     for closureInfo in callSite.closureInfosWithApplyCFG {
       if closureInfo.closureInfo.closure.parentBlock == pred {
-        //assert(idxInPayload == nil)
         idxInPayloadArray.append(closureInfo.closureInfo.idxInEnumPayload)
       }
     }
-//    assert(idxInPayload != nil)
     for idxInPayload in idxInPayloadArray { 
-    debugPrint("AAAA rewriteApplyCFG 00 BEGIN")
-    debugPrint(idxInPayload)
-    debugPrint("AAAA rewriteApplyCFG 00 MIDDLE 1")
-    debugPrint(idxInPayloadArray)
-    debugPrint("AAAA rewriteApplyCFG 00 MIDDLE 2")
-    debugPrint(oldPayload)
-    debugPrint("AAAA rewriteApplyCFG 00 MIDDLE 3")
-    debugPrint(oldPayload.operands)
-    debugPrint("AAAA rewriteApplyCFG 00 END")
     let paiOrThinToThickInstr = oldPayload.operands[idxInPayload].value.definingInstruction!
-    debugPrint("AAAA rewriteApplyCFG 01")
     let maybeThinToThickInstr = paiOrThinToThickInstr as? ThinToThickFunctionInst
-    debugPrint("AAAA rewriteApplyCFG 02")
     var optionalPAI = Optional<PartialApplyInst>(nil)
     var optionalVJPToInline = Optional<Function>(nil)
     if maybeThinToThickInstr == nil {
@@ -477,12 +455,9 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
     } else {
       let fri = maybeThinToThickInstr!.operands[0].value.definingInstruction! as! FunctionRefInst
       optionalVJPToInline = fri.referencedFunction
-//        continue
     }
-    debugPrint("AAAA rewriteApplyCFG 03")
     // MYTODO: support thin to thick
     if optionalPAI != nil {
-      debugPrint("AAAA rewriteApplyCFG 04")
       let pai = optionalPAI!
       var tupleValues = Array<Value>()
       for (opIdx, op) in pai.operands.enumerated() {
@@ -491,7 +466,6 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
         }
         tupleValues.append(op.value)
       }
-//      let builderPred = Builder(before: pai, context)
       let builderPred = Builder(before: enumInstOld, context)
       let tuple = builderPred.createTuple(elements: tupleValues)
 
@@ -518,7 +492,6 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
       }
       let builderBr = Builder(before: brInst, context)
       let newBrInst = builderBr.createBranch(to: brInst.targetBlock, arguments: newBrOperandValues)
-      debugPrint("AAAA rewriteApplyCFG 05")
 
       vjpsToInline.append(vjpToInline)
       pred.bridged.eraseInstruction(brInst.bridged)
@@ -530,7 +503,6 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
       brInst = newBrInst
       oldPayload = newPayload
     } else { // thin to thick
-      debugPrint("AAAA rewriteApplyCFG 06")
       assert(maybeThinToThickInstr != nil)
       let builderPred = Builder(before: enumInstOld, context)
 
@@ -545,7 +517,6 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
         }
         newPayloadValues.append(op.value)
       }
-      debugPrint("AAAA rewriteApplyCFG 07")
       let newPayload = builderPred.createTupleWithPredecessor(elements: newPayloadValues)
 
 
@@ -562,7 +533,6 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
       }
       let builderBr = Builder(before: brInst, context)
       let newBrInst = builderBr.createBranch(to: brInst.targetBlock, arguments: newBrOperandValues)
-      debugPrint("AAAA rewriteApplyCFG 08")
 
       vjpsToInline.append(optionalVJPToInline!)
       pred.bridged.eraseInstruction(brInst.bridged)
@@ -576,12 +546,6 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
     }
     }
   }
-//    assert(vjpToInlineOpt == nil)
-//    vjpToInlineOpt = vjpsToInline[0]
-//    // MYTODO: support arbitrary vjps; is it possible w/o creating multiple basic blocks?
-//    for e in vjpsToInline {
-//      assert(e == vjpToInlineOpt!)
-//    }
   let succBB = callSite.applySite.parentBlock
   // MYTODO function ref to spec new pullback
 
@@ -600,15 +564,12 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
 
   succBB.bridged.eraseInstruction(returnInst.bridged)
 // MYTODO: assert no uses
-//    assert(tupleInst.uses.makeIterator().currentOpPtr == nil)
   succBB.bridged.eraseInstruction(tupleInst.bridged)
-//    assert(pai.uses.makeIterator().currentOpPtr == nil)
   succBB.bridged.eraseInstruction(pai.bridged)
   let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
   functionRefInst.replace(with: newFunctionRefInst, context)
   for (argIndex, arg) in succBB.arguments.enumerated() {
     if arg.type == enumType {
-      //assert(argIndex == succBB.arguments.count - 1)
       let newBBArg = succBB.bridged.recreateEnumBlockArgument(argIndex, newEnumType.bridged).argument
       let newPai : PartialApplyInst = builderSucc.createPartialApply(function: newFunctionRefInst, substitutionMap: paiSubstitutionMap,
                                                   capturedArguments: [newBBArg], calleeConvention: paiConvention,
@@ -618,7 +579,6 @@ private func rewriteApplyInstructionCFG(using specializedCallee: Function, callS
       break
     }
   }
-//  return vjpToInlineOpt!
 }
 
 private func rewriteApplyInstruction(using specializedCallee: Function, callSite: CallSite, 
@@ -1255,10 +1215,7 @@ private extension SpecializationCloner {
 
     self.cloneFunctionBody(from: callSite.applyCallee, entryBlockArguments: args)
 
-    //debugPrint(self.entryBlock.parentFunction)
-
     let closureInfos = callSite.closureInfosWithApplyCFG
-    //assert(closureInfos.count == 2)
 
     let entrySwitchEnum = self.entryBlock.terminator as! SwitchEnumInst
     let builderEntry = Builder(before: entrySwitchEnum, self.context)
@@ -1309,57 +1266,25 @@ private extension SpecializationCloner {
           }
         }
         assert(applyIdx != nil)
-        let pbBbCloned = succBB//self.entryBlock.parentFunction
+        let pbBbCloned = succBB
         var applyInPbX = Optional<Instruction>(nil)
         for (instIdx, inst) in pbBbCloned.instructions.enumerated() {
           if instIdx == applyIdx! {
             assert(applyInPbX == nil)
-            applyInPbX = inst// as? ApplyInst
+            applyInPbX = inst
           }
         }
 
-        debugPrint(succBB)
-        debugPrint(applyInPbX)
         let applyInPb = applyInPbX as? ApplyInst
-        debugPrint(applyInPb)
         assert(applyInPb != nil)
         applyInPbArray.append(applyInPb!)
       }
-
-//      for (closureInfoIdx, closureInfo) in closureInfoArray.enumerated() {
-
-//      let applyInPbOriginal = closureInfo.applyInPb
-//      let pbOriginal = applyInPbOriginal.parentFunction
-//      var applyIdx = Optional<Int>(nil)
-//      for (instIdx, inst) in pbOriginal.instructions.enumerated() {
-//        if inst == applyInPbOriginal {
-//          assert(applyIdx == nil)
-//          applyIdx = instIdx
-//        }
-//      }
-//      assert(applyIdx != nil)
-//      let pbCloned = self.entryBlock.parentFunction
-//      var applyInPbX = Optional<Instruction>(nil)
-//      for (instIdx, inst) in pbCloned.instructions.enumerated() {
-//        if instIdx == applyIdx! {
-//          assert(applyInPbX == nil)
-//          applyInPbX = inst// as? ApplyInst
-//        }
-//      }
-//
-//      debugPrint(succBB)
-//      debugPrint(applyInPbX)
-//      let applyInPb = applyInPbX as? ApplyInst
-//      debugPrint(applyInPb)
-//      assert(applyInPb != nil)
-//      let applyInPb = applyInPbArray[closureInfoIdx]
 
       let oldDtiOpt = applyInPbArray[0].callee.definingInstruction as? DestructureTupleInst
       if oldDtiOpt != nil {
         let oldDti = oldDtiOpt!
         let builderBeforeOldDti = Builder(before: oldDti, self.context)
         let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
-//        let resToChangeOld = oldDti.results[closureInfo.closureInfo.idxInEnumPayload]
 
         for (resultIdx, result) in oldDti.results.enumerated() {
           for use in result.uses {
@@ -1374,7 +1299,7 @@ private extension SpecializationCloner {
                     closureInfoOpt = ccc
                   }
                 }
-                if (closureInfoOpt != nil) {//resultIdx == closureInfo.closureInfo.idxInEnumPayload) {
+                if (closureInfoOpt != nil) {
                   let dtiOfCapturedArgsTuple = builder.createDestructureTuple(tuple: newDti.results[resultIdx])
                   var newArgs = Array<Value>()
                   for op in ai.argumentOperands {
@@ -1386,27 +1311,14 @@ private extension SpecializationCloner {
                   let vjpFnOpt = closureInfoOpt!.closureInfo.closure.asSupportedClosureFn
                   assert(vjpFnOpt != nil)
                   let newFri = builder.createFunctionRef(vjpFnOpt!)
-                  debugPrint("AAAAA 00")
                   let newAi = builder.createApply(function: newFri, SubstitutionMap(), arguments: newArgs)
-                  debugPrint("AAAAA 01")
                   ai.replace(with: newAi, self.context)
                 } else {
                   var newArgs = Array<Value>()
                   for op in ai.argumentOperands {
                     newArgs.append(op.value)
                   }
-                  debugPrint("AAAAA 02")
-                  debugPrint("AAAAA old BB BEGIN")
-                  //debugPrint(closureInfo.applyInPb.parentBlock)
- //                 debugPrint(pbBbOriginal)
-                  debugPrint("AAAAA old BB END")
-                  debugPrint("AAAAA new BB BEGIN")
-                  debugPrint(succBB)
-                  debugPrint("AAAAA new BB END")
-                  debugPrint(ai)
-                  debugPrint(newArgs)
                   let newAi = builder.createApply(function: newDti.results[resultIdx], ai.substitutionMap, arguments: newArgs)
-                  debugPrint("AAAAA 03")
                   ai.replace(with: newAi, self.context)
                 }
 
@@ -1417,7 +1329,7 @@ private extension SpecializationCloner {
                     needDestroyValue = false
                   }
                 }
-                if needDestroyValue { //resultIdx != closureInfo.closureInfo.idxInEnumPayload {
+                if needDestroyValue { 
                   let builder = Builder(before: dvi, self.context)
                   builder.createDestroyValue(operand: newDti.results[resultIdx])
                 }
@@ -1432,13 +1344,6 @@ private extension SpecializationCloner {
                 uedi.replace(with: newUedi, self.context)
 
               default:
-                debugPrint("CCCC 00")
-                debugPrint(use)
-                debugPrint("CCCC 01")
-                debugPrint(use.instruction)
-                debugPrint("CCCC 02")
-                debugPrint(use.instruction.parentFunction)
-                debugPrint("CCCC 03")
                 assert(false)
             }
           }
@@ -1450,7 +1355,6 @@ private extension SpecializationCloner {
 //        assert(oldTeiOpt != nil)
 //        let oldTei = oldTeiOpt!
       }
-//      }
     }
   }
 
@@ -1819,14 +1723,6 @@ private func getSpecializedParametersCFG(basedOn callSite: CallSite, pb: Functio
   let applySiteCallee = callSite.applyCallee
   var specializedParamInfoList: [ParameterInfo] = []
 
- // for (idx, arg) in pb.arguments.enumerated() {
- //   if arg.type == argType {
- //     argIdxOpt = idx
- //   }
- // }
-
- // let arg = pb.argument(at: argIdxOpt!)
-
   var found = false
   // Start by adding all original parameters except for the closure parameters.
   for (index, paramInfo) in applySiteCallee.convention.parameters.enumerated() {
@@ -2176,21 +2072,9 @@ private struct CallSite {
 
   func specializedCalleeNameCFG(_ context: FunctionPassContext) -> String {
     // MYTODO: this should be enums and not closures
-//    let enumArgs = Array(self.closureInfosWithApplyCFG.map { $0.closureInfo.closure })
-//    let enumIndices = Array(self.closureInfosWithApplyCFG.map { $0.closureInfo.idxInEnumPayload })
-
-    //return context.mangle(withEnumArguments: enumArgs, enumArgIndices: enumIndices,
     return context.mangle(withEnumArguments: [closureInfosWithApplyCFG[0].closureInfo.closure], enumArgIndices: [0],
                           from: applyCallee)
   }
-
-  //func specializedCalleeNameCFG(enumType: Type, _ context: FunctionPassContext) -> String {
-  //  let closureArgs = Array(self.closureArgDescriptors.map { $0.closure })
-  //  let closureIndices = Array(self.closureArgDescriptors.map { $0.closureArgIndex })
-
-  //  return context.mangle(withClosureArguments: closureArgs, closureArgIndices: closureIndices, 
-  //                        from: applyCallee)
-  //}
 }
 
 // ===================== Unit tests ===================== //
