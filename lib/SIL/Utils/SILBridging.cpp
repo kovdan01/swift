@@ -57,10 +57,9 @@ SwiftMetatype SILNode::getSILNodeMetatype(SILNodeKind kind) {
   return metatype;
 }
 
-static llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
-    closuresBuffer0;
-static llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
-    closuresBuffer1;
+static llvm::DenseMap<
+    SwiftInt, llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>>
+    closuresBuffers;
 
 //===----------------------------------------------------------------------===//
 //                          Class registration
@@ -202,14 +201,7 @@ BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(
     /*SwiftInt idxInEnumPayload*/ SwiftInt enumIdx
     /*BridgedInstruction closure*/) const {
   llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
-      *closuresBuffer = nullptr;
-  if (enumIdx == 0) {
-    closuresBuffer = &closuresBuffer0;
-  } else {
-    assert(enumIdx == 1);
-    closuresBuffer = &closuresBuffer1;
-  }
-  assert(closuresBuffer != nullptr);
+      *closuresBuffer = &closuresBuffers[enumIdx];
 
   swift::SILBasicBlock *bb = unbridged();
   assert(bb->getNumArguments() == 1);
@@ -593,22 +585,10 @@ convertCases(SILType enumTy, const void * _Nullable enumCases, SwiftInt numEnumC
 void BridgedEnumRewriter::appendToClosuresBuffer(SwiftInt caseIdx,
                                                  BridgedInstruction closure,
                                                  SwiftInt idxInPayload) {
-  switch (caseIdx) {
-  case 0:
-    closuresBuffer0.emplace_back(closure, idxInPayload);
-    break;
-  case 1:
-    closuresBuffer1.emplace_back(closure, idxInPayload);
-    break;
-  default:
-    assert(false);
-  }
+  closuresBuffers[caseIdx].emplace_back(closure, idxInPayload);
 }
 
-void BridgedEnumRewriter::clearClosuresBuffer() {
-  closuresBuffer0.clear();
-  closuresBuffer1.clear();
-}
+void BridgedEnumRewriter::clearClosuresBuffer() { closuresBuffers.clear(); }
 
 BridgedType
 BridgedEnumRewriter::rewriteBranchTracingEnum(BridgedType enumType,
@@ -636,14 +616,7 @@ BridgedEnumRewriter::rewriteBranchTracingEnum(BridgedType enumType,
     assert((enumIdx == 0 || enumIdx == 1) && "MYTODO");
 
     llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
-        *closuresBuffer = nullptr;
-    if (enumIdx == 0) {
-      closuresBuffer = &closuresBuffer0;
-    } else {
-      assert(enumIdx == 1);
-      closuresBuffer = &closuresBuffer1;
-    }
-    assert(closuresBuffer != nullptr);
+        *closuresBuffer = &closuresBuffers[enumIdx];
 
     assert(oldEED->getParameterList()->size() == 1);
     ParamDecl &oldParamDecl = *oldEED->getParameterList()->front();
