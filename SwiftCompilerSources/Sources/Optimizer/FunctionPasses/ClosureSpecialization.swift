@@ -275,6 +275,14 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
       debugPrint(callSite.applyCallee)
       debugPrint("AAAAA PB BEFORE END")
 
+      var enumCasesToProcess = Set<Int>()
+      for closureInfo in callSite.closureInfosWithApplyCFG {
+        enumCasesToProcess.insert(closureInfo.closureInfo.enumTypeAndCase.caseIdx)
+      }
+      if enumCasesToProcess.count != 2 {
+        break
+      }
+
       var (specializedFunction, alreadyExists) =
         getOrCreateSpecializedFunctionCFG(basedOn: callSite, enumDict: &enumDict, context)
 
@@ -390,7 +398,7 @@ private func getOrCreateSpecializedFunctionCFG(
   for closureInfo in closureInfos {
     assert(
       closureInfo.closureInfo.enumTypeAndCase.enumType
-        == closureInfos[1].closureInfo.enumTypeAndCase.enumType)
+        == closureInfos[0].closureInfo.enumTypeAndCase.enumType)
   }
   let specializedPbName = callSite.specializedCalleeNameCFG(context)
   if let specializedPb = context.lookupFunction(name: specializedPbName) {
