@@ -1420,6 +1420,13 @@ extension SpecializationCloner {
                 let newAi = builder.createApply(
                   function: newFri, SubstitutionMap(), arguments: newArgs)
                 ai.replace(with: newAi, self.context)
+                // MYTODO: maybe we can set insertion point earlier
+                let newBuilder = Builder(before: newAi.parentBlock.terminator, self.context)
+                for res in dtiOfCapturedArgsTuple.results {
+                  if !res.type.isTrivial(in: res.parentFunction) {
+                    newBuilder.createDestroyValue(operand: res)
+                  }
+                }
               } else {
                 var newArgs = [Value]()
                 for op in ai.argumentOperands {
