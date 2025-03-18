@@ -218,8 +218,7 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     return
   }
 
-  //var remainingSpecializationRounds = 5
-  var remainingSpecializationRounds = 1
+  var remainingSpecializationRounds = 5
 
   var enumDict: EnumDict = [:]
 
