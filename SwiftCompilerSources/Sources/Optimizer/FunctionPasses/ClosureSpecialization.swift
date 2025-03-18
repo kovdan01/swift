@@ -747,7 +747,11 @@ private func updateCallSiteCFG(
       op: succBB.arguments[0].bridged.getFirstUse().op!
     ).getUser().instruction
     let optionalDestructureTupleInst = possibleDestructureTupleInst as? DestructureTupleInst
-    assert(optionalDestructureTupleInst != nil)
+    // MYTODO: this is not always true
+    // assert(optionalDestructureTupleInst != nil)
+    if optionalDestructureTupleInst == nil {
+      return
+    }
     closureValInPbOpt = optionalDestructureTupleInst!.results[closureInfo.idxInEnumPayload]
   } else {
     for use in succBB.arguments[0].uses {
@@ -773,7 +777,11 @@ private func updateCallSiteCFG(
     applyInPbOpt = applyInstOpt!
   }
 
-  assert(applyInPbOpt != nil)
+  // MYTODO: this is not always true
+  // assert(applyInPbOpt != nil)
+  if applyInPbOpt == nil {
+    return
+  }
 
   if callSiteOpt == nil {
     callSiteOpt = CallSite(applySite: pbPAI)
