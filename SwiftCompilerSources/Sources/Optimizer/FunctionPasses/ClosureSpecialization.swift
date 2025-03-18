@@ -165,11 +165,6 @@ func isFunctionSimpleIfElse(function: Function) -> Bool {
       if returnInst == nil {
         return false
       }
-      for arg in block.arguments {
-        if arg.type.description.hasSuffix("_specialized") {
-          return false
-        }
-      }
     } else {
       return false
     }
