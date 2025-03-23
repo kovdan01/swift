@@ -1343,6 +1343,14 @@ SwiftInt BridgedInstruction::SwitchEnumInst_getCaseIndex(SwiftInt idx) const {
   return seInst->getModule().getCaseIndex(seInst->getCase(idx).first);
 }
 
+OptionalBridgedBasicBlock
+BridgedInstruction::SwitchEnumInst_getSuccessorForDefault() const {
+  auto *seInst = getAs<swift::SwitchEnumInst>();
+  if (seInst->hasDefault())
+    return {seInst->getDefaultBB()};
+  return {nullptr};
+}
+
 SwiftInt BridgedInstruction::StoreInst_getStoreOwnership() const {
   return (SwiftInt)getAs<swift::StoreInst>()->getOwnershipQualifier();
 }

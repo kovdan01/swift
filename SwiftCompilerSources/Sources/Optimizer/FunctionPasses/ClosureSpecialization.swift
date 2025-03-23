@@ -214,9 +214,9 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
   debugPrint("AAAAA VJP BEFORE END")
 
   let isSingleBB = function.blocks.singleElement != nil
-  if !isSingleBB && !isFunctionSimpleIfElse(function: function) {
-    return
-  }
+//  if !isSingleBB && !isFunctionSimpleIfElse(function: function) {
+//    return
+//  }
 
   var remainingSpecializationRounds = 5
 
@@ -225,10 +225,14 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
   repeat {
     let callSiteOpt = gatherCallSite(in: function, context)
     if callSiteOpt == nil {
+      debugPrint("AAAAAA callSite NIL")
       break
     }
 
     let callSite = callSiteOpt!
+    debugPrint("AAAAAA callSite BEGIN")
+    debugPrint(callSite.closureInfosWithApplyCFG)
+    debugPrint("AAAAAA callSite END")
 
     if isSingleBB {
       var (specializedFunction, alreadyExists) = getOrCreateSpecializedFunction(
@@ -268,14 +272,6 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
       debugPrint("AAAAA PB BEFORE BEGIN")
       debugPrint(callSite.applyCallee)
       debugPrint("AAAAA PB BEFORE END")
-
-      var enumCasesToProcess = Set<Int>()
-      for closureInfo in callSite.closureInfosWithApplyCFG {
-        enumCasesToProcess.insert(closureInfo.closureInfo.enumTypeAndCase.caseIdx)
-      }
-      if enumCasesToProcess.count != 2 {
-        break
-      }
 
       var (specializedFunction, alreadyExists) =
         getOrCreateSpecializedFunctionCFG(basedOn: callSite, enumDict: &enumDict, context)
@@ -642,6 +638,25 @@ private func rewriteApplyInstructionCFG(
       break
     }
   }
+
+  let vjp = callSite.applySite.parentFunction
+  for inst in vjp.instructions {
+    let ei = inst as? EnumInst
+    if ei == nil {
+      continue
+    }
+    let enumType = ei!.results[0].type
+    let newEnumTypeOpt = enumDict[enumType]
+    if newEnumTypeOpt == nil {
+      continue
+    }
+    let newEnumType = newEnumTypeOpt!
+
+    var builder = Builder(before: ei!, context)
+    let newEI = builder.createEnum(caseIndex: ei!.caseIndex, payload: ei!.payload, enumType: newEnumType)
+    ei!.replace(with: newEI, context)
+  }
+
 }
 
 private func rewriteApplyInstruction(
@@ -712,10 +727,15 @@ private func updateCallSiteCFG(
   in callSiteOpt: inout CallSite?,
   _ context: FunctionPassContext
 ) {
+  debugPrint("AAAAAA updateCallSiteCFG BEGIN")
+  debugPrint(rootClosure)
+
   let tupleOpt = handleNonAppliesCFG(for: rootClosure, context)
   if tupleOpt == nil {
+    debugPrint("AAAAAA updateCallSiteCFG RETURN NIL")
     return
   }
+  debugPrint("AAAAAA updateCallSiteCFG MIDDLE 00")
 
   let closureInfo = tupleOpt!.closureInfo
   let pbApplyOperand = tupleOpt!.pbApplyOperand
@@ -723,10 +743,12 @@ private func updateCallSiteCFG(
   guard let pbPAI = pbApplyOperand.instruction as? PartialApplyInst else {
     return
   }
+  debugPrint("AAAAAA updateCallSiteCFG MIDDLE 01")
 
   guard let pb = pbPAI.referencedFunction else {
     return
   }
+  debugPrint("AAAAAA updateCallSiteCFG MIDDLE 02")
 
   let argType = pbApplyOperand.value.type
   var argIdxOpt = Int?(nil)
@@ -741,12 +763,14 @@ private func updateCallSiteCFG(
   if !arg.bridged.hasOneUse() {
     return
   }
+  debugPrint("AAAAAA updateCallSiteCFG MIDDLE 03")
   let argFirstUse = arg.bridged.getFirstUse()
   let possibleSwitchEnumInst = BridgedOperand(op: argFirstUse.op!).getUser().instruction
   let optionalSwitchEnumInst = possibleSwitchEnumInst as? SwitchEnumInst
   if optionalSwitchEnumInst == nil {
     return
   }
+  debugPrint("AAAAAA updateCallSiteCFG MIDDLE 04")
 
   let succBB = optionalSwitchEnumInst!.getUniqueSuccessor(
     forCaseIndex: closureInfo.enumTypeAndCase.caseIdx)!
@@ -776,6 +800,7 @@ private func updateCallSiteCFG(
     }
   }
   assert(closureValInPbOpt != nil)
+  debugPrint("AAAAAA updateCallSiteCFG MIDDLE 05")
 
   var applyInPbOpt = ApplyInst?(nil)
   for use in closureValInPbOpt!.uses {
@@ -792,6 +817,7 @@ private func updateCallSiteCFG(
   if applyInPbOpt == nil {
     return
   }
+  debugPrint("AAAAAA updateCallSiteCFG MIDDLE 06")
 
   if callSiteOpt == nil {
     callSiteOpt = CallSite(applySite: pbPAI)
@@ -799,6 +825,7 @@ private func updateCallSiteCFG(
     assert(callSiteOpt!.applySite == pbPAI)
   }
 
+  debugPrint("AAAAAA updateCallSiteCFG END")
   callSiteOpt!.closureInfosWithApplyCFG.append((closureInfo: closureInfo, applyInPb: applyInPbOpt!))
 }
 
@@ -865,27 +892,32 @@ private func handleNonAppliesCFG(
   -> (closureInfo: ClosureInfoCFG, pbApplyOperand: Operand)?
 {
   let blockIdx = rootClosure.parentBlock.index
-  if blockIdx != 1 && blockIdx != 2 {
-    return nil
-  }
+//  if blockIdx != 1 && blockIdx != 2 {
+//    return nil
+//  }
 
+  debugPrint("AAAAA handleNonAppliesCFG 00")
   var rootClosureConversionsAndReabstractions = OperandWorklist(context)
   rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: rootClosure.uses)
   defer {
     rootClosureConversionsAndReabstractions.deinitialize()
   }
+  debugPrint("AAAAA handleNonAppliesCFG 01")
 
   var closureInfoOpt = ClosureInfoCFG?(nil)
   var pbApplyOperandOpt = Operand?(nil)
 
+  debugPrint("AAAAA handleNonAppliesCFG 02")
   while let use = rootClosureConversionsAndReabstractions.pop() {
+    debugPrint("AAAAA handleNonAppliesCFG 03")
     switch use.instruction {
     case let pai as PartialApplyInst:
       if !pai.isPullbackInResultOfAutodiffVJP {
         return nil
       }
       assert(pbApplyOperandOpt == nil)
-      assert(pai.parentBlock.index == 3)
+      // MYTODO: delete this
+      //assert(pai.parentBlock.index == 3)
       pbApplyOperandOpt = use
 
     case let ti as TupleInst:
@@ -944,10 +976,18 @@ private func handleNonAppliesCFG(
       return nil
     }
   }
-  assert((closureInfoOpt == nil) == (pbApplyOperandOpt == nil))
-  if closureInfoOpt == nil {
+  debugPrint("AAAAA handleNonAppliesCFG 04")
+  // MYTODO: this is not always true
+  //assert((closureInfoOpt == nil) == (pbApplyOperandOpt == nil))
+  if (closureInfoOpt == nil) != (pbApplyOperandOpt == nil) {
     return nil
   }
+  debugPrint("AAAAA handleNonAppliesCFG 05")
+  if closureInfoOpt == nil {
+    debugPrint("AAAAA handleNonAppliesCFG 06")
+    return nil
+  }
+  debugPrint("AAAAA handleNonAppliesCFG 07")
   return (closureInfo: closureInfoOpt!, pbApplyOperand: pbApplyOperandOpt!)
 }
 
@@ -1416,7 +1456,7 @@ extension SpecializationCloner {
       }
     }
     let newEntrySwitchEnum = builderEntry.createSwitchEnum(
-      enum: entrySwitchEnum.enumOp, cases: enumCases)
+      enum: entrySwitchEnum.enumOp, cases: enumCases)//, defaultBlock: entrySwitchEnum.getSuccessorForDefault())
     self.entryBlock.bridged.eraseInstruction(entrySwitchEnum.bridged)
 
     // MYTODO: loop over enum cases with inner loop over VJPs in one enum case

@@ -613,7 +613,7 @@ BridgedEnumRewriter::rewriteBranchTracingEnum(BridgedType enumType,
     EnumElementDecl *oldEED = oldECD->getElements().front();
 
     unsigned enumIdx = module.getCaseIndex(oldEED);
-    assert((enumIdx == 0 || enumIdx == 1) && "MYTODO");
+    // assert((enumIdx == 0 || enumIdx == 1) && "MYTODO");
 
     llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
         *closuresBuffer = &closuresBuffers[enumIdx];
