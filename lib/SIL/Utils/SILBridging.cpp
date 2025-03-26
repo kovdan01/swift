@@ -560,6 +560,12 @@ bool BridgedInstruction::mayBeDeinitBarrierNotConsideringSideEffects() const {
   return ::mayBeDeinitBarrierNotConsideringSideEffects(unbridged());
 }
 
+void BridgedInstruction::SwitchEnumInst_changeOperand(
+    BridgedValue newValue) const {
+  auto *sei = cast<SwitchEnumInst>(unbridged());
+  sei->setOperand(0, newValue.getSILValue());
+}
+
 //===----------------------------------------------------------------------===//
 //                               BridgedBuilder
 //===----------------------------------------------------------------------===//

@@ -229,7 +229,7 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
       return
     }
     let bbMap = vjpToPbBB(vjp: function, pb: pbApply!.referencedFunction!)
-    if bbMap.count == nil {
+    if bbMap.count == 0 {
       return
     }
     debugPrint("AAAAA getPBClosure END")
@@ -1036,7 +1036,10 @@ private func vjpToPbBB(vjp: Function, pb: Function) -> [BasicBlock:BasicBlock] {
   for _ in pb.blocks {
     pbBlocksCount += 1
   }
-  assert(vjpBlocksCount == pbBlocksCount)
+  //assert(vjpBlocksCount == pbBlocksCount)
+  if vjpBlocksCount != pbBlocksCount {
+    return [:]
+  }
   var dict = [BasicBlock:BasicBlock]()
 
   var vjpBB = vjp.entryBlock
@@ -1662,7 +1665,8 @@ private func rewriteUsesOfPayloadItem(
       resultType: uedi.type)
     uedi.replace(with: newUedi, context)
 
-//  case let sei as SwitchEnumInst:
+  case let sei as SwitchEnumInst:
+    sei.bridged.SwitchEnumInst_changeOperand(newDti.results[resultIdx].bridged)
 //    let builder = Builder(before: sei, context)
 //    var casesArr = [(Int, BasicBlock)]()
 //    for (idx, theCase) in sei.cases {
@@ -2205,7 +2209,7 @@ private func getSpecializedParametersCFG(
   // Start by adding all original parameters except for the closure parameters.
   for (index, paramInfo) in applySiteCallee.convention.parameters.enumerated() {
     // MYTODO: is this safe to perform such check?
-    if paramInfo.type.type.bridged.type != enumType.astType.type.bridged.type {
+    if paramInfo.type.rawType.bridged.type != enumType.canonicalType.rawType.bridged.type {
       specializedParamInfoList.append(paramInfo)
       continue
     }
@@ -2228,7 +2232,7 @@ private func getSpecializedParametersCFG(
     }
     let newEnumType = enumDict[enumType]!
     let newParamInfo = ParameterInfo(
-      type: newEnumType.astType, convention: paramInfo.convention,
+      type: newEnumType.canonicalType, convention: paramInfo.convention,
       options: paramInfo.options, hasLoweredAddresses: paramInfo.hasLoweredAddresses)
     specializedParamInfoList.append(newParamInfo)
   }

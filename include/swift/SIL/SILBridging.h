@@ -787,6 +787,7 @@ struct BridgedInstruction {
   BRIDGED_INLINE SwiftInt SwitchEnumInst_getCaseIndex(SwiftInt idx) const;
   BRIDGED_INLINE OptionalBridgedBasicBlock
   SwitchEnumInst_getSuccessorForDefault() const;
+  void SwitchEnumInst_changeOperand(BridgedValue newValue) const;
   BRIDGED_INLINE SwiftInt StoreInst_getStoreOwnership() const;
   BRIDGED_INLINE SwiftInt AssignInst_getAssignOwnership() const;
   BRIDGED_INLINE MarkDependenceKind MarkDependenceInst_dependenceKind() const;
