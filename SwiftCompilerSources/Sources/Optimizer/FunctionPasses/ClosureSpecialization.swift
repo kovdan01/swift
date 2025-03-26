@@ -218,6 +218,23 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 //    return
 //  }
 
+  if !isSingleBB {
+    debugPrint("AAAAA getPBClosure BEGIN")
+    let pbApply = getPBClosure(vjp: function)
+    debugPrint(pbApply)
+    if pbApply == nil {
+      return
+    }
+    if pbApply!.referencedFunction == nil {
+      return
+    }
+    let bbMap = vjpToPbBB(vjp: function, pb: pbApply!.referencedFunction!)
+    if bbMap.count == nil {
+      return
+    }
+    debugPrint("AAAAA getPBClosure END")
+  }
+
   var remainingSpecializationRounds = 5
 
   var enumDict: EnumDict = [:]
@@ -302,6 +319,70 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 // =========== Top-level functions ========== //
 
 private let specializationLevelLimit = 2
+
+//private func getPBClosure(vjp: Function) -> (PartialApplyInst, Int)? {
+private func getPBClosure(vjp: Function) -> PartialApplyInst? {
+  var exitBB = Optional<BasicBlock>(nil)
+  for block in vjp.blocks {
+    if block.isReachableExitBlock {
+      let ri = block.terminator as? ReturnInst
+      if ri != nil {
+//        debugPrint("AAAA block BEGIN")
+//        debugPrint(block.shortDescription)
+//        debugPrint("AAAA block END")
+        assert(exitBB == nil)
+        exitBB = block
+      }
+    }
+  }
+//  debugPrint("AAAA getPBClosure 00")
+  if exitBB == nil {
+    return nil
+  }
+//  debugPrint("AAAA getPBClosure 01")
+  let ri = exitBB!.terminator as? ReturnInst
+  assert(ri != nil)
+  let ti = ri!.returnedValue.definingInstruction as? TupleInst
+//  debugPrint("AAAA return defining inst BEGIN")
+//  debugPrint(ri!.returnedValue.definingInstruction)
+//  debugPrint("AAAA return defining inst END")
+  if ti == nil {
+    return nil
+  }
+//  debugPrint("AAAA getPBClosure 02")
+//  debugPrint(ti!.operands.count)
+//  for op in ti!.operands {
+//    debugPrint(op)
+//  }
+  if ti!.operands.count != 2 {
+    return nil
+  }
+//  debugPrint("AAAA getPBClosure 03")
+  let pai = ti!.operands[1].value.definingInstruction as? PartialApplyInst
+  if pai == nil {
+    return nil
+  }
+//  var enumArgIdx = Optional<Int>(nil)
+//  for arg in pai!.arguments {
+//    if !arg.type.isEnum {
+//      continue
+//    }
+//    if !arg.type.description.hasPrefix("$_AD__") {
+//      continue
+//    }
+//    for (idx, bbArg) in exitBB!.arguments.enumerated() {
+//      if arg == bbArg {
+//        assert(enumArgIdx == nil)
+//        enumArgIdx = idx
+//      }
+//    }
+//  }
+//  if enumArgIdx == nil {
+//    return nil
+//  }
+//  return (pai!, enumArgIdx!)
+  return pai!
+}
 
 private func gatherCallSite(in caller: Function, _ context: FunctionPassContext) -> CallSite? {
   /// __Root__ closures created via `partial_apply` or `thin_to_thick_function` may be converted and reabstracted
@@ -738,103 +819,131 @@ private func updateCallSiteCFG(
   debugPrint("AAAAAA updateCallSiteCFG BEGIN")
   debugPrint(rootClosure)
 
-  let tupleOpt = handleNonAppliesCFG(for: rootClosure, context)
-  if tupleOpt == nil {
+  let closureInfoArr = handleNonAppliesCFG(for: rootClosure, context)
+  if closureInfoArr.count == 0 {
     debugPrint("AAAAAA updateCallSiteCFG RETURN NIL")
     return
   }
   debugPrint("AAAAAA updateCallSiteCFG MIDDLE 00")
 
-  let closureInfo = tupleOpt!.closureInfo
-  let pbApplyOperand = tupleOpt!.pbApplyOperand
-
-  guard let pbPAI = pbApplyOperand.instruction as? PartialApplyInst else {
+  // MYTODO: allow multiple uses (closure defined in one bb, then used in multiple successors)
+  if closureInfoArr.count != 1 {
+    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 01")
     return
   }
-  debugPrint("AAAAAA updateCallSiteCFG MIDDLE 01")
 
-  guard let pb = pbPAI.referencedFunction else {
-    return
-  }
-  debugPrint("AAAAAA updateCallSiteCFG MIDDLE 02")
-
-  let argType = pbApplyOperand.value.type
-  var argIdxOpt = Int?(nil)
-  // MYTODO: make argIdx computation less fragile
-  for (idx, arg) in pb.arguments.enumerated() {
-    if arg.type == argType {
-      argIdxOpt = idx
-    }
-  }
-
-  let arg = pb.argument(at: argIdxOpt!)
-  if !arg.bridged.hasOneUse() {
-    return
-  }
-  debugPrint("AAAAAA updateCallSiteCFG MIDDLE 03")
-  let argFirstUse = arg.bridged.getFirstUse()
-  let possibleSwitchEnumInst = BridgedOperand(op: argFirstUse.op!).getUser().instruction
-  let optionalSwitchEnumInst = possibleSwitchEnumInst as? SwitchEnumInst
-  if optionalSwitchEnumInst == nil {
-    return
-  }
-  debugPrint("AAAAAA updateCallSiteCFG MIDDLE 04")
-
-  let succBB = optionalSwitchEnumInst!.getUniqueSuccessor(
-    forCaseIndex: closureInfo.enumTypeAndCase.caseIdx)!
-  assert(succBB.arguments.count == 1)
-  var closureValInPbOpt = Value?(nil)
-  if succBB.arguments[0].bridged.hasOneUse() {
-    let possibleDestructureTupleInst = BridgedOperand(
-      op: succBB.arguments[0].bridged.getFirstUse().op!
-    ).getUser().instruction
-    let optionalDestructureTupleInst = possibleDestructureTupleInst as? DestructureTupleInst
-    // MYTODO: this is not always true
-    // assert(optionalDestructureTupleInst != nil)
-    if optionalDestructureTupleInst == nil {
+  for closureInfo in closureInfoArr {
+    let pbPAI = getPBClosure(vjp: rootClosure.parentFunction)!
+  
+  //  let pbApplyOperand = tupleOpt!.pbApplyOperand
+  //
+  //  guard let pbPAI = pbApplyOperand.instruction as? PartialApplyInst else {
+  //    return
+  //  }
+  //  debugPrint("AAAAAA updateCallSiteCFG MIDDLE 01")
+  
+    guard let pb = pbPAI.referencedFunction else {
       return
     }
-    closureValInPbOpt = optionalDestructureTupleInst!.results[closureInfo.idxesInEnumPayload[0]]
-  } else {
-    for use in succBB.arguments[0].uses {
-      let tupleExtractInstOpt = use.instruction as? TupleExtractInst
-      if tupleExtractInstOpt == nil {
+    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 02")
+  
+  //  let argType = pbApplyOperand.value.type
+  //  var argIdxOpt = Int?(nil)
+  //  // MYTODO: make argIdx computation less fragile
+  //  for (idx, arg) in pb.arguments.enumerated() {
+  //    if arg.type == argType {
+  //      argIdxOpt = idx
+  //    }
+  //  }
+  //
+  //  let arg = pb.argument(at: argIdxOpt!)
+    var argOpt = Optional<Argument>(nil)
+    for arg in pb.arguments {
+      if !arg.type.isEnum {
         continue
       }
-      if tupleExtractInstOpt!.fieldIndex == closureInfo.idxesInEnumPayload[0] {
-        assert(closureValInPbOpt == nil)
-        closureValInPbOpt = tupleExtractInstOpt!.results[0]
+      if !arg.type.description.hasPrefix("$_AD__") {
+        continue
+      }
+      assert(argOpt == nil)
+      argOpt = arg
+    }
+    if argOpt == nil {
+      return
+    }
+    let arg = argOpt!
+    //let arg = pb.argument(at: argIdx)
+    if !arg.bridged.hasOneUse() {
+      return
+    }
+//    debugPrint(argIdx)
+    debugPrint(arg)
+    debugPrint(pb.entryBlock)
+    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 03")
+    let argFirstUse = arg.bridged.getFirstUse()
+    let possibleSwitchEnumInst = BridgedOperand(op: argFirstUse.op!).getUser().instruction
+    let optionalSwitchEnumInst = possibleSwitchEnumInst as? SwitchEnumInst
+    if optionalSwitchEnumInst == nil {
+      return
+    }
+    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 04")
+  
+    let succBB = optionalSwitchEnumInst!.getUniqueSuccessor(
+      forCaseIndex: closureInfo.enumTypeAndCase.caseIdx)!
+    assert(succBB.arguments.count == 1)
+    var closureValInPbOpt = Value?(nil)
+    if succBB.arguments[0].bridged.hasOneUse() {
+      let possibleDestructureTupleInst = BridgedOperand(
+        op: succBB.arguments[0].bridged.getFirstUse().op!
+      ).getUser().instruction
+      let optionalDestructureTupleInst = possibleDestructureTupleInst as? DestructureTupleInst
+      // MYTODO: this is not always true
+      // assert(optionalDestructureTupleInst != nil)
+      if optionalDestructureTupleInst == nil {
+        return
+      }
+      closureValInPbOpt = optionalDestructureTupleInst!.results[closureInfo.idxesInEnumPayload[0]]
+    } else {
+      for use in succBB.arguments[0].uses {
+        let tupleExtractInstOpt = use.instruction as? TupleExtractInst
+        if tupleExtractInstOpt == nil {
+          continue
+        }
+        if tupleExtractInstOpt!.fieldIndex == closureInfo.idxesInEnumPayload[0] {
+          assert(closureValInPbOpt == nil)
+          closureValInPbOpt = tupleExtractInstOpt!.results[0]
+        }
       }
     }
-  }
-  assert(closureValInPbOpt != nil)
-  debugPrint("AAAAAA updateCallSiteCFG MIDDLE 05")
-
-  var applyInPbOpt = ApplyInst?(nil)
-  for use in closureValInPbOpt!.uses {
-    let applyInstOpt = use.instruction as? ApplyInst
-    if applyInstOpt == nil {
-      continue
+    assert(closureValInPbOpt != nil)
+    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 05")
+  
+    var applyInPbOpt = ApplyInst?(nil)
+    for use in closureValInPbOpt!.uses {
+      let applyInstOpt = use.instruction as? ApplyInst
+      if applyInstOpt == nil {
+        continue
+      }
+      assert(applyInPbOpt == nil)
+      applyInPbOpt = applyInstOpt!
     }
-    assert(applyInPbOpt == nil)
-    applyInPbOpt = applyInstOpt!
+  
+    // MYTODO: this is not always true
+    // assert(applyInPbOpt != nil)
+    if applyInPbOpt == nil {
+      return
+    }
+    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 06")
+  
+    if callSiteOpt == nil {
+      callSiteOpt = CallSite(applySite: pbPAI)
+    } else {
+      assert(callSiteOpt!.applySite == pbPAI)
+    }
+  
+    debugPrint("AAAAAA updateCallSiteCFG END")
+    callSiteOpt!.closureInfosWithApplyCFG.append((closureInfo: closureInfo, applyInPb: applyInPbOpt!))
   }
-
-  // MYTODO: this is not always true
-  // assert(applyInPbOpt != nil)
-  if applyInPbOpt == nil {
-    return
-  }
-  debugPrint("AAAAAA updateCallSiteCFG MIDDLE 06")
-
-  if callSiteOpt == nil {
-    callSiteOpt = CallSite(applySite: pbPAI)
-  } else {
-    assert(callSiteOpt!.applySite == pbPAI)
-  }
-
-  debugPrint("AAAAAA updateCallSiteCFG END")
-  callSiteOpt!.closureInfosWithApplyCFG.append((closureInfo: closureInfo, applyInPb: applyInPbOpt!))
 }
 
 private func updateCallSite(
@@ -968,6 +1077,11 @@ private func vjpToPbBB(vjp: Function, pb: Function) -> [BasicBlock:BasicBlock] {
       let enumType = eiOpt!.results[0].type
       assert(enumType.description.hasPrefix("$_AD__"))
       var newPredBB = Optional<BasicBlock>(nil)
+      debugPrint("AAAAA BBS BEGIN")
+      debugPrint(vjpBBArg.shortDescription)
+      debugPrint(pbBBArg.shortDescription)
+      debugPrint(vjpSuccBB.shortDescription)
+      debugPrint("AAAAA BBS END")
       for pbPredBB in pbBBArg.predecessors {
         for arg in pbPredBB.arguments {
           if !arg.type.isTuple {
@@ -979,13 +1093,19 @@ private func vjpToPbBB(vjp: Function, pb: Function) -> [BasicBlock:BasicBlock] {
           }
         }
       }
-      assert(newPredBB != nil)
+      //assert(newPredBB != nil)
+      if newPredBB == nil {
+        return
+      }
       dfs(vjpBBArg: vjpSuccBB, pbBBArg: newPredBB!)
     }
   }
 
   dfs(vjpBBArg: vjpBB, pbBBArg: pbBB)
-  assert(dict.count == vjpBlocksCount)
+//  assert(dict.count == vjpBlocksCount)
+  if dict.count != vjpBlocksCount {
+    return [:]
+  }
   return dict
 }
 
@@ -993,7 +1113,8 @@ private func handleNonAppliesCFG(
   for rootClosure: SingleValueInstruction,
   _ context: FunctionPassContext
 )
-  -> (closureInfo: ClosureInfoCFG, pbApplyOperand: Operand)?
+//  -> (closureInfo: ClosureInfoCFG, pbApplyOperand: Operand)?
+  -> [ClosureInfoCFG]
 {
   let blockIdx = rootClosure.parentBlock.index
 //  if blockIdx != 1 && blockIdx != 2 {
@@ -1008,22 +1129,22 @@ private func handleNonAppliesCFG(
   }
   debugPrint("AAAAA handleNonAppliesCFG 01")
 
-  var closureInfoOpt = ClosureInfoCFG?(nil)
-  var pbApplyOperandOpt = Operand?(nil)
+  var closureInfoArr = [ClosureInfoCFG]()
+  //var pbApplyOperandOpt = Operand?(nil)
 
   debugPrint("AAAAA handleNonAppliesCFG 02")
   while let use = rootClosureConversionsAndReabstractions.pop() {
     debugPrint("AAAAA handleNonAppliesCFG 03")
     switch use.instruction {
-    case let pai as PartialApplyInst:
-      if !pai.isPullbackInResultOfAutodiffVJP {
-        debugPrint("AAAAA handleNonAppliesCFG NIL 00")
-        return nil
-      }
-      assert(pbApplyOperandOpt == nil)
-      // MYTODO: delete this
-      //assert(pai.parentBlock.index == 3)
-      pbApplyOperandOpt = use
+//    case let pai as PartialApplyInst:
+//      if !pai.isPullbackInResultOfAutodiffVJP {
+//        debugPrint("AAAAA handleNonAppliesCFG NIL 00")
+//        return nil
+//      }
+//      assert(pbApplyOperandOpt == nil)
+//      // MYTODO: delete this
+//      //assert(pai.parentBlock.index == 3)
+//      pbApplyOperandOpt = use
 
     case let ti as TupleInst:
       if ti.parentFunction.isAutodiffVJP,
@@ -1035,7 +1156,7 @@ private func handleNonAppliesCFG(
         if !ti.bridged.hasOneUse() {
         debugPrint(ti)
         debugPrint("AAAAA handleNonAppliesCFG NIL 01")
-          return nil
+          return []
         }
         for tiUse in ti.uses {
           //let tupleFirstUse = ti.bridged.getFirstUse()
@@ -1044,29 +1165,29 @@ private func handleNonAppliesCFG(
           let optionalEI = possibleEnumInst as? EnumInst
           if optionalEI == nil {
           debugPrint("AAAAA handleNonAppliesCFG NIL 02")
-            return nil
+            return []
           }
           let ei = optionalEI!
-          if !ei.bridged.hasOneUse() {
-          debugPrint("AAAAA handleNonAppliesCFG NIL 03")
-            return nil
-          }
-          let firstEnumUse = ei.bridged.getFirstUse()
-          let possibleBranchInst = BridgedOperand(op: firstEnumUse.op!).getUser().instruction
-          let optionalBI = possibleBranchInst as? BranchInst
-          if optionalBI == nil {
-          debugPrint("AAAAA handleNonAppliesCFG NIL 04")
-            return nil
-          }
-          let bi = optionalBI!
-
-          let succBBArg = bi.getArgument(for: Operand(bridged: BridgedOperand(op: firstEnumUse.op!)))
+//          if !ei.bridged.hasOneUse() {
+//          debugPrint("AAAAA handleNonAppliesCFG NIL 03")
+//            return nil
+//          }
+//          let firstEnumUse = ei.bridged.getFirstUse()
+//          let possibleBranchInst = BridgedOperand(op: firstEnumUse.op!).getUser().instruction
+//          let optionalBI = possibleBranchInst as? BranchInst
+//          if optionalBI == nil {
+//          debugPrint("AAAAA handleNonAppliesCFG NIL 04")
+//            return nil
+//          }
+//          let bi = optionalBI!
+//
+//          let succBBArg = bi.getArgument(for: Operand(bridged: BridgedOperand(op: firstEnumUse.op!)))
 
           if use.value != rootClosure {
           debugPrint("AAAAA handleNonAppliesCFG NIL 05")
-            return nil
+            return []
           }
-          rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: succBBArg.uses)
+//          rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: succBBArg.uses)
           var capturedArgs = [Value]()
           var idxInEnumPayload = use.index
           var paiOpt = rootClosure as? PartialApplyInst
@@ -1075,12 +1196,11 @@ private func handleNonAppliesCFG(
               capturedArgs.append(argOp.value)
             }
           }
-          assert(closureInfoOpt == nil)
           let enumTypeAndCase = EnumTypeAndCase(enumType: ei.type, caseIdx: ei.caseIndex)
-          closureInfoOpt = (
+          closureInfoArr.append(ClosureInfoCFG(
             closure: rootClosure, idxesInEnumPayload: [idxInEnumPayload], capturedArgs: capturedArgs,
             enumTypeAndCase: enumTypeAndCase
-          )
+          ))
         }
       } else {
         fallthrough
@@ -1088,25 +1208,26 @@ private func handleNonAppliesCFG(
 
     default:
         debugPrint("AAAAA handleNonAppliesCFG NIL 06")
-      return nil
+      return []
     }
   }
   debugPrint("AAAAA handleNonAppliesCFG 04")
   // MYTODO: this is not always true
   //assert((closureInfoOpt == nil) == (pbApplyOperandOpt == nil))
-  if (closureInfoOpt == nil) != (pbApplyOperandOpt == nil) {
-        debugPrint("AAAAA handleNonAppliesCFG NIL 07")
-    return nil
-  }
-  debugPrint("AAAAA handleNonAppliesCFG 05")
-  if closureInfoOpt == nil {
-    debugPrint("AAAAA handleNonAppliesCFG 06")
-    return nil
-  }
-  debugPrint("AAAAA handleNonAppliesCFG 07 BEGIN")
-  debugPrint(pbApplyOperandOpt!)
-  debugPrint("AAAAA handleNonAppliesCFG 07 END")
-  return (closureInfo: closureInfoOpt!, pbApplyOperand: pbApplyOperandOpt!)
+//  if (closureInfoOpt == nil) != (pbApplyOperandOpt == nil) {
+//        debugPrint("AAAAA handleNonAppliesCFG NIL 07")
+//    return nil
+//  }
+//  debugPrint("AAAAA handleNonAppliesCFG 05")
+//  if closureInfoOpt == nil {
+//    debugPrint("AAAAA handleNonAppliesCFG 06")
+//    return nil
+//  }
+//  debugPrint("AAAAA handleNonAppliesCFG 07 BEGIN")
+//  debugPrint(pbApplyOperandOpt!)
+//  debugPrint("AAAAA handleNonAppliesCFG 07 END")
+  //return (closureInfo: closureInfoOpt!)//, pbApplyOperand: pbApplyOperandOpt!)
+  return closureInfoArr
 }
 
 /// Handles all non-apply direct and transitive uses of `rootClosure`.
@@ -1541,7 +1662,17 @@ private func rewriteUsesOfPayloadItem(
       resultType: uedi.type)
     uedi.replace(with: newUedi, context)
 
+//  case let sei as SwitchEnumInst:
+//    let builder = Builder(before: sei, context)
+//    var casesArr = [(Int, BasicBlock)]()
+//    for (idx, theCase) in sei.cases {
+//      casesArr.append((idx, theCase))
+//    }
+//    let newSei = builder.createSwitchEnum(enum: newDti.results[resultIdx], cases: casesArr)
+//    sei.replace(with: newSei, context)
+
   default:
+    debugPrint(use.instruction)
     assert(false)
   }
 }
