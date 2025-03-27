@@ -278,6 +278,10 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     } else {
       let bbMap = vjpToPbBB(vjp: function, pb: callSite.applyCallee)
 
+      debugPrint("AAAAA PB BEFORE BEGIN")
+      debugPrint(callSite.applyCallee)
+      debugPrint("AAAAA PB BEFORE END")
+
       var (specializedFunction, alreadyExists) =
         getOrCreateSpecializedFunctionCFG(basedOn: callSite, enumDict: &enumDict, context)
 
@@ -969,7 +973,9 @@ private func vjpToPbBB(vjp: Function, pb: Function) -> [BasicBlock:BasicBlock] {
       return
     }
     dict[vjpBBArg] = pbBBArg
-    assert((vjpBBArg.singleSuccessor == nil) == (pbBBArg.singlePredecessor == nil))
+    if (vjpBBArg.singleSuccessor == nil) != (pbBBArg.singlePredecessor == nil) {
+      return
+    }
     if vjpBBArg.singleSuccessor != nil {
       dfs(vjpBBArg: vjpBBArg.singleSuccessor!, pbBBArg: pbBBArg.singlePredecessor!)
       return
