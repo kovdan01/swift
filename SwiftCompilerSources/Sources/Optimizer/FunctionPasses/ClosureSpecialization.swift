@@ -219,9 +219,9 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 //  }
 
   if !isSingleBB {
-    debugPrint("AAAAA getPBClosure BEGIN")
+//    debugPrint("AAAAA getPBClosure BEGIN")
     let pbApply = getPBClosure(vjp: function)
-    debugPrint(pbApply)
+//    debugPrint(pbApply)
     if pbApply == nil {
       return
     }
@@ -232,7 +232,7 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     if bbMap.count == 0 {
       return
     }
-    debugPrint("AAAAA getPBClosure END")
+//    debugPrint("AAAAA getPBClosure END")
   }
 
   var remainingSpecializationRounds = 5
@@ -242,14 +242,14 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
   repeat {
     let callSiteOpt = gatherCallSite(in: function, context)
     if callSiteOpt == nil {
-      debugPrint("AAAAAA callSite NIL")
+//      debugPrint("AAAAAA callSite NIL")
       break
     }
 
     let callSite = callSiteOpt!
-    debugPrint("AAAAAA callSite BEGIN")
-    debugPrint(callSite.closureInfosWithApplyCFG)
-    debugPrint("AAAAAA callSite END")
+//    debugPrint("AAAAAA callSite BEGIN")
+//    debugPrint(callSite.closureInfosWithApplyCFG)
+//    debugPrint("AAAAAA callSite END")
 
     if isSingleBB {
       var (specializedFunction, alreadyExists) = getOrCreateSpecializedFunction(
@@ -286,17 +286,17 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
         function.fixStackNesting(context)
       }
     } else {
-      debugPrint("AAAAA PB BEFORE BEGIN")
-      debugPrint(callSite.applyCallee)
-      debugPrint("AAAAA PB BEFORE END")
-
-      debugPrint("AAAAA bb MAP BEGIN")
+//      debugPrint("AAAAA PB BEFORE BEGIN")
+//      debugPrint(callSite.applyCallee)
+//      debugPrint("AAAAA PB BEFORE END")
+//
+//      debugPrint("AAAAA bb MAP BEGIN")
       let bbMap = vjpToPbBB(vjp: function, pb: callSite.applyCallee)
-      debugPrint("AAAAA bb MAP MIDDLE")
-      for (vjpBB, pbBB) in bbMap {
-        debugPrint(vjpBB.shortDescription, " -> ", pbBB.shortDescription)
-      }
-      debugPrint("AAAAA bb MAP END")
+//      debugPrint("AAAAA bb MAP MIDDLE")
+//      for (vjpBB, pbBB) in bbMap {
+//        debugPrint(vjpBB.shortDescription, " -> ", pbBB.shortDescription)
+//      }
+//      debugPrint("AAAAA bb MAP END")
 
       var (specializedFunction, alreadyExists) =
         getOrCreateSpecializedFunctionCFG(basedOn: callSite, enumDict: &enumDict, context)
@@ -816,19 +816,19 @@ private func updateCallSiteCFG(
   in callSiteOpt: inout CallSite?,
   _ context: FunctionPassContext
 ) {
-  debugPrint("AAAAAA updateCallSiteCFG BEGIN")
-  debugPrint(rootClosure)
+//  debugPrint("AAAAAA updateCallSiteCFG BEGIN")
+//  debugPrint(rootClosure)
 
   let closureInfoArr = handleNonAppliesCFG(for: rootClosure, context)
   if closureInfoArr.count == 0 {
-    debugPrint("AAAAAA updateCallSiteCFG RETURN NIL")
+//    debugPrint("AAAAAA updateCallSiteCFG RETURN NIL")
     return
   }
-  debugPrint("AAAAAA updateCallSiteCFG MIDDLE 00")
+//  debugPrint("AAAAAA updateCallSiteCFG MIDDLE 00")
 
   // MYTODO: allow multiple uses (closure defined in one bb, then used in multiple successors)
   if closureInfoArr.count != 1 {
-    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 01")
+//    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 01")
     return
   }
 
@@ -845,7 +845,7 @@ private func updateCallSiteCFG(
     guard let pb = pbPAI.referencedFunction else {
       return
     }
-    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 02")
+//    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 02")
   
   //  let argType = pbApplyOperand.value.type
   //  var argIdxOpt = Int?(nil)
@@ -877,16 +877,16 @@ private func updateCallSiteCFG(
       return
     }
 //    debugPrint(argIdx)
-    debugPrint(arg)
-    debugPrint(pb.entryBlock)
-    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 03")
+//    debugPrint(arg)
+//    debugPrint(pb.entryBlock)
+//    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 03")
     let argFirstUse = arg.bridged.getFirstUse()
     let possibleSwitchEnumInst = BridgedOperand(op: argFirstUse.op!).getUser().instruction
     let optionalSwitchEnumInst = possibleSwitchEnumInst as? SwitchEnumInst
     if optionalSwitchEnumInst == nil {
       return
     }
-    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 04")
+//    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 04")
   
     let succBB = optionalSwitchEnumInst!.getUniqueSuccessor(
       forCaseIndex: closureInfo.enumTypeAndCase.caseIdx)!
@@ -916,7 +916,7 @@ private func updateCallSiteCFG(
       }
     }
     assert(closureValInPbOpt != nil)
-    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 05")
+ //   debugPrint("AAAAAA updateCallSiteCFG MIDDLE 05")
   
     var applyInPbOpt = ApplyInst?(nil)
     for use in closureValInPbOpt!.uses {
@@ -933,7 +933,7 @@ private func updateCallSiteCFG(
     if applyInPbOpt == nil {
       return
     }
-    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 06")
+//    debugPrint("AAAAAA updateCallSiteCFG MIDDLE 06")
   
     if callSiteOpt == nil {
       callSiteOpt = CallSite(applySite: pbPAI)
@@ -941,7 +941,7 @@ private func updateCallSiteCFG(
       assert(callSiteOpt!.applySite == pbPAI)
     }
   
-    debugPrint("AAAAAA updateCallSiteCFG END")
+//    debugPrint("AAAAAA updateCallSiteCFG END")
     callSiteOpt!.closureInfosWithApplyCFG.append((closureInfo: closureInfo, applyInPb: applyInPbOpt!))
   }
 }
@@ -1006,7 +1006,7 @@ private func updateCallSite(
 //          let succBBArg = bi.getArgument(for: Operand(bridged: BridgedOperand(op: firstEnumUse.op!)))
 //
 //          if use.value != rootClosure {
-//          debugPrint("AAAAA handleNonAppliesCFG NIL 05")
+//          //debugPrint("AAAAA handleNonAppliesCFG NIL 05")
 //            return nil
 //          }
 //          rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: succBBArg.uses)
@@ -1080,22 +1080,31 @@ private func vjpToPbBB(vjp: Function, pb: Function) -> [BasicBlock:BasicBlock] {
       let enumType = eiOpt!.results[0].type
       assert(enumType.description.hasPrefix("$_AD__"))
       var newPredBB = Optional<BasicBlock>(nil)
-      debugPrint("AAAAA BBS BEGIN")
-      debugPrint(vjpBBArg.shortDescription)
-      debugPrint(pbBBArg.shortDescription)
-      debugPrint(vjpSuccBB.shortDescription)
-      debugPrint("AAAAA BBS END")
+//      debugPrint("AAAAA BBS BEGIN")
+//      debugPrint(enumType)
+//      debugPrint(vjpBBArg.shortDescription)
+//      debugPrint(pbBBArg.shortDescription)
+//      debugPrint(vjpSuccBB.shortDescription)
       for pbPredBB in pbBBArg.predecessors {
         for arg in pbPredBB.arguments {
+//          debugPrint("AAAAA arg BEGIN")
+//          debugPrint(arg)
+//          debugPrint("AAAAA arg MIDDLE 1")
+//          debugPrint(arg.type)
           if !arg.type.isTuple {
             continue
           }
+//          debugPrint("AAAAA arg MIDDLE 2")
+//          debugPrint(arg.type.tupleElements[0])
+//          debugPrint("AAAAA arg END")
           if arg.type.tupleElements[0] == enumType {
             assert(newPredBB == nil)
             newPredBB = pbPredBB
           }
         }
       }
+//      debugPrint(newPredBB)
+//      debugPrint("AAAAA BBS END")
       //assert(newPredBB != nil)
       if newPredBB == nil {
         return
@@ -1124,24 +1133,24 @@ private func handleNonAppliesCFG(
 //    return nil
 //  }
 
-  debugPrint("AAAAA handleNonAppliesCFG 00")
+//  //debugPrint("AAAAA handleNonAppliesCFG 00")
   var rootClosureConversionsAndReabstractions = OperandWorklist(context)
   rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: rootClosure.uses)
   defer {
     rootClosureConversionsAndReabstractions.deinitialize()
   }
-  debugPrint("AAAAA handleNonAppliesCFG 01")
+//  //debugPrint("AAAAA handleNonAppliesCFG 01")
 
   var closureInfoArr = [ClosureInfoCFG]()
   //var pbApplyOperandOpt = Operand?(nil)
 
-  debugPrint("AAAAA handleNonAppliesCFG 02")
+  //debugPrint("AAAAA handleNonAppliesCFG 02")
   while let use = rootClosureConversionsAndReabstractions.pop() {
-    debugPrint("AAAAA handleNonAppliesCFG 03")
+    //debugPrint("AAAAA handleNonAppliesCFG 03")
     switch use.instruction {
 //    case let pai as PartialApplyInst:
 //      if !pai.isPullbackInResultOfAutodiffVJP {
-//        debugPrint("AAAAA handleNonAppliesCFG NIL 00")
+//        //debugPrint("AAAAA handleNonAppliesCFG NIL 00")
 //        return nil
 //      }
 //      assert(pbApplyOperandOpt == nil)
@@ -1157,8 +1166,8 @@ private func handleNonAppliesCFG(
         // This is the pullback closure returned from an Autodiff VJP and we don't need to handle it.
       } else if rootClosure.parentFunction.blocks.singleElement == nil {
         if !ti.bridged.hasOneUse() {
-        debugPrint(ti)
-        debugPrint("AAAAA handleNonAppliesCFG NIL 01")
+        //debugPrint(ti)
+        //debugPrint("AAAAA handleNonAppliesCFG NIL 01")
           return []
         }
         for tiUse in ti.uses {
@@ -1167,19 +1176,19 @@ private func handleNonAppliesCFG(
           let possibleEnumInst = tiUse.bridged.getUser().instruction
           let optionalEI = possibleEnumInst as? EnumInst
           if optionalEI == nil {
-          debugPrint("AAAAA handleNonAppliesCFG NIL 02")
+          //debugPrint("AAAAA handleNonAppliesCFG NIL 02")
             return []
           }
           let ei = optionalEI!
 //          if !ei.bridged.hasOneUse() {
-//          debugPrint("AAAAA handleNonAppliesCFG NIL 03")
+//          //debugPrint("AAAAA handleNonAppliesCFG NIL 03")
 //            return nil
 //          }
 //          let firstEnumUse = ei.bridged.getFirstUse()
 //          let possibleBranchInst = BridgedOperand(op: firstEnumUse.op!).getUser().instruction
 //          let optionalBI = possibleBranchInst as? BranchInst
 //          if optionalBI == nil {
-//          debugPrint("AAAAA handleNonAppliesCFG NIL 04")
+//          //debugPrint("AAAAA handleNonAppliesCFG NIL 04")
 //            return nil
 //          }
 //          let bi = optionalBI!
@@ -1187,7 +1196,7 @@ private func handleNonAppliesCFG(
 //          let succBBArg = bi.getArgument(for: Operand(bridged: BridgedOperand(op: firstEnumUse.op!)))
 
           if use.value != rootClosure {
-          debugPrint("AAAAA handleNonAppliesCFG NIL 05")
+          //debugPrint("AAAAA handleNonAppliesCFG NIL 05")
             return []
           }
 //          rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: succBBArg.uses)
@@ -1210,25 +1219,25 @@ private func handleNonAppliesCFG(
       }
 
     default:
-        debugPrint("AAAAA handleNonAppliesCFG NIL 06")
+        //debugPrint("AAAAA handleNonAppliesCFG NIL 06")
       return []
     }
   }
-  debugPrint("AAAAA handleNonAppliesCFG 04")
+  //debugPrint("AAAAA handleNonAppliesCFG 04")
   // MYTODO: this is not always true
   //assert((closureInfoOpt == nil) == (pbApplyOperandOpt == nil))
 //  if (closureInfoOpt == nil) != (pbApplyOperandOpt == nil) {
-//        debugPrint("AAAAA handleNonAppliesCFG NIL 07")
+//        //debugPrint("AAAAA handleNonAppliesCFG NIL 07")
 //    return nil
 //  }
-//  debugPrint("AAAAA handleNonAppliesCFG 05")
+//  //debugPrint("AAAAA handleNonAppliesCFG 05")
 //  if closureInfoOpt == nil {
-//    debugPrint("AAAAA handleNonAppliesCFG 06")
+//    //debugPrint("AAAAA handleNonAppliesCFG 06")
 //    return nil
 //  }
-//  debugPrint("AAAAA handleNonAppliesCFG 07 BEGIN")
+//  //debugPrint("AAAAA handleNonAppliesCFG 07 BEGIN")
 //  debugPrint(pbApplyOperandOpt!)
-//  debugPrint("AAAAA handleNonAppliesCFG 07 END")
+//  //debugPrint("AAAAA handleNonAppliesCFG 07 END")
   //return (closureInfo: closureInfoOpt!)//, pbApplyOperand: pbApplyOperandOpt!)
   return closureInfoArr
 }
