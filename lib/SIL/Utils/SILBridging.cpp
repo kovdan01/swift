@@ -58,7 +58,9 @@ SwiftMetatype SILNode::getSILNodeMetatype(SILNodeKind kind) {
 }
 
 static llvm::DenseMap<
-    SwiftInt, llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>>
+    swift::SILType,
+    llvm::DenseMap<SwiftInt, llvm::SmallVector<
+                                 std::pair<BridgedInstruction, SwiftInt>, 8>>>
     closuresBuffers;
 
 //===----------------------------------------------------------------------===//
@@ -198,10 +200,11 @@ BridgedBasicBlock::recreateEnumBlockArgument(SwiftInt index,
 }
 
 BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(
+    BridgedType enumType,
     /*SwiftInt idxInEnumPayload*/ SwiftInt enumIdx
     /*BridgedInstruction closure*/) const {
   llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
-      *closuresBuffer = &closuresBuffers[enumIdx];
+      *closuresBuffer = &closuresBuffers[enumType.unbridged()][enumIdx];
 
   swift::SILBasicBlock *bb = unbridged();
   assert(bb->getNumArguments() == 1);
@@ -588,10 +591,12 @@ convertCases(SILType enumTy, const void * _Nullable enumCases, SwiftInt numEnumC
   return convertedCases;
 }
 
-void BridgedEnumRewriter::appendToClosuresBuffer(SwiftInt caseIdx,
+void BridgedEnumRewriter::appendToClosuresBuffer(BridgedType enumType,
+                                                 SwiftInt caseIdx,
                                                  BridgedInstruction closure,
                                                  SwiftInt idxInPayload) {
-  closuresBuffers[caseIdx].emplace_back(closure, idxInPayload);
+  closuresBuffers[enumType.unbridged()][caseIdx].emplace_back(closure,
+                                                              idxInPayload);
 }
 
 void BridgedEnumRewriter::clearClosuresBuffer() { closuresBuffers.clear(); }
@@ -622,7 +627,7 @@ BridgedEnumRewriter::rewriteBranchTracingEnum(BridgedType enumType,
     // assert((enumIdx == 0 || enumIdx == 1) && "MYTODO");
 
     llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
-        *closuresBuffer = &closuresBuffers[enumIdx];
+        *closuresBuffer = &closuresBuffers[enumType.unbridged()][enumIdx];
 
     assert(oldEED->getParameterList()->size() == 1);
     ParamDecl &oldParamDecl = *oldEED->getParameterList()->front();

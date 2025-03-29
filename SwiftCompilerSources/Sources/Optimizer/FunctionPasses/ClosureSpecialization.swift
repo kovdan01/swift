@@ -120,61 +120,6 @@ let generalClosureSpecialization = FunctionPass(
   print("NOT IMPLEMENTED")
 }
 
-func isFunctionSimpleIfElse(function: Function) -> Bool {
-  var blocksCount = 0
-  for (idx, block) in function.blocks.enumerated() {
-    blocksCount += 1
-    if idx == 0 {
-      let successors = block.successors
-      if successors.count != 2 {
-        return false
-      }
-      if !((successors[0].index == 1 && successors[1].index == 2)
-        || (successors[0].index == 2 && successors[1].index == 1))
-      {
-        return false
-      }
-      let condBranchInst = block.terminator as? CondBranchInst
-      if condBranchInst == nil {
-        return false
-      }
-    } else if idx == 1 || idx == 2 {
-      if block.singlePredecessor == nil {
-        return false
-      }
-      if block.singlePredecessor!.index != 0 {
-        return false
-      }
-      if block.arguments.count != 0 {
-        return false
-      }
-    } else if idx == 3 {
-      var predecessorIndexes = [Int]()
-      for predecessor in block.predecessors {
-        predecessorIndexes.append(predecessor.index)
-      }
-      if predecessorIndexes.count != 2 {
-        return false
-      }
-      if !((predecessorIndexes[0] == 1 && predecessorIndexes[1] == 2)
-        || (predecessorIndexes[0] == 2 && predecessorIndexes[1] == 1))
-      {
-        return false
-      }
-      let returnInst = block.terminator as? ReturnInst
-      if returnInst == nil {
-        return false
-      }
-    } else {
-      return false
-    }
-  }
-  if blocksCount != 4 {
-    return false
-  }
-  return true
-}
-
 struct EnumTypeAndCase {
   var enumType: Type
   var caseIdx: Int
@@ -422,19 +367,32 @@ private func getOrCreateSpecializedFunctionCFG(
   -> (function: Function, alreadyExists: Bool)
 {
   assert(callSite.closureArgDescriptors.count == 0)
-  let closureInfos = callSite.closureInfosWithApplyCFG
-  let enumType = closureInfos[0].closureInfo.enumTypeAndCase.enumType
-  for closureInfo in closureInfos {
-    assert(
-      closureInfo.closureInfo.enumTypeAndCase.enumType
-        == closureInfos[0].closureInfo.enumTypeAndCase.enumType)
+  let pb = callSite.applyCallee
+  var enumTypeOpt = Optional<Type>(nil)
+  for arg in pb.arguments {
+    if arg.type.isEnum && arg.type.description.hasPrefix("$_AD__") {
+      assert(enumTypeOpt == nil)
+      enumTypeOpt = arg.type
+    }
   }
+  assert(enumTypeOpt != nil)
+  let enumType = enumTypeOpt!
+  //let closureInfos = callSite.closureInfosWithApplyCFG
+  //let enumType = closureInfos[0].closureInfo.enumTypeAndCase.enumType
+  //for closureInfo in closureInfos {
+  //  debugPrint("AAAAA closure BEGIN")
+  //  debugPrint(closureInfo.closureInfo.enumTypeAndCase.enumType)
+  //  debugPrint(closureInfo.closureInfo.closure)
+  //  debugPrint("AAAAA closure END")
+  //  assert(
+  //    closureInfo.closureInfo.enumTypeAndCase.enumType
+  //      == closureInfos[0].closureInfo.enumTypeAndCase.enumType)
+  //}
   let specializedPbName = callSite.specializedCalleeNameCFG(context)
   if let specializedPb = context.lookupFunction(name: specializedPbName) {
     return (specializedPb, true)
   }
 
-  let pb = callSite.applyCallee
   let specializedParameters = getSpecializedParametersCFG(
     basedOn: callSite, pb: pb, enumType: enumType, enumDict: &enumDict, context)
 
@@ -450,7 +408,7 @@ private func getOrCreateSpecializedFunctionCFG(
       let closureSpecCloner = SpecializationCloner(
         emptySpecializedFunction: emptySpecializedFunction, functionPassContext)
       closureSpecCloner.cloneAndSpecializeFunctionBodyCFG(
-        using: callSite, enumType: enumType, enumDict: &enumDict)
+        using: callSite, /*enumType: enumType, */enumDict: &enumDict)
     })
   debugPrint("AAAAAA PB AFTER BEGIN")
   debugPrint(specializedPb)
@@ -771,7 +729,7 @@ private func updateCallSiteCFG(
     return
   }
 
-  // MYTODO: allow multiple uses (closure defined in one bb, then used in multiple successors)
+  // MYMYTODO: allow multiple uses (closure defined in one bb, then used in multiple successors)
   if closureInfoArr.count != 1 {
     return
   }
@@ -1527,10 +1485,10 @@ private func rewriteUsesOfPayloadItem(
 
 extension SpecializationCloner {
   fileprivate func cloneAndSpecializeFunctionBodyCFG(
-    using callSite: CallSite, enumType: Type, enumDict: inout EnumDict
+    using callSite: CallSite, /*enumType: Type, */enumDict: inout EnumDict
   ) {
     self.cloneEntryBlockArgsWithoutOrigClosuresCFG(
-      usingOrigCalleeAt: callSite, enumType: enumType, enumDict: &enumDict)
+      usingOrigCalleeAt: callSite, /*enumType: enumType, */enumDict: &enumDict)
 
     var args = [Value]()
     for arg in self.entryBlock.arguments {
@@ -1573,12 +1531,16 @@ extension SpecializationCloner {
 
       var rewriter = BridgedEnumRewriter()
       for closureInfoWithApplyCFG in closureInfoArray {
+        // MYTODO: do we need this assert?
+//        assert(enumType == closureInfoWithApplyCFG.closureInfo.enumTypeAndCase.enumType)
         rewriter.appendToClosuresBuffer(
+          closureInfoWithApplyCFG.closureInfo.enumTypeAndCase.enumType.bridged,
           closureInfoWithApplyCFG.closureInfo.enumTypeAndCase.caseIdx,
           closureInfoWithApplyCFG.closureInfo.closure.bridged,
           closureInfoWithApplyCFG.closureInfo.idxesInEnumPayload[0])
       }
-      succBB.bridged.recreateTupleBlockArgument(enumIdx)
+      //succBB.bridged.recreateTupleBlockArgument(enumType.bridged, enumIdx)
+      succBB.bridged.recreateTupleBlockArgument(closureInfoArray[0].closureInfo.enumTypeAndCase.enumType.bridged, enumIdx)
       rewriter.clearClosuresBuffer()
 
       var applyInPbArray = [ApplyInst]()
@@ -1626,8 +1588,19 @@ extension SpecializationCloner {
   }
 
   private func cloneEntryBlockArgsWithoutOrigClosuresCFG(
-    usingOrigCalleeAt callSite: CallSite, enumType: Type, enumDict: inout EnumDict
+    usingOrigCalleeAt callSite: CallSite, /*enumType: Type, */enumDict: inout EnumDict
   ) {
+    let pb = callSite.applyCallee
+    var enumTypeOpt = Optional<Type>(nil)
+    for arg in pb.arguments {
+      if arg.type.isEnum && arg.type.description.hasPrefix("$_AD__") {
+        assert(enumTypeOpt == nil)
+        enumTypeOpt = arg.type
+      }
+    }
+    assert(enumTypeOpt != nil)
+    let enumType = enumTypeOpt!
+
     let originalEntryBlock = callSite.applyCallee.entryBlock
     let clonedFunction = self.cloned
     let clonedEntryBlock = self.entryBlock
@@ -2062,7 +2035,10 @@ private func getSpecializedParametersCFG(
     if enumDict[enumType] == nil {
       var rewriter = BridgedEnumRewriter()
       for closureInfoWithApplyCFG in callSite.closureInfosWithApplyCFG {
+        // MYTODO: do we need this assert?
+        //assert(enumType == closureInfoWithApplyCFG.closureInfo.enumTypeAndCase.enumType)
         rewriter.appendToClosuresBuffer(
+          closureInfoWithApplyCFG.closureInfo.enumTypeAndCase.enumType.bridged,
           closureInfoWithApplyCFG.closureInfo.enumTypeAndCase.caseIdx,
           closureInfoWithApplyCFG.closureInfo.closure.bridged,
           closureInfoWithApplyCFG.closureInfo.idxesInEnumPayload[0])
