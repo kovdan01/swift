@@ -601,6 +601,8 @@ void BridgedEnumRewriter::appendToClosuresBuffer(BridgedType enumType,
 
 void BridgedEnumRewriter::clearClosuresBuffer() { closuresBuffers.clear(); }
 
+static llvm::DenseMap<SILType, SILType> enumDict;
+
 BridgedType
 BridgedEnumRewriter::rewriteBranchTracingEnum(BridgedType enumType,
                                               BridgedFunction topVjp) const {
@@ -654,6 +656,13 @@ BridgedEnumRewriter::rewriteBranchTracingEnum(BridgedType enumType,
         }
       } else {
         type = tt->getElementType(i);
+        // MYTODO: make this less fragile
+        for (const auto &[enumTypeOld, enumTypeNew] : enumDict) {
+          if (enumTypeOld.getDebugDescription() == "$" + type.getString()) {
+            assert(i == 0);
+            type = enumTypeNew.getASTType();
+          }
+        }
       }
       Identifier label = tt->getElement(i).getName();
       newElements.emplace_back(type, label);
@@ -687,8 +696,15 @@ BridgedEnumRewriter::rewriteBranchTracingEnum(BridgedType enumType,
   auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
   Lowering::AbstractionPattern pattern(traceDeclType);
 
-  return topVjp.getFunction()->getModule().Types.getLoweredType(
+  SILType newEnumType = topVjp.getFunction()->getModule().Types.getLoweredType(
       pattern, traceDeclType, TypeExpansionContext::minimal());
+
+  // MYTODO: FIX!!!!!!!!
+  // MYTODO: temoprary: 1 round of specialization
+  assert(!enumDict.contains(enumType.unbridged()));
+  enumDict[enumType.unbridged()] = newEnumType;
+
+  return newEnumType;
 }
 
 BridgedInstruction BridgedBuilder::createSwitchEnumInst(BridgedValue enumVal, OptionalBridgedBasicBlock defaultBlock,
