@@ -63,6 +63,11 @@ static llvm::DenseMap<
                                  std::pair<BridgedInstruction, SwiftInt>, 8>>>
     closuresBuffers;
 
+static llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
+    closuresBuffersForPb;
+
+static llvm::DenseMap<SILType, SILType> enumDict;
+
 //===----------------------------------------------------------------------===//
 //                          Class registration
 //===----------------------------------------------------------------------===//
@@ -200,15 +205,19 @@ BridgedBasicBlock::recreateEnumBlockArgument(SwiftInt index,
 }
 
 BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(
-    BridgedType enumType,
-    /*SwiftInt idxInEnumPayload*/ SwiftInt enumIdx
+    SwiftInt argIdx
+    // BridgedType enumType,
+    /*SwiftInt idxInEnumPayload*/ // SwiftInt enumIdx
     /*BridgedInstruction closure*/) const {
+  // llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
+  //     *closuresBuffer = &closuresBuffers[enumType.unbridged()][enumIdx];
+
   llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
-      *closuresBuffer = &closuresBuffers[enumType.unbridged()][enumIdx];
+      *closuresBuffer = &closuresBuffersForPb;
 
   swift::SILBasicBlock *bb = unbridged();
-  assert(bb->getNumArguments() == 1);
-  swift::SILArgument *oldArg = bb->getArgument(0);
+  // assert(bb->getNumArguments() == 1);
+  swift::SILArgument *oldArg = bb->getArgument(argIdx);
   auto *oldTupleTy =
       llvm::cast<swift::TupleType>(oldArg->getType().getASTType().getPointer());
   llvm::SmallVector<swift::TupleTypeElt, 8> newTupleElTypes;
@@ -222,8 +231,14 @@ BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(
     }
 
     if (idxInClosuresBuffer == unsigned(-1)) {
-      newTupleElTypes.emplace_back(oldTupleTy->getElementType(i),
-                                   oldTupleTy->getElement(i).getName());
+      Type type = oldTupleTy->getElementType(i);
+      for (const auto &[enumTypeOld, enumTypeNew] : enumDict) {
+        if (enumTypeOld.getDebugDescription() == "$" + type.getString()) {
+          assert(i == 0);
+          type = enumTypeNew.getASTType();
+        }
+      }
+      newTupleElTypes.emplace_back(type, oldTupleTy->getElement(i).getName());
       continue;
     }
 
@@ -240,15 +255,66 @@ BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(
       newTupleElTypes, unbridged()->getModule().getASTContext()));
 
   swift::ValueOwnershipKind oldOwnership =
-      unbridged()->getArgument(0)->getOwnershipKind();
+      unbridged()->getArgument(argIdx)->getOwnershipKind();
 
   swift::SILPhiArgument *newArg =
-      unbridged()->createPhiArgument(newTupleTy, oldOwnership);
+      unbridged()->insertPhiArgument(argIdx, newTupleTy, oldOwnership);
   oldArg->replaceAllUsesWith(newArg);
-  eraseArgument(0);
+  eraseArgument(argIdx + 1);
 
   return {newArg};
 }
+
+// BridgedArgument BridgedBasicBlock::recreatePBEntryBlockArgument(
+//     BridgedType enumType,
+//     /*SwiftInt idxInEnumPayload*/ SwiftInt enumIdx
+//     /*BridgedInstruction closure*/) const {
+//   llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
+//       *closuresBuffer = &closuresBuffers[enumType.unbridged()][enumIdx];
+
+//   swift::SILBasicBlock *bb = unbridged();
+//   assert(bb->getNumArguments() == 1);
+//   swift::SILArgument *oldArg = bb->getArgument(0);
+//   auto *oldTupleTy =
+//       llvm::cast<swift::TupleType>(oldArg->getType().getASTType().getPointer());
+//   llvm::SmallVector<swift::TupleTypeElt, 8> newTupleElTypes;
+//   for (unsigned i = 0; i < oldTupleTy->getNumElements(); ++i) {
+//     unsigned idxInClosuresBuffer = -1;
+//     for (unsigned j = 0; j < closuresBuffer->size(); ++j) {
+//       if ((*closuresBuffer)[j].second == i) {
+//         assert(idxInClosuresBuffer == unsigned(-1));
+//         idxInClosuresBuffer = j;
+//       }
+//     }
+
+//     if (idxInClosuresBuffer == unsigned(-1)) {
+//       newTupleElTypes.emplace_back(oldTupleTy->getElementType(i),
+//                                    oldTupleTy->getElement(i).getName());
+//       continue;
+//     }
+
+//     if (auto *pai = dyn_cast<PartialApplyInst>(
+//             (*closuresBuffer)[idxInClosuresBuffer].first.unbridged())) {
+//       newTupleElTypes.emplace_back(getPAICapturedArgTypes(
+//           pai, unbridged()->getModule().getASTContext()));
+//     } else {
+//       newTupleElTypes.emplace_back(
+//           TupleType::get({}, unbridged()->getModule().getASTContext()));
+//     }
+//   }
+//   auto newTupleTy = swift::SILType::getFromOpaqueValue(swift::TupleType::get(
+//       newTupleElTypes, unbridged()->getModule().getASTContext()));
+
+//   swift::ValueOwnershipKind oldOwnership =
+//       unbridged()->getArgument(0)->getOwnershipKind();
+
+//   swift::SILPhiArgument *newArg =
+//       unbridged()->createPhiArgument(newTupleTy, oldOwnership);
+//   oldArg->replaceAllUsesWith(newArg);
+//   eraseArgument(0);
+
+//   return {newArg};
+// }
 
 namespace {
 struct SpecializeCandidateInfo {
@@ -599,9 +665,15 @@ void BridgedEnumRewriter::appendToClosuresBuffer(BridgedType enumType,
                                                               idxInPayload);
 }
 
-void BridgedEnumRewriter::clearClosuresBuffer() { closuresBuffers.clear(); }
+void BridgedEnumRewriter::appendToClosuresBufferForPb(
+    BridgedInstruction closure, SwiftInt idxInPayload) {
+  closuresBuffersForPb.emplace_back(closure, idxInPayload);
+}
 
-static llvm::DenseMap<SILType, SILType> enumDict;
+void BridgedEnumRewriter::clearClosuresBuffer() { closuresBuffers.clear(); }
+void BridgedEnumRewriter::clearClosuresBufferForPb() {
+  closuresBuffersForPb.clear();
+}
 
 BridgedType
 BridgedEnumRewriter::rewriteBranchTracingEnum(BridgedType enumType,

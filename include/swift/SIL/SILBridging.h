@@ -918,8 +918,8 @@ struct BridgedBasicBlock {
   SWIFT_IMPORT_UNSAFE BridgedArgument
   recreateEnumBlockArgument(SwiftInt index, BridgedType type) const;
   SWIFT_IMPORT_UNSAFE BridgedArgument recreateTupleBlockArgument(
-      BridgedType enumType,
-      /*SwiftInt idxInEnumPayload, */ SwiftInt enumIdx
+      SwiftInt argIdx                 //, BridgedType enumType,
+      /*SwiftInt idxInEnumPayload, */ // SwiftInt enumIdx
       /*BridgedInstruction closure*/) const;
   SWIFT_IMPORT_UNSAFE  BRIDGED_INLINE BridgedArgument addFunctionArgument(BridgedType type) const;
   BRIDGED_INLINE void eraseArgument(SwiftInt index) const;
@@ -1085,7 +1085,11 @@ struct BridgedEnumRewriter {
                                                   SwiftInt caseIdx,
                                                   BridgedInstruction closure,
                                                   SwiftInt idxInPayload);
+  SWIFT_IMPORT_UNSAFE void
+  appendToClosuresBufferForPb(BridgedInstruction closure,
+                              SwiftInt idxInPayload);
   SWIFT_IMPORT_UNSAFE void clearClosuresBuffer();
+  SWIFT_IMPORT_UNSAFE void clearClosuresBufferForPb();
   SWIFT_IMPORT_UNSAFE BridgedType
   rewriteBranchTracingEnum(BridgedType enumType, BridgedFunction topVjp) const;
 };
