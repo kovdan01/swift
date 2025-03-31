@@ -1639,19 +1639,15 @@ extension SpecializationCloner {
     debugPrint("AAAAAA new enum types queue END")
 
     for bb in self.cloned.blocks {
-      debugPrint("BBBBB 00")
       if bb == self.cloned.entryBlock {
         // MYTODO
         continue
       }
-      debugPrint("BBBBB 01")
-
 
       var arg = getEnumPayloadArgOfPbBB(bb)
       if arg == nil {
         continue
       }
-      debugPrint("BBBBB 02")
       var argIdxOpt = Optional<Int>(nil)
       for (argIdx, argument) in bb.arguments.enumerated() {
         if arg == argument {
@@ -1659,7 +1655,6 @@ extension SpecializationCloner {
           argIdxOpt = argIdx
         }
       }
-      debugPrint("BBBBB 03")
       assert(argIdxOpt != nil)
       let argIdx = argIdxOpt!
 
@@ -1672,7 +1667,6 @@ extension SpecializationCloner {
       }
       assert(vjpBBOpt != nil)
       let vjpBB = vjpBBOpt!
-      debugPrint("BBBBB 04")
 
       var tiOpt = Optional<TupleInst>(nil)
       for inst in vjpBB.instructions.reversed() {
@@ -1681,12 +1675,10 @@ extension SpecializationCloner {
           break
         }
       }
-      debugPrint("BBBBB 05")
       if tiOpt == nil {
         continue
       }
       let lastTI = tiOpt!
-      debugPrint("BBBBB 06")
 
       var closureInfoArray = [ClosureInfoWithApplyCFG]()
       var rewriter = BridgedEnumRewriter()
@@ -1712,98 +1704,9 @@ extension SpecializationCloner {
       let dtiOpt = arg!.uses.singleUse!.instruction as? DestructureTupleInst
       assert(dtiOpt != nil)
       let dti = dtiOpt!
-//      debugPrint("BBBBB 07 00")
-//      assert(arg != nil)
-//      assert(arg!.uses.singleUse != nil)
-//      let argFirstUse = arg!.bridged.getFirstUse()
-//      debugPrint(arg)
-//      debugPrint(argFirstUse)
-//      debugPrint("BBBBB 07 01 00")
-//      debugPrint(argFirstUse.op)
-//      debugPrint("BBBBB 07 01 01")
-//      debugPrint(BridgedOperand(op: argFirstUse.op!))
-//      debugPrint("BBBBB 07 01 01")
-//      debugPrint(BridgedOperand(op: argFirstUse.op!).getUser())
-//      debugPrint("BBBBB 07 01 02")
-//      let possibleDTI = BridgedOperand(op: argFirstUse.op!).getUser().instruction
-//      debugPrint("BBBBB 07 02")
-//      let optionalDTI = possibleDTI as? DestructureTupleInst
-//      debugPrint("BBBBB 07 03")
-//      if optionalDTI == nil {
-//        debugPrint("BBBBB 07 04")
-//        return
-//      }
-//
-//      debugPrint("BBBBB 07 05")
-
-//      if arg!.uses.singleUse == nil {
-//        continue
-//      }
-//      debugPrint("BBBBB 07 01")
-//      let dtiOpt = arg!.uses.singleUse!.instruction as? DestructureTupleInst
-//      if dtiOpt == nil {
-//        continue
-//      }
-//      debugPrint("BBBBB 07 02")
-//      let dti = dtiOpt!
-//      let dti = optionalDTI!
       assert(dti.results[0].type.isEnum)
       assert(dti.results[0].type.description.hasPrefix("$_AD__"))
-//      // MYTODO: what if not empty but not single element?
-//      if dti.results[0].uses.singleElement == nil {
-//        continue
-//      }
-//      let currentEnumType = dti.results[0].type
-
-//      var applyInPbArray = [ApplyInst]()
-//      for closureInfo in closureInfoArray {
-//        let applyInPbOriginal = closureInfo.applyInPb
-//        let pbBbOriginal = applyInPbOriginal.parentBlock
-//        var applyIdx = Int?(nil)
-//        for (instIdx, inst) in pbBbOriginal.instructions.enumerated() {
-//          if inst == applyInPbOriginal {
-//            assert(applyIdx == nil)
-//            applyIdx = instIdx
-//          }
-//        }
-//        assert(applyIdx != nil)
-//        let pbBbCloned = bb
-//        debugPrint("AAAAA closure info BEGIN")
-//        debugPrint(closureInfo)
-//        debugPrint("AAAAA closure info END")
-//        debugPrint("AAAAA ORIG BB BEGIN")
-//        debugPrint(pbBbOriginal)
-//        debugPrint("AAAAA ORIG BB END")
-//        debugPrint("AAAAA CLONED BB BEGIN")
-//        debugPrint(pbBbCloned)
-//        debugPrint("AAAAA CLONED BB END")
-//        assert(bbMap[vjpBB] == pbBbOriginal)
-//        var applyInPbX = Instruction?(nil)
-//        for (instIdx, inst) in pbBbCloned.instructions.enumerated() {
-//          if instIdx == applyIdx! {
-//            assert(applyInPbX == nil)
-//            applyInPbX = inst
-//          }
-//        }
-//
-//        assert(applyInPbX != nil)
-//        let applyInPb = applyInPbX as? ApplyInst
-//        assert(applyInPb != nil)
-//        applyInPbArray.append(applyInPb!)
-//      }
-//
-//      debugPrint("BBBBB 08")
-//      debugPrint(applyInPbArray)
-//      debugPrint("BBBBB 09")
-//      let oldDtiOpt = applyInPbArray[0].callee.definingInstruction as? DestructureTupleInst
-//      debugPrint("BBBBB 10")
-//      assert(oldDtiOpt != nil)
-//      let oldDti = oldDtiOpt!
       let oldDti = dti
-//      assert(oldDti == dti)
-      debugPrint("AAAAA DTI BEGIN")
-      debugPrint(oldDti)
-      debugPrint("AAAAA DTI END")
       let builderBeforeOldDti = Builder(before: oldDti, self.context)
       let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
 
@@ -1815,13 +1718,7 @@ extension SpecializationCloner {
         }
       }
 
-      debugPrint("AAAAA BB AFTER BEGIN")
-
       oldDti.parentBlock.bridged.eraseInstruction(oldDti.bridged)
-      debugPrint("AAAAA BB AFTER MIDDLE")
-      debugPrint(newDti.parentBlock)
-      debugPrint("AAAAA BB AFTER END")
-
     }
 
     debugPrint("AAAAA closureInfos BEGIN")
