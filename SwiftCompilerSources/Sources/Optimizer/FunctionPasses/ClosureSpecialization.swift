@@ -1453,8 +1453,6 @@ private func rewriteUsesOfPayloadItem(
   use: Operand, resultIdx: Int, closureInfoArray: [ClosureInfoWithApplyCFG],
   newDti: DestructureTupleInst, bbMap: [BasicBlock:BasicBlock], context: FunctionPassContext
 ) {
-  debugPrint("AAAAAA rewriteUsesOfPayloadItem BEGIN")
-  debugPrint(resultIdx)
 //  let newDtiBlockIdx = getBBIdxInFunc(newDti.parentBlock)
   switch use.instruction {
   case let ai as ApplyInst:
@@ -1535,7 +1533,6 @@ private func rewriteUsesOfPayloadItem(
   default:
     assert(false)
   }
-  debugPrint("AAAAAA rewriteUsesOfPayloadItem END")
 }
 
 private func getBBIdxInFunc(_ bb: BasicBlock) -> Int {
@@ -1551,31 +1548,41 @@ extension SpecializationCloner {
   fileprivate func cloneAndSpecializeFunctionBodyCFG(
     using callSite: CallSite, enumDict: inout EnumDict, bbMap: [BasicBlock:BasicBlock]
   ) {
-    self.cloneEntryBlockArgsWithoutOrigClosuresCFG(
-      usingOrigCalleeAt: callSite, enumDict: &enumDict)
+    debugPrint("CCCCCC 00 00")
+//    self.cloneEntryBlockArgsWithoutOrigClosuresCFG(
+//      usingOrigCalleeAt: callSite, enumDict: &enumDict)
+//
+//    var args = [Value]()
+//    for arg in self.entryBlock.arguments {
+//      args.append(arg)
+//    }
+//
+//    self.cloneFunctionBody(from: callSite.applyCallee, entryBlockArguments: args)
+//
+//    let entryEnumArg = getEnumArgOfEntryPbBB(self.cloned.entryBlock)
+//    var entryBBArgIdxOpt = Optional<Int>(nil)
+//    for (idx, entryArg) in self.cloned.entryBlock.arguments.enumerated() {
+//      if entryArg == entryEnumArg {
+//        assert(entryBBArgIdxOpt == nil)
+//        entryBBArgIdxOpt = idx
+//      }
+//    }
+//    assert(entryBBArgIdxOpt != nil)
+//    let entryBBArgIdx = entryBBArgIdxOpt!
 
-    var args = [Value]()
-    for arg in self.entryBlock.arguments {
-      args.append(arg)
-    }
-
-    self.cloneFunctionBody(from: callSite.applyCallee, entryBlockArguments: args)
-
-    let entryEnumType = getEnumArgOfEntryPbBB(self.cloned.entryBlock)
     let closureInfos = callSite.closureInfosWithApplyCFG
-    let bbMapCloned = vjpToPbBB(vjp: callSite.applySite.parentFunction, pb: self.cloned)
-    assert(bbMapCloned.count != 0)
+//    let bbMapCloned = vjpToPbBB(vjp: callSite.applySite.parentFunction, pb: self.cloned)
+//    assert(bbMapCloned.count != 0)
 
-    var bbWorklist = BasicBlockWorklist(self.context)
-    defer {
-      bbWorklist.deinitialize()
-    }
-    bbWorklist.pushIfNotVisited(self.cloned.entryBlock)
-
+    var bbVisited = [BasicBlock:Bool]()
+    var bbWorklist = [callSite.applyCallee.entryBlock]
     var enumTypesReverseQueue = Array<Type>()
-    while let block = bbWorklist.pop() {
-      var currentEnumTypeOpt = Optional<Type>(nil)
+    while bbWorklist.count != 0 {
+      let block = bbWorklist.first!
+      bbWorklist.removeFirst()
+            var currentEnumTypeOpt = Optional<Type>(nil)
       if block == block.parentFunction.entryBlock {
+    debugPrint("CCCCCC 02")
         let arg = getEnumArgOfEntryPbBB(block)
         // MYTODO: what if not empty but not single element?
         // MYTODO: entry block enum should probably be already rewritten?
@@ -1583,17 +1590,22 @@ extension SpecializationCloner {
 //        assert(needRewriteEnum(enumType: arg.type, closureInfosWithApplyCFG: closureInfos))
         currentEnumTypeOpt = arg.type
       } else {
+    debugPrint("CCCCCC 03")
         let arg = getEnumPayloadArgOfPbBB(block)
         if arg != nil {
+    debugPrint("CCCCCC 04")
           if arg!.uses.singleUse != nil {
+    debugPrint("CCCCCC 05")
             let dtiOpt = arg!.uses.singleUse!.instruction as? DestructureTupleInst
             if dtiOpt != nil {
+    debugPrint("CCCCCC 06")
               let dti = dtiOpt!
               assert(dti.results[0].type.isEnum)
               assert(dti.results[0].type.description.hasPrefix("$_AD__"))
               // MYTODO: what if not empty but not single element?
               if /*needRewriteEnum(enumType: dti.results[0].type, closureInfosWithApplyCFG: closureInfos) && */
                  dti.results[0].uses.singleElement != nil {
+    debugPrint("CCCCCC 07")
                 currentEnumTypeOpt = dti.results[0].type
               }
             }
@@ -1601,12 +1613,72 @@ extension SpecializationCloner {
         }
       }
       if currentEnumTypeOpt != nil {
+    debugPrint("CCCCCC 08")
         enumTypesReverseQueue.append(currentEnumTypeOpt!)
       }
       for succ in block.successors {
-        bbWorklist.pushIfNotVisited(succ)
+    debugPrint("CCCCCC 09")
+        bbWorklist.append(succ)
       }
     }
+
+
+//    var bbWorklist = BasicBlockWorklist(self.context)
+//    defer {
+//      bbWorklist.deinitialize()
+//    }
+//    debugPrint("CCCCCC 00 01 00")
+//    debugPrint(callSite.applyCallee)
+//    debugPrint("CCCCCC 00 01 01")
+//    debugPrint(callSite.applyCallee.entryBlock)
+//    debugPrint("CCCCCC 00 01 02")
+//    bbWorklist.pushIfNotVisited(callSite.applyCallee.entryBlock)
+//
+//    debugPrint("CCCCCC 00 02")
+//    var enumTypesReverseQueue = Array<Type>()
+//    while let block = bbWorklist.pop() {
+//    debugPrint("CCCCCC 01")
+//      var currentEnumTypeOpt = Optional<Type>(nil)
+//      if block == block.parentFunction.entryBlock {
+//    debugPrint("CCCCCC 02")
+//        let arg = getEnumArgOfEntryPbBB(block)
+//        // MYTODO: what if not empty but not single element?
+//        // MYTODO: entry block enum should probably be already rewritten?
+//        assert(arg.uses.singleElement != nil)
+////        assert(needRewriteEnum(enumType: arg.type, closureInfosWithApplyCFG: closureInfos))
+//        currentEnumTypeOpt = arg.type
+//      } else {
+//    debugPrint("CCCCCC 03")
+//        let arg = getEnumPayloadArgOfPbBB(block)
+//        if arg != nil {
+//    debugPrint("CCCCCC 04")
+//          if arg!.uses.singleUse != nil {
+//    debugPrint("CCCCCC 05")
+//            let dtiOpt = arg!.uses.singleUse!.instruction as? DestructureTupleInst
+//            if dtiOpt != nil {
+//    debugPrint("CCCCCC 06")
+//              let dti = dtiOpt!
+//              assert(dti.results[0].type.isEnum)
+//              assert(dti.results[0].type.description.hasPrefix("$_AD__"))
+//              // MYTODO: what if not empty but not single element?
+//              if /*needRewriteEnum(enumType: dti.results[0].type, closureInfosWithApplyCFG: closureInfos) && */
+//                 dti.results[0].uses.singleElement != nil {
+//    debugPrint("CCCCCC 07")
+//                currentEnumTypeOpt = dti.results[0].type
+//              }
+//            }
+//          }
+//        }
+//      }
+//      if currentEnumTypeOpt != nil {
+//    debugPrint("CCCCCC 08")
+//        enumTypesReverseQueue.append(currentEnumTypeOpt!)
+//      }
+//      for succ in block.successors {
+//    debugPrint("CCCCCC 09")
+//        bbWorklist.pushIfNotVisited(succ)
+//      }
+//    }
 
     debugPrint("AAAAAA enum types queue BEGIN")
     for enumType in enumTypesReverseQueue {
@@ -1638,9 +1710,63 @@ extension SpecializationCloner {
     }
     debugPrint("AAAAAA new enum types queue END")
 
+    self.cloneEntryBlockArgsWithoutOrigClosuresCFG(
+      usingOrigCalleeAt: callSite, enumDict: &enumDict)
+
+    var args = [Value]()
+    for arg in self.entryBlock.arguments {
+      args.append(arg)
+    }
+    debugPrint("AAAAAA args BEGIN")
+    debugPrint(args)
+    debugPrint("AAAAAA args END")
+
+    self.cloneFunctionBody(from: callSite.applyCallee, entryBlockArguments: args)
+    debugPrint("AAAAAA cloned BEGIN")
+    debugPrint(self.cloned)
+    debugPrint("AAAAAA cloned END")
+
+    let entryEnumArg = getEnumArgOfEntryPbBB(self.cloned.entryBlock)
+    var entryBBArgIdxOpt = Optional<Int>(nil)
+    for (idx, entryArg) in self.cloned.entryBlock.arguments.enumerated() {
+      if entryArg == entryEnumArg {
+        assert(entryBBArgIdxOpt == nil)
+        entryBBArgIdxOpt = idx
+      }
+    }
+    assert(entryBBArgIdxOpt != nil)
+    let entryBBArgIdx = entryBBArgIdxOpt!
+
+    let bbMapCloned = vjpToPbBB(vjp: callSite.applySite.parentFunction, pb: self.cloned)
+    assert(bbMapCloned.count != 0)
+
+
+
     for bb in self.cloned.blocks {
       if bb == self.cloned.entryBlock {
         // MYTODO
+//        bb.bridged.recreatePBEntryBlockArgument(entryBBArgIdx)
+//        let entryEnumArg = getEnumArgOfEntryPbBB(self.cloned.entryBlock)
+//        assert(entryEnumArg.uses.singleUse != nil)
+//        assert(entryEnumArg.uses.singleUse!.instruction == bb.terminator)
+
+        let entrySwitchEnumOpt = bb.terminator as? SwitchEnumInst
+        assert(entrySwitchEnumOpt != nil)
+        let entrySwitchEnum = entrySwitchEnumOpt!
+        let builderEntry = Builder(before: entrySwitchEnum, self.context)
+
+        var enumCases = [(Int, BasicBlock)]()
+        for i in 0...entrySwitchEnum.bridged.SwitchEnumInst_getNumCases() {
+          let bbForCase = entrySwitchEnum.getUniqueSuccessor(forCaseIndex: i)
+          // MYTODO: ensure that identical indexes have identical textual values like bb1, bb2, ...
+          if bbForCase != nil {
+            enumCases.append((i, bbForCase!))
+          }
+        }
+        let newEntrySwitchEnum = builderEntry.createSwitchEnum(
+          enum: entrySwitchEnum.enumOp, cases: enumCases)//, defaultBlock: entrySwitchEnum.getSuccessorForDefault())
+        self.entryBlock.bridged.eraseInstruction(entrySwitchEnum.bridged)
+
         continue
       }
 
@@ -1680,24 +1806,36 @@ extension SpecializationCloner {
       }
       let lastTI = tiOpt!
 
+      debugPrint("AAAAAA BB BEFORE REWRITE BEGIN")
+      debugPrint(bb)
+      debugPrint("AAAAAA BB BEFORE REWRITE END")
+
       var closureInfoArray = [ClosureInfoWithApplyCFG]()
       var rewriter = BridgedEnumRewriter()
       for (opIdx, op) in lastTI.operands.enumerated() {
         let val = op.value
         for closureInfo in closureInfos {
           if closureInfo.closureInfo.closure == val {
-            if bbMap[vjpBB] == closureInfo.applyInPb.parentBlock {
+//            if bbMap[vjpBB] == closureInfo.applyInPb.parentBlock {
               assert(closureInfo.closureInfo.idxesInEnumPayload[0] == opIdx)
               closureInfoArray.append(closureInfo)
               rewriter.appendToClosuresBufferForPb(
                 closureInfo.closureInfo.closure.bridged,
                 closureInfo.closureInfo.idxesInEnumPayload[0])
-            }
+//            } else {
+//              debugPrint("AAAAA NOT ADDING BEGIN")
+//              debugPrint(closureInfo)
+//              debugPrint("AAAAA NOT ADDING END")
+//            }
           }
         }
       }
       bb.bridged.recreateTupleBlockArgument(argIdx)
       rewriter.clearClosuresBufferForPb()
+
+      debugPrint("AAAAA closureInfoArray BEGIN")
+      debugPrint(closureInfoArray)
+      debugPrint("AAAAA closureInfoArray END")
 
       arg = getEnumPayloadArgOfPbBB(bb)
       assert(arg!.uses.singleUse != nil)
@@ -1870,11 +2008,11 @@ extension SpecializationCloner {
 
     for arg in originalEntryBlock.arguments {
       var clonedEntryBlockArgType = arg.type.getLoweredType(in: clonedFunction)
-//      if clonedEntryBlockArgType == enumType {
-//        var builder = Builder(atStartOf: clonedFunction, self.context)
-//        assert(enumDict[enumType] != nil)
-//        clonedEntryBlockArgType = enumDict[enumType]!
-//      }
+      if clonedEntryBlockArgType == enumType {
+        var builder = Builder(atStartOf: clonedFunction, self.context)
+        assert(enumDict[enumType] != nil)
+        clonedEntryBlockArgType = enumDict[enumType]!
+      }
       let clonedEntryBlockArg = clonedEntryBlock.addFunctionArgument(
         type: clonedEntryBlockArgType, self.context)
       clonedEntryBlockArg.copyFlags(from: arg as! FunctionArgument)

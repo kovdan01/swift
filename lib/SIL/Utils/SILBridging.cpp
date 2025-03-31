@@ -216,7 +216,7 @@ BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(
       *closuresBuffer = &closuresBuffersForPb;
 
   swift::SILBasicBlock *bb = unbridged();
-  // assert(bb->getNumArguments() == 1);
+  assert(!bb->isEntry());
   swift::SILArgument *oldArg = bb->getArgument(argIdx);
   auto *oldTupleTy =
       llvm::cast<swift::TupleType>(oldArg->getType().getASTType().getPointer());
@@ -265,56 +265,29 @@ BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(
   return {newArg};
 }
 
-// BridgedArgument BridgedBasicBlock::recreatePBEntryBlockArgument(
-//     BridgedType enumType,
-//     /*SwiftInt idxInEnumPayload*/ SwiftInt enumIdx
-//     /*BridgedInstruction closure*/) const {
-//   llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
-//       *closuresBuffer = &closuresBuffers[enumType.unbridged()][enumIdx];
+BridgedArgument
+BridgedBasicBlock::recreatePBEntryBlockArgument(SwiftInt argIdx) const {
+  swift::SILBasicBlock *bb = unbridged();
+  assert(bb->isEntry());
+  swift::SILArgument *oldArg = bb->getArgument(argIdx);
+  assert(enumDict.contains(oldArg->getType()));
+  SILType newTy = enumDict.at(oldArg->getType());
+  swift::ValueOwnershipKind oldOwnership =
+      unbridged()->getArgument(argIdx)->getOwnershipKind();
 
-//   swift::SILBasicBlock *bb = unbridged();
-//   assert(bb->getNumArguments() == 1);
-//   swift::SILArgument *oldArg = bb->getArgument(0);
-//   auto *oldTupleTy =
-//       llvm::cast<swift::TupleType>(oldArg->getType().getASTType().getPointer());
-//   llvm::SmallVector<swift::TupleTypeElt, 8> newTupleElTypes;
-//   for (unsigned i = 0; i < oldTupleTy->getNumElements(); ++i) {
-//     unsigned idxInClosuresBuffer = -1;
-//     for (unsigned j = 0; j < closuresBuffer->size(); ++j) {
-//       if ((*closuresBuffer)[j].second == i) {
-//         assert(idxInClosuresBuffer == unsigned(-1));
-//         idxInClosuresBuffer = j;
-//       }
-//     }
+  swift::SILFunctionArgument *newArg =
+      unbridged()->insertFunctionArgument(argIdx, newTy, oldOwnership);
+  oldArg->replaceAllUsesWith(newArg);
+  eraseArgument(argIdx + 1);
 
-//     if (idxInClosuresBuffer == unsigned(-1)) {
-//       newTupleElTypes.emplace_back(oldTupleTy->getElementType(i),
-//                                    oldTupleTy->getElement(i).getName());
-//       continue;
-//     }
+  llvm::errs() << "BBBBB cloned args BEGIN\n";
+  for (SILArgument *arg : bb->getParent()->getArguments()) {
+    llvm::errs() << *arg << '\n';
+  }
+  llvm::errs() << "BBBBB cloned args END\n";
 
-//     if (auto *pai = dyn_cast<PartialApplyInst>(
-//             (*closuresBuffer)[idxInClosuresBuffer].first.unbridged())) {
-//       newTupleElTypes.emplace_back(getPAICapturedArgTypes(
-//           pai, unbridged()->getModule().getASTContext()));
-//     } else {
-//       newTupleElTypes.emplace_back(
-//           TupleType::get({}, unbridged()->getModule().getASTContext()));
-//     }
-//   }
-//   auto newTupleTy = swift::SILType::getFromOpaqueValue(swift::TupleType::get(
-//       newTupleElTypes, unbridged()->getModule().getASTContext()));
-
-//   swift::ValueOwnershipKind oldOwnership =
-//       unbridged()->getArgument(0)->getOwnershipKind();
-
-//   swift::SILPhiArgument *newArg =
-//       unbridged()->createPhiArgument(newTupleTy, oldOwnership);
-//   oldArg->replaceAllUsesWith(newArg);
-//   eraseArgument(0);
-
-//   return {newArg};
-// }
+  return {newArg};
+}
 
 namespace {
 struct SpecializeCandidateInfo {
