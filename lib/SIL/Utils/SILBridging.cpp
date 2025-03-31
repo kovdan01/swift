@@ -197,11 +197,19 @@ static Type getPAICapturedArgTypes(const PartialApplyInst *pai,
 BridgedArgument
 BridgedBasicBlock::recreateEnumBlockArgument(SwiftInt index,
                                              BridgedType type) const {
+  assert(!unbridged()->isEntry());
   swift::ValueOwnershipKind oldOwnership =
       unbridged()->getArgument(index)->getOwnershipKind();
-  auto x =
-      unbridged()->replacePhiArgument(index, type.unbridged(), oldOwnership);
-  return {x};
+
+  swift::SILArgument *oldArg = unbridged()->getArgument(index);
+  swift::SILPhiArgument *newArg =
+      unbridged()->insertPhiArgument(index, type.unbridged(), oldOwnership);
+  oldArg->replaceAllUsesWith(newArg);
+  eraseArgument(index + 1);
+
+  // auto x =
+  //     unbridged()->replacePhiArgument(index, type.unbridged(), oldOwnership);
+  return {newArg};
 }
 
 BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(

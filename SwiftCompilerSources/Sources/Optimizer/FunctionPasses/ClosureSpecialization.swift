@@ -140,7 +140,7 @@ extension Type: Hashable {
 
 typealias ClosureInfoCFG = (
   closure: SingleValueInstruction, idxesInEnumPayload: [Int], capturedArgs: [Value],
-  enumTypeAndCase: EnumTypeAndCase
+  enumTypeAndCase: EnumTypeAndCase, payloadTuple: TupleInst
 )
 typealias ClosureInfoWithApplyCFG = (closureInfo: ClosureInfoCFG, applyInPb: ApplyInst)
 
@@ -241,8 +241,12 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 
       rewriteApplyInstructionCFG(
         using: specializedFunction, callSite: callSite,
-        enumType: callSite.closureInfosWithApplyCFG[0].closureInfo.enumTypeAndCase.enumType,
+        //enumType: callSite.closureInfosWithApplyCFG[0].closureInfo.enumTypeAndCase.enumType,
         enumDict: enumDict, context: context)
+
+      debugPrint("AAAAAA VJP AFTER BEGIN")
+      debugPrint(function)
+      debugPrint("AAAAAA VJP AFTER END")
     }
 
     remainingSpecializationRounds -= 1
@@ -632,7 +636,7 @@ private func rewriteAppliesInPred(
   }
 }
 
-private func rewriteApplyInstructionCFG(
+private func rewriteApplyInstructionCFGOld(
   using specializedCallee: Function, callSite: CallSite,
   enumType: Type, enumDict: EnumDict,
   context: FunctionPassContext
@@ -725,6 +729,175 @@ private func rewriteApplyInstructionCFG(
   }
 
 }
+
+private func rewriteApplyInstructionCFG(
+  using specializedCallee: Function, callSite: CallSite,
+  /*enumType: Type, */enumDict: EnumDict,
+  context: FunctionPassContext
+) {
+  let vjp = callSite.applySite.parentFunction
+  let vjpExitBB = callSite.applySite.parentBlock
+  let closureInfos = callSite.closureInfosWithApplyCFG
+  
+  for inst in vjp.instructions {
+    let ei = inst as? EnumInst
+    if ei == nil {
+      continue
+    }
+    let enumType = ei!.results[0].type
+    let newEnumTypeOpt = enumDict[enumType]
+    if newEnumTypeOpt == nil {
+      continue
+    }
+    let newEnumType = newEnumTypeOpt!
+
+    var builder = Builder(before: ei!, context)
+    let newEI = builder.createEnum(caseIndex: ei!.caseIndex, payload: ei!.payload, enumType: newEnumType)
+    ei!.replace(with: newEI, context)
+  }
+
+  for bb in vjp.blocks {
+    let argAndIdxOpt = getEnumArgOfVJPBB(bb)
+    if argAndIdxOpt == nil {
+      continue
+    }
+    let (arg, argIdx) = argAndIdxOpt!
+    if enumDict[arg.type] == nil {
+      continue
+    }
+    bb.bridged.recreateEnumBlockArgument(argIdx, enumDict[arg.type]!.bridged)
+  }
+
+  var builderSucc = Builder(
+    atEndOf: callSite.applySite.parentBlock,
+    location: callSite.applySite.parentBlock.instructions.last!.location, context)
+
+
+  let pai = callSite.applySite as! PartialApplyInst
+  let paiFunction = pai.operands[0].value
+  let paiConvention = pai.calleeConvention
+  let paiHasUnknownResultIsolation = pai.hasUnknownResultIsolation
+  let paiSubstitutionMap = SubstitutionMap(bridged: pai.bridged.getSubstitutionMap())
+  let paiIsOnStack = pai.isOnStack
+
+  let returnInst = vjpExitBB.terminator as! ReturnInst
+  let tupleInst = returnInst.returnedValue.definingInstruction as! TupleInst
+  let tupleElem = tupleInst.operands[0].value
+  let functionRefInst = paiFunction as! FunctionRefInst
+
+  var newCapturedArgs = [Value]()
+  for paiArg in pai.arguments {
+    newCapturedArgs.append(paiArg)
+  }
+
+  vjpExitBB.bridged.eraseInstruction(returnInst.bridged)
+  // MYTODO: assert no uses
+  vjpExitBB.bridged.eraseInstruction(tupleInst.bridged)
+  vjpExitBB.bridged.eraseInstruction(pai.bridged)
+  let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
+  functionRefInst.replace(with: newFunctionRefInst, context)
+
+  let newPai: PartialApplyInst = builderSucc.createPartialApply(
+    function: newFunctionRefInst, substitutionMap: paiSubstitutionMap,
+    capturedArguments: newCapturedArgs, calleeConvention: paiConvention,
+    hasUnknownResultIsolation: paiHasUnknownResultIsolation, isOnStack: paiIsOnStack)
+  let newTupleInst = builderSucc.createTuple(elements: [tupleElem, newPai])
+  let newReturnInst = builderSucc.createReturn(of: newTupleInst)
+
+
+//  for (argIndex, arg) in succBB.arguments.enumerated() {
+//    if arg.type == enumType {
+//      let newBBArg = succBB.bridged.recreateEnumBlockArgument(argIndex, newEnumType.bridged)
+//        .argument
+//      newCapturedArgs[applyArgIdx] = newBBArg
+//      let newPai: PartialApplyInst = builderSucc.createPartialApply(
+//        function: newFunctionRefInst, substitutionMap: paiSubstitutionMap,
+//        capturedArguments: newCapturedArgs, calleeConvention: paiConvention,
+//        hasUnknownResultIsolation: paiHasUnknownResultIsolation, isOnStack: paiIsOnStack)
+//      let newTupleInst = builderSucc.createTuple(elements: [tupleElem, newPai])
+//      let newReturnInst = builderSucc.createReturn(of: newTupleInst)
+//      break
+//    }
+//  }
+
+
+
+  for bb in vjp.blocks {
+    if bb == vjpExitBB {
+      // MYTODO
+      continue
+    }
+    var tiOpt = Optional<TupleInst>(nil)
+    for inst in bb.instructions.reversed() {
+      tiOpt = inst as? TupleInst
+      if tiOpt != nil {
+        break
+      }
+    }
+    assert(tiOpt != nil)
+    let ti = tiOpt!
+
+    if ti.operands.count == 0 {
+      continue
+    }
+
+    var tupleIdxToCapturedArgs = [Int:[Value]]()
+    for closureInfo in closureInfos {
+      if closureInfo.closureInfo.payloadTuple != ti {
+        continue
+      }
+      let idxInTuple = closureInfo.closureInfo.idxesInEnumPayload[0]
+      assert(ti.operands[idxInTuple].value == closureInfo.closureInfo.closure)
+      assert(tupleIdxToCapturedArgs[idxInTuple] == nil)
+      tupleIdxToCapturedArgs[idxInTuple] = closureInfo.closureInfo.capturedArgs
+    }
+
+    var newPayloadValues = [Value]()
+    for (opIdx, op) in ti.operands.enumerated() {
+      if tupleIdxToCapturedArgs[opIdx] == nil {
+        newPayloadValues.append(op.value)
+        continue
+      }
+
+      let builderPred = Builder(before: ti, context)
+      let tuple = builderPred.createTuple(elements: tupleIdxToCapturedArgs[opIdx]!)
+
+      newPayloadValues.append(tuple)
+    }
+    let builderPred = Builder(before: ti, context)
+    let newPayload = builderPred.createTupleWithPredecessor(elements: newPayloadValues)
+    ti.replace(with: newPayload, context)
+
+//    let enumInstNew = builderPred.createEnum(
+//      caseIndex: enumInstOld.caseIndex, payload: newPayload, enumType: newEnumType)
+//  
+//    var newBrOperandValues = [Value]()
+//    for op in brInst.operands {
+//      if brInst.getArgument(for: op).bridged.getType().type == enumType {
+//        newBrOperandValues.append(enumInstNew)
+//      } else {
+//        newBrOperandValues.append(op.value)
+//      }
+//    }
+//    let builderBr = Builder(before: brInst, context)
+//    let newBrInst = builderBr.createBranch(
+//      to: brInst.targetBlock, arguments: newBrOperandValues)
+//  
+//    pred.bridged.eraseInstruction(brInst.bridged)
+//    pred.bridged.eraseInstruction(enumInstOld.bridged)
+//    pred.bridged.eraseInstruction(oldPayload.bridged)
+//    pred.bridged.eraseInstruction(pai.bridged)
+//  
+//    enumInstOld = enumInstNew
+//    brInst = newBrInst
+//    oldPayload = newPayload
+
+  }
+
+
+}
+
+
 
 private func rewriteApplyInstruction(
   using specializedCallee: Function, callSite: CallSite,
@@ -984,6 +1157,17 @@ private func getEnumArgOfEntryPbBB(_ bb: BasicBlock) -> Argument {
   return argOpt!
 }
 
+private func getEnumArgOfVJPBB(_ bb: BasicBlock) -> (Argument, Int)? {
+  var argOpt = Optional<(Argument, Int)>(nil)
+  for (idx, arg) in bb.arguments.enumerated() {
+    if arg.type.isEnum && arg.type.description.hasPrefix("$_AD__") {
+      assert(argOpt == nil)
+      argOpt = (arg, idx)
+    }
+  }
+  return argOpt
+}
+
 private func getEnumPayloadArgOfPbBB(_ bb: BasicBlock) -> Optional<Argument> {
   var argOpt = Optional<Argument>(nil)
   for arg in bb.arguments {
@@ -1102,6 +1286,7 @@ private func handleNonAppliesCFG(
       {
         // This is the pullback closure returned from an Autodiff VJP and we don't need to handle it.
       } else if rootClosure.parentFunction.blocks.singleElement == nil {
+        // MYTODO
         if !ti.bridged.hasOneUse() {
           return []
         }
@@ -1126,7 +1311,7 @@ private func handleNonAppliesCFG(
           let enumTypeAndCase = EnumTypeAndCase(enumType: ei.type, caseIdx: ei.caseIndex)
           closureInfoArr.append(ClosureInfoCFG(
             closure: rootClosure, idxesInEnumPayload: [idxInEnumPayload], capturedArgs: capturedArgs,
-            enumTypeAndCase: enumTypeAndCase
+            enumTypeAndCase: enumTypeAndCase, payloadTuple: ti
           ))
         }
       } else {
@@ -1768,111 +1953,6 @@ extension SpecializationCloner {
 //      enum: entrySwitchEnum.enumOp, cases: enumCases)//, defaultBlock: entrySwitchEnum.getSuccessorForDefault())
 //    self.entryBlock.bridged.eraseInstruction(entrySwitchEnum.bridged)
   }
-
-  fileprivate func cloneAndSpecializeFunctionBodyCFGOld(
-    using callSite: CallSite, /*enumType: Type, */enumDict: inout EnumDict, bbMap: [BasicBlock:BasicBlock]
-  ) {
-    self.cloneEntryBlockArgsWithoutOrigClosuresCFG(
-      usingOrigCalleeAt: callSite, /*enumType: enumType, */enumDict: &enumDict)
-
-    var args = [Value]()
-    for arg in self.entryBlock.arguments {
-      args.append(arg)
-    }
-
-    self.cloneFunctionBody(from: callSite.applyCallee, entryBlockArguments: args)
-
-    let closureInfos = callSite.closureInfosWithApplyCFG
-
-    let entrySwitchEnum = self.entryBlock.terminator as! SwitchEnumInst
-    let builderEntry = Builder(before: entrySwitchEnum, self.context)
-
-    var enumCases = [(Int, BasicBlock)]()
-    for i in 0...entrySwitchEnum.bridged.SwitchEnumInst_getNumCases() {
-      let bbForCase = entrySwitchEnum.getUniqueSuccessor(forCaseIndex: i)
-      // MYTODO: ensure that identical indexes have identical textual values like bb1, bb2, ...
-      if bbForCase != nil {
-        enumCases.append((i, bbForCase!))
-      }
-    }
-    let newEntrySwitchEnum = builderEntry.createSwitchEnum(
-      enum: entrySwitchEnum.enumOp, cases: enumCases)//, defaultBlock: entrySwitchEnum.getSuccessorForDefault())
-    self.entryBlock.bridged.eraseInstruction(entrySwitchEnum.bridged)
-
-    // MYTODO: loop over enum cases with inner loop over VJPs in one enum case
-    var closureInfoByEnumCase = [Int: [ClosureInfoWithApplyCFG]]()
-    for closureInfo in closureInfos {
-      var tmp: [ClosureInfoWithApplyCFG]? = closureInfoByEnumCase[
-        closureInfo.closureInfo.enumTypeAndCase.caseIdx]
-      if tmp == nil {
-        closureInfoByEnumCase[closureInfo.closureInfo.enumTypeAndCase.caseIdx] = [closureInfo]
-      } else {
-        tmp!.append(closureInfo)
-        closureInfoByEnumCase[closureInfo.closureInfo.enumTypeAndCase.caseIdx] = tmp!
-      }
-    }
-    for (enumIdx, closureInfoArray) in closureInfoByEnumCase {
-      let succBB = newEntrySwitchEnum.getUniqueSuccessor(forCaseIndex: enumIdx)!
-
-      var rewriter = BridgedEnumRewriter()
-      for closureInfoWithApplyCFG in closureInfoArray {
-        // MYTODO: do we need this assert?
-//        assert(enumType == closureInfoWithApplyCFG.closureInfo.enumTypeAndCase.enumType)
-        rewriter.appendToClosuresBuffer(
-          closureInfoWithApplyCFG.closureInfo.enumTypeAndCase.enumType.bridged,
-          closureInfoWithApplyCFG.closureInfo.enumTypeAndCase.caseIdx,
-          closureInfoWithApplyCFG.closureInfo.closure.bridged,
-          closureInfoWithApplyCFG.closureInfo.idxesInEnumPayload[0])
-      }
-      //succBB.bridged.recreateTupleBlockArgument(enumType.bridged, enumIdx)
-//      succBB.bridged.recreateTupleBlockArgument(closureInfoArray[0].closureInfo.enumTypeAndCase.enumType.bridged, enumIdx)
-      rewriter.clearClosuresBuffer()
-
-      var applyInPbArray = [ApplyInst]()
-      for (closureInfoIdx, closureInfo) in closureInfoArray.enumerated() {
-        let applyInPbOriginal = closureInfo.applyInPb
-        let pbBbOriginal = applyInPbOriginal.parentBlock
-        var applyIdx = Int?(nil)
-        for (instIdx, inst) in pbBbOriginal.instructions.enumerated() {
-          if inst == applyInPbOriginal {
-            assert(applyIdx == nil)
-            applyIdx = instIdx
-          }
-        }
-        assert(applyIdx != nil)
-        let pbBbCloned = succBB
-        var applyInPbX = Instruction?(nil)
-        for (instIdx, inst) in pbBbCloned.instructions.enumerated() {
-          if instIdx == applyIdx! {
-            assert(applyInPbX == nil)
-            applyInPbX = inst
-          }
-        }
-
-        let applyInPb = applyInPbX as? ApplyInst
-        assert(applyInPb != nil)
-        applyInPbArray.append(applyInPb!)
-      }
-
-      let oldDtiOpt = applyInPbArray[0].callee.definingInstruction as? DestructureTupleInst
-      assert(oldDtiOpt != nil)
-      let oldDti = oldDtiOpt!
-      let builderBeforeOldDti = Builder(before: oldDti, self.context)
-      let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
-
-      for (resultIdx, result) in oldDti.results.enumerated() {
-        for use in result.uses {
-          rewriteUsesOfPayloadItem(
-            use: use, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti,
-            bbMap: bbMap, context: self.context)
-        }
-      }
-
-      oldDti.parentBlock.bridged.eraseInstruction(oldDti.bridged)
-    }
-  }
-
-
 
   private func cloneEntryBlockArgsWithoutOrigClosuresCFG(
     usingOrigCalleeAt callSite: CallSite, enumDict: inout EnumDict

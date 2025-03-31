@@ -42,6 +42,7 @@ struct Worklist<Set: IntrusiveSet> : CustomStringConvertible, NoReflectionChildr
   }
 
   mutating func pushIfNotVisited(_ element: Element) {
+    
     if pushedElements.insert(element) {
       worklist.append(element)
     }
