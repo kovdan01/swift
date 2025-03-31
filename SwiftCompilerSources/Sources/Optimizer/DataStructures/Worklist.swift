@@ -42,13 +42,9 @@ struct Worklist<Set: IntrusiveSet> : CustomStringConvertible, NoReflectionChildr
   }
 
   mutating func pushIfNotVisited(_ element: Element) {
-    debugPrint("EEEEE 00")
     if pushedElements.insert(element) {
-      debugPrint("EEEEE 01")
       worklist.append(element)
-      debugPrint("EEEEE 02")
     }
-    debugPrint("EEEEE 03")
   }
 
   mutating func pushIfNotVisited<S: Sequence>(contentsOf other: S) where S.Element == Element {
