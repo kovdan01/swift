@@ -143,8 +143,10 @@ PASS(UpdateBorrowedFrom, "update-borrowed-from",
 // NOTE - ExperimentalSwiftBasedClosureSpecialization and AutodiffClosureSpecialization are a WIP
 PASS(ExperimentalSwiftBasedClosureSpecialization, "experimental-swift-based-closure-specialization",
      "General closure-specialization pass written in Swift")
-PASS(AutodiffClosureSpecialization, "autodiff-closure-specialization",
-     "Autodiff specific closure-specialization pass")
+PASS(AutodiffClosureSpecialization1, "autodiff-closure-specialization1",
+     "Autodiff specific closure-specialization pass 1")
+PASS(AutodiffClosureSpecialization2, "autodiff-closure-specialization2",
+     "Autodiff specific closure-specialization pass 2")
 
 MODULE_PASS(AsyncDemotion, "async-demotion",
      "Convert async functions to be synchronous")
