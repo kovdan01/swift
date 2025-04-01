@@ -69,6 +69,14 @@ void FunctionSignatureSpecializationMangler::setArgumentClosureProp(
   Info.second = TTTFI;
 }
 
+void FunctionSignatureSpecializationMangler::
+    setArgumentAutoDiffBranchTracingEnum(unsigned OrigArgIdx, ValueBase *Arg) {
+  auto &Info = OrigArgs[OrigArgIdx];
+  Info.first =
+      ArgumentModifierIntBase(ArgumentModifier::AutoDiffBranchTracingEnum);
+  Info.second = Arg;
+}
+
 void FunctionSignatureSpecializationMangler::setArgumentConstantProp(
     unsigned OrigArgIdx, SILInstruction *constInst) {
   auto &Info = OrigArgs[OrigArgIdx];
@@ -249,15 +257,28 @@ FunctionSignatureSpecializationMangler::mangleClosureProp(SILInstruction *Inst) 
   }
 }
 
+void FunctionSignatureSpecializationMangler::mangleAutoDiffBranchTracingEnum(
+    ValueBase *Arg) {
+  ArgOpBuffer << 'b';
+  appendIdentifier(Arg->getType().getAsString());
+}
+
 void FunctionSignatureSpecializationMangler::mangleArgument(
-    ArgumentModifierIntBase ArgMod, NullablePtr<SILInstruction> Inst) {
+    ArgumentModifierIntBase ArgMod, NullablePtr<void> Payload) {
   if (ArgMod == ArgumentModifierIntBase(ArgumentModifier::ConstantProp)) {
-    mangleConstantProp(Inst.get());
+    mangleConstantProp(reinterpret_cast<SILInstruction *>(Payload.get()));
     return;
   }
 
   if (ArgMod == ArgumentModifierIntBase(ArgumentModifier::ClosureProp)) {
-    mangleClosureProp(Inst.get());
+    mangleClosureProp(reinterpret_cast<SILInstruction *>(Payload.get()));
+    return;
+  }
+
+  if (ArgMod ==
+      ArgumentModifierIntBase(ArgumentModifier::AutoDiffBranchTracingEnum)) {
+    mangleAutoDiffBranchTracingEnum(
+        reinterpret_cast<ValueBase *>(Payload.get()));
     return;
   }
 
@@ -334,7 +355,7 @@ std::string FunctionSignatureSpecializationMangler::mangle() {
 
   for (unsigned i : indices(OrigArgs)) {
     ArgumentModifierIntBase ArgMod;
-    NullablePtr<SILInstruction> Inst;
+    NullablePtr<void> Inst;
     std::tie(ArgMod, Inst) = OrigArgs[i];
     mangleArgument(ArgMod, Inst);
   }

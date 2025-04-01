@@ -1520,6 +1520,7 @@ ManglingError Remangler::mangleFunctionSignatureSpecialization(Node *node,
           break;
         }
         case FunctionSigSpecializationParamKind::ClosureProp:
+        case FunctionSigSpecializationParamKind::AutoDiffBranchTracingEnum:
         case FunctionSigSpecializationParamKind::ConstantPropKeyPath:
           RETURN_IF_ERROR(mangleIdentifier(Param->getChild(1), depth + 1));
           for (unsigned i = 2, e = Param->getNumChildren(); i != e; ++i) {
@@ -1603,6 +1604,9 @@ Remangler::mangleFunctionSignatureSpecializationParam(Node *node,
       break;
     case FunctionSigSpecializationParamKind::ClosureProp:
       Buffer << 'c';
+      break;
+    case FunctionSigSpecializationParamKind::AutoDiffBranchTracingEnum:
+      Buffer << 'b';
       break;
     case FunctionSigSpecializationParamKind::BoxToValue:
       Buffer << 'i';
