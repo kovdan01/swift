@@ -166,7 +166,7 @@ public func registerOptimizerTests() {
     linearLivenessTest,
     parseTestSpecificationTest,
     variableIntroducerTest,
-    gatherCallSitesTest,
+    gatherCallSiteTest,
     specializedFunctionSignatureAndBodyTest,
     rewrittenCallerBodyTest
   )
