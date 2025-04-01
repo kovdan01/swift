@@ -258,6 +258,9 @@ struct BridgedPassContext {
                                                                BridgedFunction applySiteCallee) const;
   BridgedOwnedString mangleWithBoxToStackPromotedArgs(BridgedArrayRef bridgedPromotedArgIndices,
                                                       BridgedFunction bridgedOriginalFunction) const;
+  BridgedOwnedString
+  mangleWithAutoDiffBranchTracingEnum(BridgedValue arg, SwiftInt argIdx,
+                                      BridgedFunction pullback) const;
 
   SWIFT_IMPORT_UNSAFE BridgedGlobalVar createGlobalVariable(BridgedStringRef name, BridgedType type,
                                                             BridgedLinkage linkage, bool isLet) const;
