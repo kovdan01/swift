@@ -319,6 +319,19 @@ BridgedOwnedString BridgedPassContext::mangleWithBoxToStackPromotedArgs(
   return BridgedOwnedString(mangler.mangle());
 }
 
+BridgedOwnedString BridgedPassContext::mangleWithAutoDiffBranchTracingEnum(
+    BridgedValue arg, SwiftInt argIdx, BridgedFunction pullback) const {
+  auto pass = Demangle::SpecializationPass::ClosureSpecializer;
+  auto serializedKind = pullback.getFunction()->getSerializedKind();
+  Mangle::FunctionSignatureSpecializationMangler mangler(
+      pullback.getFunction()->getASTContext(), pass, serializedKind,
+      pullback.getFunction());
+
+  mangler.setArgumentAutoDiffBranchTracingEnum(argIdx, arg.getSILValue());
+
+  return BridgedOwnedString(mangler.mangle());
+}
+
 void BridgedPassContext::fixStackNesting(BridgedFunction function) const {
   switch (StackNesting::fixNesting(function.getFunction())) {
     case StackNesting::Changes::None:
