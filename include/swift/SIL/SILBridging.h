@@ -1244,7 +1244,7 @@ struct BridgedBuilder{
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
   createTuple(BridgedValueArray elements) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
-  createTupleWithPredecessor(BridgedValueArray elements) const;
+  createTupleWithPredecessor(BridgedValueArray elements, BridgedType oldTupleTy) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleExtract(BridgedValue str,
                                                                            SwiftInt elementIndex) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleElementAddr(BridgedValue addr,

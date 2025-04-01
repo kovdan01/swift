@@ -522,7 +522,6 @@ private func rewriteApplyInstructionCFG(
     atEndOf: callSite.applySite.parentBlock,
     location: callSite.applySite.parentBlock.instructions.last!.location, context)
 
-
   let pai = callSite.applySite as! PartialApplyInst
   let paiFunction = pai.operands[0].value
   let paiConvention = pai.calleeConvention
@@ -554,6 +553,12 @@ private func rewriteApplyInstructionCFG(
   let newTupleInst = builderSucc.createTuple(elements: [tupleElem, newPai])
   let newReturnInst = builderSucc.createReturn(of: newTupleInst)
 
+  debugPrint("AAAAAAA closureInfos BEGIN")
+  for closureInfo in closureInfos {
+    debugPrint(closureInfo)
+  }
+  debugPrint("AAAAAAA closureInfos END")
+
   for bb in vjp.blocks {
     if bb == vjpExitBB {
       // MYTODO
@@ -565,6 +570,10 @@ private func rewriteApplyInstructionCFG(
       if tiOpt != nil {
         break
       }
+    }
+    // MYTODO: check this earlier
+    if tiOpt == nil {
+      continue
     }
     assert(tiOpt != nil)
     let ti = tiOpt!
@@ -597,7 +606,7 @@ private func rewriteApplyInstructionCFG(
       newPayloadValues.append(tuple)
     }
     let builderPred = Builder(before: ti, context)
-    let newPayload = builderPred.createTupleWithPredecessor(elements: newPayloadValues)
+    let newPayload = builderPred.createTupleWithPredecessor(elements: newPayloadValues, oldTupleType: ti.type)
     ti.replace(with: newPayload, context)
   }
 }
@@ -1498,8 +1507,6 @@ extension SpecializationCloner {
     let bbMapCloned = vjpToPbBB(vjp: callSite.applySite.parentFunction, pb: self.cloned)
     assert(bbMapCloned.count != 0)
 
-
-
     for bb in self.cloned.blocks {
       if bb == self.cloned.entryBlock {
         let entrySwitchEnumOpt = bb.terminator as? SwitchEnumInst
@@ -1583,25 +1590,31 @@ extension SpecializationCloner {
       rewriter.clearClosuresBufferForPb()
 
       arg = getEnumPayloadArgOfPbBB(bb)
-      assert(arg!.uses.singleUse != nil)
-      let dtiOpt = arg!.uses.singleUse!.instruction as? DestructureTupleInst
-      assert(dtiOpt != nil)
-      let dti = dtiOpt!
-      assert(dti.results[0].type.isEnum)
-      assert(dti.results[0].type.description.hasPrefix("$_AD__"))
-      let oldDti = dti
-      let builderBeforeOldDti = Builder(before: oldDti, self.context)
-      let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
-
-      for (resultIdx, result) in oldDti.results.enumerated() {
-        for use in result.uses {
-          rewriteUsesOfPayloadItem(
-            use: use, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti,
-            bbMap: bbMap, context: self.context)
-        }
+      var payloadArgUseCount = 0
+      for _ in arg!.uses {
+        payloadArgUseCount += 1
       }
-
-      oldDti.parentBlock.bridged.eraseInstruction(oldDti.bridged)
+      assert(payloadArgUseCount == 0 || payloadArgUseCount == 1)
+      if arg!.uses.singleUse != nil {
+        let dtiOpt = arg!.uses.singleUse!.instruction as? DestructureTupleInst
+        assert(dtiOpt != nil)
+        let dti = dtiOpt!
+        assert(dti.results[0].type.isEnum)
+        assert(dti.results[0].type.description.hasPrefix("$_AD__"))
+        let oldDti = dti
+        let builderBeforeOldDti = Builder(before: oldDti, self.context)
+        let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
+  
+        for (resultIdx, result) in oldDti.results.enumerated() {
+          for use in result.uses {
+            rewriteUsesOfPayloadItem(
+              use: use, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti,
+              bbMap: bbMap, context: self.context)
+          }
+        }
+  
+        oldDti.parentBlock.bridged.eraseInstruction(oldDti.bridged)
+      }
     }
   }
 

@@ -514,9 +514,9 @@ public struct Builder {
     return notifyNew(tuple.getAs(TupleInst.self))
   }
 
-  public func createTupleWithPredecessor(elements: [Value]) -> TupleInst {
+  public func createTupleWithPredecessor(elements: [Value], oldTupleType: Type) -> TupleInst {
     let tuple = elements.withBridgedValues { valuesRef in
-      return bridged.createTupleWithPredecessor(valuesRef)
+      return bridged.createTupleWithPredecessor(valuesRef, oldTupleType.bridged)
     }
     return notifyNew(tuple.getAs(TupleInst.self))
   }
