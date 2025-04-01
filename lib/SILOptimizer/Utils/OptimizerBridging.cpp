@@ -337,6 +337,19 @@ BridgedOwnedString BridgedPassContext::mangleWithClosureArgs(
   return BridgedOwnedString(mangler.mangle());
 }
 
+BridgedOwnedString BridgedPassContext::mangleWithAutoDiffBranchTracingEnum(
+    BridgedValue arg, SwiftInt argIdx, BridgedFunction pullback) const {
+  auto pass = Demangle::SpecializationPass::ClosureSpecializer;
+  auto serializedKind = pullback.getFunction()->getSerializedKind();
+  Mangle::FunctionSignatureSpecializationMangler mangler(
+      pullback.getFunction()->getASTContext(), pass, serializedKind,
+      pullback.getFunction());
+
+  mangler.setArgumentAutoDiffBranchTracingEnum(argIdx, arg.getSILValue());
+
+  return BridgedOwnedString(mangler.mangle());
+}
+
 BridgedGlobalVar BridgedPassContext::createGlobalVariable(BridgedStringRef name, BridgedType type, BridgedLinkage linkage, bool isLet) const {
   auto *global = SILGlobalVariable::create(
       *invocation->getPassManager()->getModule(),

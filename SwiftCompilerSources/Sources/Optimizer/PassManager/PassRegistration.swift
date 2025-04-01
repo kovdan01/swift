@@ -104,7 +104,8 @@ private func registerSwiftPasses() {
   registerPass(mandatoryTempRValueElimination, { mandatoryTempRValueElimination.run($0) })
   registerPass(tempLValueElimination, { tempLValueElimination.run($0) })
   registerPass(generalClosureSpecialization, { generalClosureSpecialization.run($0) })
-  registerPass(autodiffClosureSpecialization, { autodiffClosureSpecialization.run($0) })
+  registerPass(autodiffClosureSpecialization1, { autodiffClosureSpecialization1.run($0) })
+  registerPass(autodiffClosureSpecialization2, { autodiffClosureSpecialization2.run($0) })
 
   // Instruction passes
   registerForSILCombine(BeginBorrowInst.self,      { run(BeginBorrowInst.self, $0) })
