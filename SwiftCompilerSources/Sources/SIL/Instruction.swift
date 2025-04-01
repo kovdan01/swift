@@ -1719,6 +1719,10 @@ final public class SwitchEnumInst : TermInst {
     cases.first(where: { $0.0 == forCaseIndex })?.1
   }
 
+  public func getSuccessorForDefault() -> BasicBlock? {
+    return self.bridged.SwitchEnumInst_getSuccessorForDefault().block
+  }
+
   // This does not handle the special case where the default covers exactly
   // the "missing" case.
   public func getUniqueCase(forSuccessor: BasicBlock) -> Int? {
