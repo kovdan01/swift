@@ -591,6 +591,7 @@ private:
     return false;
   }
 
+  // TODO: the same for AutoDiff Branch Tracing Enum
   bool demangleFuncSigSpecializationClosureProp(NodePointer parent,
                                                 unsigned depth) {
     // We don't actually demangle the function or types for now. But we do want
