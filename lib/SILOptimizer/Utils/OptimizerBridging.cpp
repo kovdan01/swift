@@ -332,6 +332,40 @@ BridgedOwnedString BridgedPassContext::mangleWithClosureArgs(
   return BridgedOwnedString(mangler.mangle());
 }
 
+BridgedOwnedString
+BridgedPassContext::mangleWithEnumArgs(BridgedValueArray bridgedEnumArgs,
+                                       BridgedArrayRef bridgedEnumArgIndices,
+                                       BridgedFunction applySiteCallee) const {
+  auto pass = Demangle::SpecializationPass::ClosureSpecializer;
+  auto serializedKind = applySiteCallee.getFunction()->getSerializedKind();
+  Mangle::FunctionSignatureSpecializationMangler mangler(
+      applySiteCallee.getFunction()->getASTContext(), pass, serializedKind,
+      applySiteCallee.getFunction());
+
+  llvm::SmallVector<swift::SILValue, 16> enumArgsStorage;
+  auto enumArgs = bridgedEnumArgs.getValues(enumArgsStorage);
+  auto enumArgIndices = bridgedEnumArgIndices.unbridged<SwiftInt>();
+
+  assert(enumArgs.size() == enumArgIndices.size() &&
+         "Number of enum arguments and number of enum indices do not match!");
+
+  for (size_t i = 0; i < enumArgs.size(); i++) {
+    auto closureArg = enumArgs[i];
+    auto closureArgIndex = enumArgIndices[i];
+
+    if (auto *PAI = dyn_cast<PartialApplyInst>(closureArg)) {
+      mangler.setArgumentClosureProp(closureArgIndex,
+                                     const_cast<PartialApplyInst *>(PAI));
+    } else {
+      auto *TTTFI = cast<ThinToThickFunctionInst>(closureArg);
+      mangler.setArgumentClosureProp(
+          closureArgIndex, const_cast<ThinToThickFunctionInst *>(TTTFI));
+    }
+  }
+
+  return BridgedOwnedString(mangler.mangle());
+}
+
 BridgedGlobalVar BridgedPassContext::createGlobalVariable(BridgedStringRef name, BridgedType type, BridgedLinkage linkage, bool isLet) const {
   auto *global = SILGlobalVariable::create(
       *invocation->getPassManager()->getModule(),
