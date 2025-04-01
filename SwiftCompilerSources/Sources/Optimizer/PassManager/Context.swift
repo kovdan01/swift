@@ -403,6 +403,10 @@ struct FunctionPassContext : MutatingContext {
     }
   }
 
+  func mangle(withBranchTracingEnum arg: Value, argIdx: Int, from pullback: Function) -> String {
+    String(taking: _bridged.mangleWithAutoDiffBranchTracingEnum(arg.bridged, argIdx, pullback.bridged))
+  }
+
   func createGlobalVariable(name: String, type: Type, linkage: Linkage, isLet: Bool) -> GlobalVariable {
     let gv = name._withBridgedStringRef {
       _bridged.createGlobalVariable($0, type.bridged, linkage.bridged, isLet)
