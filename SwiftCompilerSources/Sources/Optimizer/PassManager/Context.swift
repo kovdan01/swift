@@ -401,6 +401,18 @@ struct FunctionPassContext : MutatingContext {
     }
   }
 
+  func mangle(withEnumArguments enumArgs: [Value], enumArgIndices: [Int], from applySiteCallee: Function) -> String {
+    enumArgs.withBridgedValues { bridgedEnumArgsRef in
+      enumArgIndices.withBridgedArrayRef{bridgedEnumArgIndicesRef in
+        String(taking: _bridged.mangleWithEnumArgs(
+          bridgedEnumArgsRef,
+          bridgedEnumArgIndicesRef,
+          applySiteCallee.bridged
+        ))
+      }
+    }
+  }
+
   func createGlobalVariable(name: String, type: Type, linkage: Linkage, isLet: Bool) -> GlobalVariable {
     let gv = name._withBridgedStringRef {
       _bridged.createGlobalVariable($0, type.bridged, linkage.bridged, isLet)

@@ -647,6 +647,9 @@ struct BridgedInstruction {
   bool mayBeDeinitBarrierNotConsideringSideEffects() const;
   BRIDGED_INLINE bool shouldBeForwarding() const;
 
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedSubstitutionMap
+  getSubstitutionMap() const;
+
   // =========================================================================//
   //                   Generalized instruction subclasses
   // =========================================================================//
@@ -782,6 +785,9 @@ struct BridgedInstruction {
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedBasicBlock BranchInst_getTargetBlock() const;
   BRIDGED_INLINE SwiftInt SwitchEnumInst_getNumCases() const;
   BRIDGED_INLINE SwiftInt SwitchEnumInst_getCaseIndex(SwiftInt idx) const;
+  // MYTODO: use this
+  BRIDGED_INLINE OptionalBridgedBasicBlock
+  SwitchEnumInst_getSuccessorForDefault() const;
   BRIDGED_INLINE SwiftInt StoreInst_getStoreOwnership() const;
   BRIDGED_INLINE SwiftInt AssignInst_getAssignOwnership() const;
   BRIDGED_INLINE MarkDependenceKind MarkDependenceInst_dependenceKind() const;
@@ -920,11 +926,16 @@ struct BridgedBasicBlock {
   BRIDGED_INLINE SwiftInt getNumArguments() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument getArgument(SwiftInt index) const;
   SWIFT_IMPORT_UNSAFE  BRIDGED_INLINE BridgedArgument addBlockArgument(BridgedType type, BridgedValue::Ownership ownership) const;
+  SWIFT_IMPORT_UNSAFE BridgedArgument
+  recreateEnumBlockArgument(SwiftInt index, BridgedType type) const;
+  SWIFT_IMPORT_UNSAFE BridgedArgument
+  recreateTupleBlockArgument(SwiftInt argIdx) const;
   SWIFT_IMPORT_UNSAFE  BRIDGED_INLINE BridgedArgument addFunctionArgument(BridgedType type) const;
   BRIDGED_INLINE void eraseArgument(SwiftInt index) const;
   BRIDGED_INLINE void moveAllInstructionsToBegin(BridgedBasicBlock dest) const;
   BRIDGED_INLINE void moveAllInstructionsToEnd(BridgedBasicBlock dest) const;
   BRIDGED_INLINE void moveArgumentsTo(BridgedBasicBlock dest) const;
+  BRIDGED_INLINE void eraseInstruction(BridgedInstruction inst) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE OptionalBridgedSuccessor getFirstPred() const;
 };
 
@@ -1106,6 +1117,20 @@ struct OptionalBridgedDefaultWitnessTable {
   const swift::SILDefaultWitnessTable * _Nullable table;
 };
 
+struct BridgedEnumRewriter {
+  SWIFT_IMPORT_UNSAFE void appendToClosuresBuffer(BridgedType enumType,
+                                                  SwiftInt caseIdx,
+                                                  BridgedInstruction closure,
+                                                  SwiftInt idxInPayload);
+  SWIFT_IMPORT_UNSAFE void
+  appendToClosuresBufferForPb(BridgedInstruction closure,
+                              SwiftInt idxInPayload);
+  SWIFT_IMPORT_UNSAFE void clearClosuresBuffer();
+  SWIFT_IMPORT_UNSAFE void clearClosuresBufferForPb();
+  SWIFT_IMPORT_UNSAFE BridgedType
+  rewriteBranchTracingEnum(BridgedType enumType, BridgedFunction topVjp) const;
+};
+
 struct BridgedBuilder{
 
   enum class InsertAt {
@@ -1253,6 +1278,11 @@ struct BridgedBuilder{
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createDestructureStruct(BridgedValue str) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTuple(BridgedType type,
                                                                     BridgedValueArray elements) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
+  createTuple(BridgedValueArray elements) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
+  createTupleWithPredecessor(BridgedValueArray elements,
+                             BridgedType oldTupleTy) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleExtract(BridgedValue str,
                                                                            SwiftInt elementIndex) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleElementAddr(BridgedValue addr,
