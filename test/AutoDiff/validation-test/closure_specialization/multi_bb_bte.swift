@@ -48,15 +48,15 @@ AutoDiffClosureSpecMultiBBBTETests.testWithLeakChecking("Test1") {
 AutoDiffClosureSpecMultiBBBTETests.testWithLeakChecking("Test2") {
   // CHECK2-LABEL: {{^}}// reverse-mode derivative of cond_tuple_var #1 (_:)
   // CHECK2-NEXT:  sil private @$s3outyycfU0_14cond_tuple_varL_yS2fFTJrSpSr : $@convention(thin) (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) {
-  // CHECK2:         %[[#E41:]] = function_ref @$s3outyycfU0_14cond_tuple_varL_yS2fFTJpSpSr067$sSf16_DifferentiationE7_vjpAdd3lhs3rhsSf5value_Sf_SftSfc8pullbacktl1_m5FZSf_M6SfcfU_0ef1_g4E12_i16Subtract3lhs3rhsk1_l1_mnl1_mo1_mP2U_ACTf1nnccc_n : $@convention(thin) (Float, @owned _AD__$s3outyycfU0_14cond_tuple_varL_yS2fF_bb3__Pred__src_0_wrt_0) -> Float
-  // CHECK2:         %[[#E42:]] = partial_apply [callee_guaranteed] %[[#E41]](%[[#]]) : $@convention(thin) (Float, @owned _AD__$s3outyycfU0_14cond_tuple_varL_yS2fF_bb3__Pred__src_0_wrt_0) -> Float
+  // CHECK2:         %[[#E41:]] = function_ref @$s3outyycfU0_14cond_tuple_varL_yS2fFTJpSpSr067$sSf16_DifferentiationE7_vjpAdd3lhs3rhsSf5value_Sf_SftSfc8pullbacktl1_m5FZSf_M6SfcfU_0ef1_g4E12_i16Subtract3lhs3rhsk1_l1_mnl1_mo1_mP2U_ACTf1nnccc_n021$_AD__$s3outyycfU0_14b1_c1_D30L_yS2fF_bb3__Pred__src_0_wrt_0Tf1bn_n : $@convention(thin) (Float, @owned _AD__$s3outyycfU0_14cond_tuple_varL_yS2fF_bb3__Pred__src_0_wrt_0_specialized) -> Float // user: %43
+  // CHECK2:         %[[#E42:]] = partial_apply [callee_guaranteed] %[[#E41]](%[[#]]) : $@convention(thin) (Float, @owned _AD__$s3outyycfU0_14cond_tuple_varL_yS2fF_bb3__Pred__src_0_wrt_0_specialized) -> Float
   // CHECK2:         %[[#E46:]] = tuple (%[[#]], %[[#E42]])
   // CHECK2:         return %[[#E46]]
   // CHECK2:       } // end sil function '$s3outyycfU0_14cond_tuple_varL_yS2fFTJrSpSr'
 
   // CHECK2-NONE:  {{^}}// pullback of cond_tuple_var
   // CHECK2:       {{^}}// specialized pullback of cond_tuple_var
-  // CHECK2:       sil private @$s3outyycfU0_14cond_tuple_varL_yS2fFTJpSpSr067$sSf16_DifferentiationE7_vjpAdd3lhs3rhsSf5value_Sf_SftSfc8pullbacktl1_m5FZSf_M6SfcfU_0ef1_g4E12_i16Subtract3lhs3rhsk1_l1_mnl1_mo1_mP2U_ACTf1nnccc_n : $@convention(thin) (Float, @owned _AD__$s3outyycfU0_14cond_tuple_varL_yS2fF_bb3__Pred__src_0_wrt_0) -> Float {
+  // CHECK2:       sil private @$s3outyycfU0_14cond_tuple_varL_yS2fFTJpSpSr067$sSf16_DifferentiationE7_vjpAdd3lhs3rhsSf5value_Sf_SftSfc8pullbacktl1_m5FZSf_M6SfcfU_0ef1_g4E12_i16Subtract3lhs3rhsk1_l1_mnl1_mo1_mP2U_ACTf1nnccc_n021$_AD__$s3outyycfU0_14b1_c1_D30L_yS2fF_bb3__Pred__src_0_wrt_0Tf1bn_n : $@convention(thin) (Float, @owned _AD__$s3outyycfU0_14cond_tuple_varL_yS2fF_bb3__Pred__src_0_wrt_0_specialized) -> Float {
 
   func cond_tuple_var(_ x: Float) -> Float {
     // Convoluted function returning `x + x`.
