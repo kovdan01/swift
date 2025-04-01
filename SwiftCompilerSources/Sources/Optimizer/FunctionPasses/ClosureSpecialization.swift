@@ -175,15 +175,9 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     if bbMap.count == 0 {
       return
     }
-    // MYTODO
-    if getEnumArgOfEntryPbBB(pbApply!.referencedFunction!.entryBlock).type.description.hasSuffix("_specialized") {
-      return
-    }
   }
 
-  // MYTODO
-  //var remainingSpecializationRounds = 5
-  var remainingSpecializationRounds = 1
+  var remainingSpecializationRounds = 5
 
   var enumDict: EnumDict = [:]
 
