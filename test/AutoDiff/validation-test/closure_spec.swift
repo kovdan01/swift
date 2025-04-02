@@ -10,12 +10,14 @@
 
 /// Particular optimizations are checked in SILOptimizer tests, here we only check that optimizations occur
 // RUN: %target-swift-frontend -emit-sil -I%t %s -o - -O | %FileCheck %s
+// CHECK-NONE: {{^}}// pullback of myfoo7
 // CHECK-NONE: {{^}}// pullback of myfoo6
 // CHECK-NONE: {{^}}// pullback of myfoo5
 // CHECK-NONE: {{^}}// pullback of myfoo4
 // CHECK-NONE: {{^}}// pullback of myfoo3
 // CHECK-NONE: {{^}}// pullback of myfoo2
 // CHECK-NONE: {{^}}// pullback of myfoo1
+// CHECK:      {{^}}// specialized pullback of myfoo7
 // CHECK:      {{^}}// specialized pullback of myfoo6
 // CHECK:      {{^}}// specialized pullback of myfoo5
 // CHECK:      {{^}}// specialized pullback of myfoo4
@@ -210,6 +212,32 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
     let b = gradient(at: Float(x), of: myfoo6)
     expectEqual((a * 10000).rounded(), (b * 10000).rounded())
     x += 1 / 1024
+  }
+
+  func myfoo7(_ x: Float, _ bool: Bool) -> Float {
+    var result = x * x
+    if bool {
+      result = result + result
+      result = result - x
+    } else {
+      result = result / x
+    }
+    return result
+  }
+
+  func myfoo7_derivative(_ x: Float, _ bool: Bool) -> Float {
+    if bool {
+      return 4 * x - 1
+    }
+    return 1
+  }
+
+  for x in -100...100 {
+    if x == 0 {
+      continue
+    }
+    expectEqual(gradient(at: Float(x), of: { myfoo7(Float($0), true)  }), myfoo7_derivative(Float(x), true))
+    expectEqual((100000 * gradient(at: Float(x), of: { myfoo7(Float($0), false) })).rounded(), (100000 * myfoo7_derivative(Float(x), false)).rounded())
   }
 }
 

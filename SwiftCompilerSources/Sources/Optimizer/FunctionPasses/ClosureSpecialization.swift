@@ -669,14 +669,6 @@ private func updateCallSiteCFG(
   _ context: FunctionPassContext
 ) {
   let closureInfoArr = handleNonAppliesCFG(for: rootClosure, context)
-  if closureInfoArr.count == 0 {
-    return
-  }
-
-  // MYMYTODO: allow multiple uses (closure defined in one bb, then used in multiple successors)
-  if closureInfoArr.count != 1 {
-    return
-  }
 
   for closureInfo in closureInfoArr {
     let pbPAI = getPBClosure(vjp: rootClosure.parentFunction)!
