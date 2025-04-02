@@ -125,7 +125,7 @@ struct EnumTypeAndCase {
   var caseIdx: Int
 }
 
-// MYTODO: proper hash
+// TODO: proper hash
 extension EnumTypeAndCase: Hashable {
   public func hash(into hasher: inout Hasher) {
     hasher.combine(1)
@@ -167,6 +167,11 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
 
   for (vjpBB, pbBB) in vjpBBToPbBBMap {
     guard let argOfPbBB = getEnumPayloadArgOfPbBB(pbBB) else {
+      for arg in pbBB.arguments {
+        if arg.type.isTuple {
+          return false
+        }
+      }
       continue
     }
     if argOfPbBB.uses.count > 1 {
@@ -280,7 +285,7 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 
       rewriteApplyInstruction(using: specializedFunction, callSite: callSite, context)
 
-      // MYTODO avoid this array
+      // TODO avoid this array
       let callSites = [callSite]
       var deadClosures: InstructionWorklist = callSites.reduce(into: InstructionWorklist(context)) {
         deadClosures, callSite in
@@ -481,7 +486,6 @@ private func getOrCreateSpecializedFunctionCFG(
       if argOpt != nil && argOpt!.uses.singleUse != nil {
         let dti = argOpt!.uses.singleUse!.instruction as! DestructureTupleInst
         if dti.results[0].type.isBranchTracingEnum {
-          // MYTODO: what if not empty but not single element?
           assert(dti.results[0].uses.count <= 1)
           if dti.results[0].uses.singleUse != nil {
             currentEnumTypeOpt = dti.results[0].type
@@ -505,7 +509,6 @@ private func getOrCreateSpecializedFunctionCFG(
       rewriter.clearClosuresBuffer()
     }
     for closureInfoCFG in closureInfos {
-      // MYTODO: do we need this assert?
       if enumType != closureInfoCFG.enumTypeAndCase.enumType {
         continue
       }
@@ -800,17 +803,17 @@ private func getEnumArgOfVJPBB(_ bb: BasicBlock) -> Argument? {
 }
 
 private func getEnumPayloadArgOfPbBB(_ bb: BasicBlock) -> Argument? {
+  // TODO: now we just assume that if we have exactly one tuple argument,
+  //       this is what we need. This is not always true.
   var argOpt = Argument?(nil)
   for arg in bb.arguments {
     if !arg.type.isTuple {
       continue
     }
-    // MYTODO: make this less fragile
-    //    if arg.type.tupleElements[0].isEnum && arg.type.tupleElements[0].description.hasPrefix("$_AD__")
-    //    {
-    assert(argOpt == nil)
+    if argOpt != nil {
+      return nil
+    }
     argOpt = arg
-    //    }
   }
   return argOpt
 }
@@ -845,24 +848,27 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
   var pbBBOpt = BasicBlock?(nil)
   for pbBB in pb.blocks {
     if pbBB.isReachableExitBlock {
-      assert(pbBBOpt == nil)
+      if pbBBOpt != nil {
+        return nil
+      }
       pbBBOpt = pbBB
     }
   }
-  assert(pbBBOpt != nil)
+  if pbBBOpt == nil {
+    return nil
+  }
   let pbBB = pbBBOpt!
 
-  func dfs(vjpBBArg: BasicBlock, pbBBArg: BasicBlock) {
+  func dfs(vjpBBArg: BasicBlock, pbBBArg: BasicBlock) -> Bool {
     if dict[vjpBBArg] != nil {
-      return
+      return true
     }
     dict[vjpBBArg] = pbBBArg
     if (vjpBBArg.singleSuccessor == nil) != (pbBBArg.singlePredecessor == nil) {
-      return
+      return false
     }
     if vjpBBArg.singleSuccessor != nil {
-      dfs(vjpBBArg: vjpBBArg.singleSuccessor!, pbBBArg: pbBBArg.singlePredecessor!)
-      return
+      return dfs(vjpBBArg: vjpBBArg.singleSuccessor!, pbBBArg: pbBBArg.singlePredecessor!)
     }
     var remainingVjpBB = BasicBlock?(nil)
     var predPbBBToSuccVjpBB = [BasicBlock: BasicBlock]()
@@ -873,39 +879,55 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
       if vjpSuccBB.isReachableExitBlock {
         vjpSuccOKCount += 1
         predPbBBToSuccVjpBB[pb.entryBlock] = vjpSuccBB
-        dfs(vjpBBArg: vjpSuccBB, pbBBArg: pb.entryBlock)
+        if !dfs(vjpBBArg: vjpSuccBB, pbBBArg: pb.entryBlock) {
+          return false
+        }
         continue
       }
       var eiOpt = EnumInst?(nil)
-      // MYTODO: make this less fragile and don't rely on the fact that this should be the first enum inst
+      // TODO: support cases when this is not the first enum inst
       for inst in vjpSuccBB.instructions {
         eiOpt = inst as? EnumInst
-        if eiOpt != nil {
-          break
+        if eiOpt == nil {
+          continue
         }
+        if !eiOpt!.results[0].type.isBranchTracingEnum {
+          eiOpt = nil
+          continue
+        }
+        break
       }
-      assert(eiOpt != nil)
+      if eiOpt == nil {
+        return false
+      }
       let enumType = eiOpt!.results[0].type
       assert(enumType.isBranchTracingEnum)
       var newPredBB = BasicBlock?(nil)
       for pbPredBB in pbBBArg.predecessors {
-        for arg in pbPredBB.arguments {
-          if !arg.type.isTuple {
-            continue
+        guard let pbPredBBArg = getEnumPayloadArgOfPbBB(pbPredBB) else {
+          continue
+        }
+        if pbPredBBArg.type.tupleElements.count != 0
+          && pbPredBBArg.type.tupleElements[0] == enumType
+        {
+          if newPredBB != nil {
+            return false
           }
-          if arg.type.tupleElements[0] == enumType {
-            assert(newPredBB == nil)
-            newPredBB = pbPredBB
-          }
+          newPredBB = pbPredBB
         }
       }
       if newPredBB == nil {
+        if remainingVjpBB != nil {
+          return false
+        }
         remainingVjpBB = vjpSuccBB
         continue
       }
       vjpSuccOKCount += 1
       predPbBBToSuccVjpBB[newPredBB!] = vjpSuccBB
-      dfs(vjpBBArg: vjpSuccBB, pbBBArg: newPredBB!)
+      if !dfs(vjpBBArg: vjpSuccBB, pbBBArg: newPredBB!) {
+        return false
+      }
     }
     if vjpSuccOKCount + 1 == vjpSuccTotalCount {
       assert(remainingVjpBB != nil)
@@ -917,15 +939,19 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
         }
       }
       assert(remainingPbBB != nil)
-      dfs(vjpBBArg: remainingVjpBB!, pbBBArg: remainingPbBB!)
+      if !dfs(vjpBBArg: remainingVjpBB!, pbBBArg: remainingPbBB!) {
+        return false
+      }
     }
+    return true
   }
 
-  dfs(vjpBBArg: vjpBB, pbBBArg: pbBB)
-  if dict.count != vjp.blocks.count {
-    return nil
+  let status = dfs(vjpBBArg: vjpBB, pbBBArg: pbBB)
+  if status {
+    assert(dict.count == vjp.blocks.count)
+    return dict
   }
-  return dict
+  return nil
 }
 
 private func handleNonAppliesCFG(
@@ -1329,12 +1355,10 @@ private func rewriteUsesOfPayloadItem(
   switch use.instruction {
   case let ai as ApplyInst:
     let builder = Builder(before: ai, context)
-    // MYTODO: other closures?
     var closureInfoOpt = ClosureInfoCFG?(nil)
     for closureInfo in closureInfoArray {
       if closureInfo.idxInEnumPayload == resultIdx {
         if closureInfoOpt != nil {
-          //assert(closureInfoOpt == nil)
           assert(closureInfoOpt!.closure == closureInfo.closure)
           assert(closureInfoOpt!.payloadTuple == closureInfo.payloadTuple)
         } else {
@@ -1357,7 +1381,7 @@ private func rewriteUsesOfPayloadItem(
       let newAi = builder.createApply(
         function: newFri, SubstitutionMap(), arguments: newArgs)
       ai.replace(with: newAi, context)
-      // MYTODO: maybe we can set insertion point earlier
+      // TODO: maybe we can set insertion point earlier
       let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
       for res in dtiOfCapturedArgsTuple.results {
         if !res.type.isTrivial(in: res.parentFunction) {
@@ -2292,7 +2316,7 @@ let gatherCallSiteTest = FunctionTest("closure_specialize_gather_call_site") {
   print("Specializing closures in function: \(function.name)")
   print("===============================================")
   let callSite = gatherCallSite(in: function, context)!
-  // MYTODO avoid this array
+  // TODO avoid this array
   let callSites = [callSite]
 
   callSites.forEach { callSite in
