@@ -392,7 +392,16 @@ private func gatherCallSite(in caller: Function, _ context: FunctionPassContext)
           for: rootClosure, in: &callSiteOpt,
           convertedAndReabstractedClosures: &convertedAndReabstractedClosures, context)
       } else {
-        updateCallSiteCFG(for: rootClosure, in: &callSiteOpt, context)
+        let closureInfoArr = handleNonAppliesCFG(for: rootClosure, context)
+        if closureInfoArr.count == 0 {
+          continue
+        }
+        if callSiteOpt == nil {
+          callSiteOpt = CallSite(applySite: getPartialApplyOfPullbackInExitVJPBB(vjp: caller)!)
+        }
+        for closureInfo in closureInfoArr {
+          callSiteOpt!.closureInfosCFG.append(closureInfo)
+        }
       }
     }
   }
@@ -730,30 +739,6 @@ private func rewriteApplyInstruction(
 
 // ===================== Utility functions and extensions ===================== //
 
-private func updateCallSiteCFG(
-  for rootClosure: SingleValueInstruction,
-  in callSiteOpt: inout CallSite?,
-  _ context: FunctionPassContext
-) {
-  let closureInfoArr = handleNonAppliesCFG(for: rootClosure, context)
-
-  for closureInfo in closureInfoArr {
-    let pbPAI = getPartialApplyOfPullbackInExitVJPBB(vjp: rootClosure.parentFunction)!
-
-    guard let pb = pbPAI.referencedFunction else {
-      return
-    }
-    if callSiteOpt == nil {
-      callSiteOpt = CallSite(applySite: pbPAI)
-    } else {
-      assert(callSiteOpt!.applySite == pbPAI)
-    }
-
-    callSiteOpt!.closureInfosCFG.append(
-      closureInfo)
-  }
-}
-
 private func updateCallSite(
   for rootClosure: SingleValueInstruction,
   in callSiteOpt: inout CallSite?,
@@ -969,55 +954,33 @@ private func handleNonAppliesCFG(
 )
   -> [ClosureInfoCFG]
 {
-  var rootClosureConversionsAndReabstractions = OperandWorklist(context)
-  rootClosureConversionsAndReabstractions.pushIfNotVisited(contentsOf: rootClosure.uses)
-  defer {
-    rootClosureConversionsAndReabstractions.deinitialize()
-  }
-
   var closureInfoArr = [ClosureInfoCFG]()
 
-  while let use = rootClosureConversionsAndReabstractions.pop() {
-    switch use.instruction {
-    case let ti as TupleInst:
-      if ti.parentFunction.isAutodiffVJP,
-        let returnInst = ti.parentFunction.returnInstruction,
-        ti == returnInst.returnedValue
-      {
-        // This is the pullback closure returned from an Autodiff VJP and we don't need to handle it.
-      } else if rootClosure.parentFunction.blocks.singleElement == nil {
-        for tiUse in ti.uses {
-          let possibleEnumInst = tiUse.bridged.getUser().instruction
-          let optionalEI = possibleEnumInst as? EnumInst
-          if optionalEI == nil {
-            return []
-          }
-          let ei = optionalEI!
-          if use.value != rootClosure {
-            return []
-          }
-          var capturedArgs = [Value]()
-          let idxInEnumPayload = use.index
-          let paiOpt = rootClosure as? PartialApplyInst
-          if paiOpt != nil {
-            for argOp in paiOpt!.argumentOperands {
-              capturedArgs.append(argOp.value)
-            }
-          }
-          let enumTypeAndCase = EnumTypeAndCase(enumType: ei.type, caseIdx: ei.caseIndex)
-          closureInfoArr.append(
-            ClosureInfoCFG(
-              closure: rootClosure, idxInEnumPayload: idxInEnumPayload,
-              capturedArgs: capturedArgs,
-              enumTypeAndCase: enumTypeAndCase, payloadTuple: ti
-            ))
-        }
-      } else {
-        fallthrough
-      }
-
-    default:
+  for use in rootClosure.uses {
+    guard let ti = use.instruction as? TupleInst else {
       return []
+    }
+    for tiUse in ti.uses {
+      guard let ei = tiUse.instruction as? EnumInst else {
+        return []
+      }
+      if !ei.type.isBranchTracingEnum {
+        return []
+      }
+      var capturedArgs = [Value]()
+      let paiOpt = rootClosure as? PartialApplyInst
+      if paiOpt != nil {
+        for argOp in paiOpt!.argumentOperands {
+          capturedArgs.append(argOp.value)
+        }
+      }
+      let enumTypeAndCase = EnumTypeAndCase(enumType: ei.type, caseIdx: ei.caseIndex)
+      closureInfoArr.append(
+        ClosureInfoCFG(
+          closure: rootClosure, idxInEnumPayload: use.index,
+          capturedArgs: capturedArgs,
+          enumTypeAndCase: enumTypeAndCase, payloadTuple: ti
+        ))
     }
   }
   return closureInfoArr
