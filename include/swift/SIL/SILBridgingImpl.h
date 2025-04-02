@@ -416,6 +416,14 @@ BridgedType BridgedType::getEnumCasePayload(EnumElementIterator i, BridgedFuncti
   return swift::SILType();
 }
 
+BridgedType BridgedType::getEnumCasePayload(SwiftInt caseIndex,
+                                            BridgedFunction f) const {
+  swift::EnumElementDecl *elt = unbridged().getEnumElement(caseIndex);
+  if (elt->hasAssociatedValues())
+    return unbridged().getEnumElementType(elt, f.getFunction());
+  return swift::SILType();
+}
+
 SwiftInt BridgedType::getNumTupleElements() const {
   return unbridged().getNumTupleElements();
 }

@@ -142,7 +142,8 @@ typealias ClosureInfoCFG = (
   closure: SingleValueInstruction, idxInEnumPayload: Int, capturedArgs: [Value],
   enumTypeAndCase: EnumTypeAndCase, payloadTuple: TupleInst
 )
-typealias ClosureInfoWithApplyCFG = (closureInfo: ClosureInfoCFG, applyInPb: ApplyInst)
+// MYTODO: delete second tuple element
+typealias ClosureInfoWithApplyCFG = (closureInfo: ClosureInfoCFG, Int)
 
 let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-specialization") {
   (function: Function, context: FunctionPassContext) in
@@ -174,6 +175,33 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     let bbMap = vjpToPbBB(vjp: function, pb: pbApply!.referencedFunction!)
     if bbMap.count == 0 {
       return
+    }
+    for (vjpBB, pbBB) in bbMap {
+      if getEnumPayloadArgOfPbBB(pbBB) == nil {
+        continue
+      }
+      var tiOpt = TupleInst?(nil)
+      for inst in vjpBB.instructions.reversed() {
+        tiOpt = inst as? TupleInst
+        if tiOpt != nil {
+          break
+        }
+      }
+      // MYTODO: support tuple in different bb (it might be defined identically in all succ bbs)
+      if tiOpt == nil {
+        return
+      }
+      let ti = tiOpt!
+      for use in ti.uses {
+        let eiOpt = use.instruction as? EnumInst
+        if eiOpt == nil {
+          return
+        }
+        let ei = eiOpt!
+        if !ei.type.description.hasPrefix("$_AD__") {
+          return
+        }
+      }
     }
   }
 
@@ -408,11 +436,13 @@ private func getOrCreateSpecializedFunctionCFG(
           let dtiOpt = arg!.uses.singleUse!.instruction as? DestructureTupleInst
           if dtiOpt != nil {
             let dti = dtiOpt!
-            assert(dti.results[0].type.isEnum)
-            assert(dti.results[0].type.description.hasPrefix("$_AD__"))
-            // MYTODO: what if not empty but not single element?
-            if dti.results[0].uses.singleElement != nil {
-              currentEnumTypeOpt = dti.results[0].type
+            if dti.results[0].type.isEnum {
+              if dti.results[0].type.description.hasPrefix("$_AD__") {
+                // MYTODO: what if not empty but not single element?
+                if dti.results[0].uses.singleElement != nil {
+                  currentEnumTypeOpt = dti.results[0].type
+                }
+              }
             }
           }
         }
@@ -577,7 +607,8 @@ private func rewriteApplyInstructionCFG(
       }
       let idxInTuple = closureInfo.closureInfo.idxInEnumPayload
       assert(ti.operands[idxInTuple].value == closureInfo.closureInfo.closure)
-      assert(tupleIdxToCapturedArgs[idxInTuple] == nil)
+      // MYTODO: this is not true
+      //assert(tupleIdxToCapturedArgs[idxInTuple] == nil)
       tupleIdxToCapturedArgs[idxInTuple] = closureInfo.closureInfo.capturedArgs
     }
 
@@ -676,70 +707,6 @@ private func updateCallSiteCFG(
     guard let pb = pbPAI.referencedFunction else {
       return
     }
-    var argOpt = Argument?(nil)
-    for arg in pb.arguments {
-      if !arg.type.isEnum {
-        continue
-      }
-      if !arg.type.description.hasPrefix("$_AD__") {
-        continue
-      }
-      assert(argOpt == nil)
-      argOpt = arg
-    }
-    if argOpt == nil {
-      return
-    }
-    let arg = argOpt!
-    if arg.uses.singleUse == nil {
-      return
-    }
-    let optionalSwitchEnumInst = arg.uses.singleUse!.instruction as? SwitchEnumInst
-    if optionalSwitchEnumInst == nil {
-      return
-    }
-
-    let succBB = optionalSwitchEnumInst!.getUniqueSuccessor(
-      forCaseIndex: closureInfo.enumTypeAndCase.caseIdx)!
-    assert(succBB.arguments.count == 1)
-    var closureValInPbOpt = Value?(nil)
-    if succBB.arguments[0].uses.singleUse != nil {
-      let optionalDestructureTupleInst =
-        succBB.arguments[0].uses.singleUse!.instruction as? DestructureTupleInst
-      if optionalDestructureTupleInst == nil {
-        return
-      }
-      closureValInPbOpt = optionalDestructureTupleInst!.results[closureInfo.idxInEnumPayload]
-    } else {
-      for use in succBB.arguments[0].uses {
-        let tupleExtractInstOpt = use.instruction as? TupleExtractInst
-        if tupleExtractInstOpt == nil {
-          continue
-        }
-        if tupleExtractInstOpt!.fieldIndex == closureInfo.idxInEnumPayload {
-          assert(closureValInPbOpt == nil)
-          closureValInPbOpt = tupleExtractInstOpt!.results[0]
-        }
-      }
-    }
-    assert(closureValInPbOpt != nil)
-
-    var applyInPbOpt = ApplyInst?(nil)
-    for use in closureValInPbOpt!.uses {
-      let applyInstOpt = use.instruction as? ApplyInst
-      if applyInstOpt == nil {
-        continue
-      }
-      assert(applyInPbOpt == nil)
-      applyInPbOpt = applyInstOpt!
-    }
-
-    // MYTODO: this is not always true
-    // assert(applyInPbOpt != nil)
-    if applyInPbOpt == nil {
-      return
-    }
-
     if callSiteOpt == nil {
       callSiteOpt = CallSite(applySite: pbPAI)
     } else {
@@ -747,7 +714,7 @@ private func updateCallSiteCFG(
     }
 
     callSiteOpt!.closureInfosWithApplyCFG.append(
-      (closureInfo: closureInfo, applyInPb: applyInPbOpt!))
+      (closureInfo: closureInfo, 0))
   }
 }
 
@@ -837,11 +804,12 @@ private func getEnumPayloadArgOfPbBB(_ bb: BasicBlock) -> Argument? {
     if !arg.type.isTuple {
       continue
     }
-    if arg.type.tupleElements[0].isEnum && arg.type.tupleElements[0].description.hasPrefix("$_AD__")
-    {
-      assert(argOpt == nil)
-      argOpt = arg
-    }
+    // MYTODO: make this less fragile
+    //    if arg.type.tupleElements[0].isEnum && arg.type.tupleElements[0].description.hasPrefix("$_AD__")
+    //    {
+    assert(argOpt == nil)
+    argOpt = arg
+    //    }
   }
   return argOpt
 }
@@ -982,10 +950,6 @@ private func handleNonAppliesCFG(
       {
         // This is the pullback closure returned from an Autodiff VJP and we don't need to handle it.
       } else if rootClosure.parentFunction.blocks.singleElement == nil {
-        // MYTODO
-        if ti.uses.singleUse == nil {
-          return []
-        }
         for tiUse in ti.uses {
           let possibleEnumInst = tiUse.bridged.getUser().instruction
           let optionalEI = possibleEnumInst as? EnumInst
@@ -1391,8 +1355,13 @@ private func rewriteUsesOfPayloadItem(
     var closureInfoOpt = ClosureInfoWithApplyCFG?(nil)
     for closureInfo in closureInfoArray {
       if closureInfo.closureInfo.idxInEnumPayload == resultIdx {
-        assert(closureInfoOpt == nil)
-        closureInfoOpt = closureInfo
+        if closureInfoOpt != nil {
+          //assert(closureInfoOpt == nil)
+          assert(closureInfoOpt!.closureInfo.closure == closureInfo.closureInfo.closure)
+          assert(closureInfoOpt!.closureInfo.payloadTuple == closureInfo.closureInfo.payloadTuple)
+        } else {
+          closureInfoOpt = closureInfo
+        }
       }
     }
     if closureInfoOpt != nil {
@@ -1447,7 +1416,9 @@ private func rewriteUsesOfPayloadItem(
     let builder = Builder(before: uedi, context)
     let newUedi = builder.createUncheckedEnumData(
       enum: newDti.results[resultIdx], caseIndex: uedi.caseIndex,
-      resultType: uedi.type)
+      resultType: newDti.results[resultIdx].type.bridged.getEnumCasePayload(
+        uedi.caseIndex, uedi.parentFunction.bridged
+      ).type)
     uedi.replace(with: newUedi, context)
 
   case let sei as SwitchEnumInst:
@@ -1550,6 +1521,7 @@ extension SpecializationCloner {
           break
         }
       }
+      // MYTODO: support tuple from different BB (succ bb in vjp)
       if tiOpt == nil {
         continue
       }
@@ -1561,11 +1533,13 @@ extension SpecializationCloner {
         let val = op.value
         for closureInfo in closureInfos {
           if closureInfo.closureInfo.closure == val {
-            assert(closureInfo.closureInfo.idxInEnumPayload == opIdx)
-            closureInfoArray.append(closureInfo)
-            rewriter.appendToClosuresBufferForPb(
-              closureInfo.closureInfo.closure.bridged,
-              closureInfo.closureInfo.idxInEnumPayload)
+            if closureInfo.closureInfo.payloadTuple == lastTI {
+              assert(closureInfo.closureInfo.idxInEnumPayload == opIdx)
+              closureInfoArray.append(closureInfo)
+              rewriter.appendToClosuresBufferForPb(
+                closureInfo.closureInfo.closure.bridged,
+                closureInfo.closureInfo.idxInEnumPayload)
+            }
           }
         }
       }
@@ -1578,8 +1552,9 @@ extension SpecializationCloner {
         let dtiOpt = arg!.uses.singleUse!.instruction as? DestructureTupleInst
         assert(dtiOpt != nil)
         let dti = dtiOpt!
-        assert(dti.results[0].type.isEnum)
-        assert(dti.results[0].type.description.hasPrefix("$_AD__"))
+        // MYTODO: this might not be true, but this would still be OK
+        //assert(dti.results[0].type.isEnum)
+        //assert(dti.results[0].type.description.hasPrefix("$_AD__"))
         let oldDti = dti
         let builderBeforeOldDti = Builder(before: oldDti, self.context)
         let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)

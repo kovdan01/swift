@@ -221,7 +221,11 @@ BridgedBasicBlock::recreateTupleBlockArgument(SwiftInt argIdx) const {
     unsigned idxInClosuresBuffer = -1;
     for (unsigned j = 0; j < closuresBuffersForPb.size(); ++j) {
       if (closuresBuffersForPb[j].second == i) {
-        assert(idxInClosuresBuffer == unsigned(-1));
+        if (idxInClosuresBuffer != unsigned(-1)) {
+          assert(closuresBuffersForPb[j].first.unbridged() ==
+                 closuresBuffersForPb[idxInClosuresBuffer].first.unbridged());
+        }
+        // assert(idxInClosuresBuffer == unsigned(-1));
         idxInClosuresBuffer = j;
       }
     }
