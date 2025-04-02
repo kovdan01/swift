@@ -929,7 +929,7 @@ struct BridgedBasicBlock {
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument getArgument(SwiftInt index) const;
   SWIFT_IMPORT_UNSAFE  BRIDGED_INLINE BridgedArgument addBlockArgument(BridgedType type, BridgedValue::Ownership ownership) const;
   SWIFT_IMPORT_UNSAFE BridgedArgument
-  recreateEnumBlockArgument(SwiftInt index, BridgedType type) const;
+  recreateEnumBlockArgument(BridgedArgument arg) const;
   SWIFT_IMPORT_UNSAFE BridgedArgument
   recreateTupleBlockArgument(BridgedArgument arg) const;
   SWIFT_IMPORT_UNSAFE  BRIDGED_INLINE BridgedArgument addFunctionArgument(BridgedType type) const;

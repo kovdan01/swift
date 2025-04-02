@@ -556,33 +556,27 @@ private func rewriteApplyInstructionCFG(
   let closureInfos = callSite.closureInfosCFG
 
   for inst in vjp.instructions {
-    let ei = inst as? EnumInst
-    if ei == nil {
+    guard let ei = inst as? EnumInst else {
       continue
     }
-    let enumType = ei!.results[0].type
-    let newEnumTypeOpt = enumDict[enumType]
-    if newEnumTypeOpt == nil {
+    guard let newEnumType = enumDict[ei.results[0].type] else {
       continue
     }
-    let newEnumType = newEnumTypeOpt!
 
-    let builder = Builder(before: ei!, context)
+    let builder = Builder(before: ei, context)
     let newEI = builder.createEnum(
-      caseIndex: ei!.caseIndex, payload: ei!.payload, enumType: newEnumType)
-    ei!.replace(with: newEI, context)
+      caseIndex: ei.caseIndex, payload: ei.payload, enumType: newEnumType)
+    ei.replace(with: newEI, context)
   }
 
   for bb in vjp.blocks {
-    let argAndIdxOpt = getEnumArgOfVJPBB(bb)
-    if argAndIdxOpt == nil {
+    guard let arg = getEnumArgOfVJPBB(bb) else {
       continue
     }
-    let (arg, argIdx) = argAndIdxOpt!
     if enumDict[arg.type] == nil {
       continue
     }
-    bb.bridged.recreateEnumBlockArgument(argIdx, enumDict[arg.type]!.bridged)
+    bb.bridged.recreateEnumBlockArgument(arg.bridged)
   }
 
   let builderSucc = Builder(
@@ -607,7 +601,6 @@ private func rewriteApplyInstructionCFG(
   }
 
   vjpExitBB.eraseInstruction(returnInst)
-  // MYTODO: assert no uses
   vjpExitBB.eraseInstruction(tupleInst)
   vjpExitBB.eraseInstruction(pai)
   let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
@@ -620,25 +613,16 @@ private func rewriteApplyInstructionCFG(
   let newTupleInst = builderSucc.createTuple(elements: [tupleElem, newPai])
   builderSucc.createReturn(of: newTupleInst)
 
+  let vjpBBToTupleInstMap = getVjpBBToTupleInstMap(vjp: vjp)!
+
   for bb in vjp.blocks {
     if bb == vjpExitBB {
-      // MYTODO
+      // Already handled before separately
       continue
     }
-    var tiOpt = TupleInst?(nil)
-    for inst in bb.instructions.reversed() {
-      tiOpt = inst as? TupleInst
-      if tiOpt != nil {
-        break
-      }
-    }
-    // MYTODO: check this earlier
-    if tiOpt == nil {
+    guard let ti = vjpBBToTupleInstMap[bb] else {
       continue
     }
-    assert(tiOpt != nil)
-    let ti = tiOpt!
-
     if ti.operands.count == 0 {
       continue
     }
@@ -650,8 +634,6 @@ private func rewriteApplyInstructionCFG(
       }
       let idxInTuple = closureInfo.idxInEnumPayload
       assert(ti.operands[idxInTuple].value == closureInfo.closure)
-      // MYTODO: this is not true
-      //assert(tupleIdxToCapturedArgs[idxInTuple] == nil)
       tupleIdxToCapturedArgs[idxInTuple] = closureInfo.capturedArgs
     }
 
@@ -806,12 +788,12 @@ private func getEnumArgOfEntryPbBB(_ bb: BasicBlock) -> Argument {
   return argOpt!
 }
 
-private func getEnumArgOfVJPBB(_ bb: BasicBlock) -> (Argument, Int)? {
-  var argOpt = (Argument, Int)?(nil)
-  for (idx, arg) in bb.arguments.enumerated() {
+private func getEnumArgOfVJPBB(_ bb: BasicBlock) -> Argument? {
+  var argOpt = Argument?(nil)
+  for arg in bb.arguments {
     if arg.type.isBranchTracingEnum {
       assert(argOpt == nil)
-      argOpt = (arg, idx)
+      argOpt = arg
     }
   }
   return argOpt

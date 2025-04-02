@@ -195,15 +195,17 @@ static Type getPAICapturedArgTypes(const PartialApplyInst *pai,
 }
 
 BridgedArgument
-BridgedBasicBlock::recreateEnumBlockArgument(SwiftInt index,
-                                             BridgedType type) const {
+BridgedBasicBlock::recreateEnumBlockArgument(BridgedArgument arg) const {
   assert(!unbridged()->isEntry());
   swift::ValueOwnershipKind oldOwnership =
-      unbridged()->getArgument(index)->getOwnershipKind();
+      arg.getArgument()->getOwnershipKind();
 
-  swift::SILArgument *oldArg = unbridged()->getArgument(index);
+  swift::SILArgument *oldArg = arg.getArgument();
+  unsigned index = oldArg->getIndex();
+  assert(enumDict.contains(oldArg->getType()));
+  SILType type = enumDict.at(oldArg->getType());
   swift::SILPhiArgument *newArg =
-      unbridged()->insertPhiArgument(index, type.unbridged(), oldOwnership);
+      unbridged()->insertPhiArgument(index, type, oldOwnership);
   oldArg->replaceAllUsesWith(newArg);
   eraseArgument(index + 1);
   return {newArg};
@@ -720,6 +722,7 @@ BridgedEnumRewriter::rewriteBranchTracingEnum(BridgedType enumType,
   SILType newEnumType = topVjp.getFunction()->getModule().Types.getLoweredType(
       pattern, traceDeclType, TypeExpansionContext::minimal());
 
+  // MYTODO: clear this at the end
   enumDict[enumType.unbridged()] = newEnumType;
 
   return newEnumType;
