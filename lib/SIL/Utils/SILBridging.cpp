@@ -210,10 +210,11 @@ BridgedBasicBlock::recreateEnumBlockArgument(SwiftInt index,
 }
 
 BridgedArgument
-BridgedBasicBlock::recreateTupleBlockArgument(SwiftInt argIdx) const {
+BridgedBasicBlock::recreateTupleBlockArgument(BridgedArgument arg) const {
   swift::SILBasicBlock *bb = unbridged();
   assert(!bb->isEntry());
-  swift::SILArgument *oldArg = bb->getArgument(argIdx);
+  swift::SILArgument *oldArg = arg.getArgument();
+  unsigned argIdx = oldArg->getIndex();
   auto *oldTupleTy =
       llvm::cast<swift::TupleType>(oldArg->getType().getASTType().getPointer());
   llvm::SmallVector<swift::TupleTypeElt, 8> newTupleElTypes;
