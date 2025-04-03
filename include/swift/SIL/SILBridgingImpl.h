@@ -2460,21 +2460,20 @@ BridgedBuilder::createTuple(BridgedValueArray elements) const {
   return {unbridged().createTuple(regularLoc(), silTupleTy, values)};
 }
 
-BridgedInstruction
-BridgedBuilder::createTupleWithPredecessor(BridgedValueArray elements,
-                                           BridgedType oldTupleTy) const {
+BridgedInstruction BridgedBuilder::createPayloadTupleForBranchTracingEnum(
+    BridgedValueArray elements, BridgedType tupleWithLabels) const {
   llvm::SmallVector<swift::SILValue, 16> elementValues;
   llvm::ArrayRef<swift::SILValue> values = elements.getValues(elementValues);
   llvm::SmallVector<swift::TupleTypeElt, 16> tupleTyElts;
   tupleTyElts.reserve(values.size());
   assert(!values.empty());
-  assert(static_cast<size_t>(oldTupleTy.getNumTupleElements()) ==
+  assert(static_cast<size_t>(tupleWithLabels.getNumTupleElements()) ==
          values.size());
-  assert(oldTupleTy.unbridged().isTuple());
+  assert(tupleWithLabels.unbridged().isTuple());
 
   size_t startIdx = 0;
   auto *oldTupleASTTy = llvm::cast<swift::TupleType>(
-      oldTupleTy.unbridged().getASTType().getPointer());
+      tupleWithLabels.unbridged().getASTType().getPointer());
   if (!oldTupleASTTy->getElement(0).getName().empty()) {
     assert(oldTupleASTTy->getElement(0).getName().is("predecessor"));
     tupleTyElts.emplace_back(

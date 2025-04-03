@@ -158,6 +158,33 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
   guard let pb = paiOfPb.referencedFunction else {
     return false
   }
+  guard getEnumArgOfEntryPbBB(pb.entryBlock) != nil else {
+    return false
+  }
+
+  guard pb.entryBlock.terminator as? SwitchEnumInst != nil else {
+    return false
+  }
+  for pbBB in pb.blocks {
+    guard let sei = pbBB.terminator as? SwitchEnumInst else {
+      continue
+    }
+    if sei.bridged.SwitchEnumInst_getSuccessorForDefault().block != nil {
+      return false
+    }
+  }
+
+  for vjpBB in vjp.blocks {
+    if getEnumArgOfVJPBB(vjpBB) != nil {
+      break
+    }
+    for arg in vjpBB.arguments {
+      if arg.type.isBranchTracingEnum {
+        return false
+      }
+    }
+  }
+
   guard let vjpBBToPbBBMap = getVjpBBToPbBBMap(vjp: vjp, pb: pb) else {
     return false
   }
@@ -182,8 +209,26 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
         return false
       }
       // TODO: do we need to check that results is not empty?
-      if dti.results[0].type.isBranchTracingEnum && dti.results[0].uses.count > 1 {
+      if dti.operands[0].value.type.tupleElements.count != 0
+        && dti.results[0].type.isBranchTracingEnum && dti.results[0].uses.count > 1
+      {
         return false
+      }
+      for result in dti.results {
+        for use in result.uses {
+          switch use.instruction {
+          case _ as ApplyInst:
+            ()
+          case _ as DestroyValueInst:
+            ()
+          case _ as UncheckedEnumDataInst:
+            ()
+          case _ as SwitchEnumInst:
+            ()
+          default:
+            return false
+          }
+        }
       }
     }
     guard let ti = vjpBBToTupleInstMap[vjpBB] else {
@@ -264,6 +309,10 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
   var remainingSpecializationRounds = 5
 
   var enumDict: EnumDict = [:]
+  var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
+  defer {
+    adcsHelper.clearEnumDict()
+  }
 
   repeat {
     // TODO: Names here are pretty misleading. We are looking for a place where
@@ -336,33 +385,29 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 private let specializationLevelLimit = 2
 
 private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApplyInst? {
-  var exitBB = BasicBlock?(nil)
+  var exitBBOpt = BasicBlock?(nil)
   for block in vjp.blocks {
     if block.isReachableExitBlock {
-      let ri = block.terminator as? ReturnInst
-      if ri != nil {
-        assert(exitBB == nil)
-        exitBB = block
+      guard block.terminator as? ReturnInst != nil else {
+        continue
       }
+      if exitBBOpt != nil {
+        return nil
+      }
+      exitBBOpt = block
     }
   }
-  if exitBB == nil {
+  if exitBBOpt == nil {
     return nil
   }
-  let ri = exitBB!.terminator as? ReturnInst
-  assert(ri != nil)
-  let ti = ri!.returnedValue.definingInstruction as? TupleInst
-  if ti == nil {
+  let ri = exitBBOpt!.terminator as! ReturnInst
+  guard let ti = ri.returnedValue.definingInstruction as? TupleInst else {
     return nil
   }
-  if ti!.operands.count != 2 {
+  if ti.operands.count != 2 {
     return nil
   }
-  let pai = ti!.operands[1].value.definingInstruction as? PartialApplyInst
-  if pai == nil {
-    return nil
-  }
-  return pai!
+  return ti.operands[1].value.definingInstruction as? PartialApplyInst
 }
 
 private func gatherCallSite(in caller: Function, _ context: FunctionPassContext) -> CallSite? {
@@ -464,16 +509,28 @@ private func getOrCreateSpecializedFunctionCFG(
 {
   assert(callSite.closureArgDescriptors.count == 0)
   let pb = callSite.applyCallee
-  let enumTypeOfEntryBBArg = getEnumArgOfEntryPbBB(pb.entryBlock).type
-  let specializedPbName = callSite.specializedCalleeNameCFG(context)
+  let vjp = callSite.applySite.parentFunction
+
+  let paiOfPbInExitVjpBB = getPartialApplyOfPullbackInExitVJPBB(vjp: vjp)!
+  var argAndIdxInPbPAI = (arg: Value, idx: Int)?(nil)
+  for (argIdx, arg) in paiOfPbInExitVjpBB.arguments.enumerated() {
+    if arg.type.isBranchTracingEnum {
+      assert(argAndIdxInPbPAI == nil)
+      argAndIdxInPbPAI = (arg: arg, idx: argIdx)
+    }
+  }
+  assert(argAndIdxInPbPAI != nil)
+  let specializedPbName = callSite.specializedCalleeNameCFG(
+    arg: argAndIdxInPbPAI!.arg, idx: argAndIdxInPbPAI!.idx, context)
   if let specializedPb = context.lookupFunction(name: specializedPbName) {
     return (specializedPb, true)
   }
-  let closureInfos = callSite.closureInfosCFG
 
+  let closureInfos = callSite.closureInfosCFG
   var bbVisited = [BasicBlock: Bool]()
   var bbWorklist = [callSite.applyCallee.entryBlock]
   var enumTypesReverseQueue = [Type]()
+  let enumTypeOfEntryBBArg = getEnumArgOfEntryPbBB(pb.entryBlock)!.type
   while bbWorklist.count != 0 {
     let block = bbWorklist.first!
     bbVisited[block] = true
@@ -504,22 +561,22 @@ private func getOrCreateSpecializedFunctionCFG(
   }
 
   for enumType in enumTypesReverseQueue.reversed() {
-    var rewriter = BridgedEnumRewriter()
+    var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
     defer {
-      rewriter.clearClosuresBuffer()
+      adcsHelper.clearClosuresBuffer()
     }
     for closureInfoCFG in closureInfos {
       if enumType != closureInfoCFG.enumTypeAndCase.enumType {
         continue
       }
-      rewriter.appendToClosuresBuffer(
+      adcsHelper.appendToClosuresBuffer(
         closureInfoCFG.enumTypeAndCase.enumType.bridged,
         closureInfoCFG.enumTypeAndCase.caseIdx,
         closureInfoCFG.closure.bridged,
         closureInfoCFG.idxInEnumPayload)
     }
     enumDict[enumType] =
-      rewriter.rewriteBranchTracingEnum( /*enumType: */
+      adcsHelper.rewriteBranchTracingEnum( /*enumType: */
         enumType.bridged,
         /*topVjp: */callSite.applySite.parentFunction.bridged
       ).type
@@ -653,8 +710,8 @@ private func rewriteApplyInstructionCFG(
       newPayloadValues.append(tuple)
     }
     let builderPred = Builder(before: ti, context)
-    let newPayload = builderPred.createTupleWithPredecessor(
-      elements: newPayloadValues, oldTupleType: ti.type)
+    let newPayload = builderPred.createPayloadTupleForBranchTracingEnum(
+      elements: newPayloadValues, tupleWithLabels: ti.type)
     ti.replace(with: newPayload, context)
   }
 }
@@ -778,24 +835,27 @@ private func updateCallSite(
     intermediateClosureArgDescriptorData: intermediateClosureArgDescriptorData, context)
 }
 
-private func getEnumArgOfEntryPbBB(_ bb: BasicBlock) -> Argument {
+private func getEnumArgOfEntryPbBB(_ bb: BasicBlock) -> Argument? {
   assert(bb.parentFunction.entryBlock == bb)
   var argOpt = Argument?(nil)
   for arg in bb.arguments {
     if arg.type.isBranchTracingEnum {
-      assert(argOpt == nil)
+      if argOpt != nil {
+        return nil
+      }
       argOpt = arg
     }
   }
-  assert(argOpt != nil)
-  return argOpt!
+  return argOpt
 }
 
 private func getEnumArgOfVJPBB(_ bb: BasicBlock) -> Argument? {
   var argOpt = Argument?(nil)
   for arg in bb.arguments {
     if arg.type.isBranchTracingEnum {
-      assert(argOpt == nil)
+      if argOpt != nil {
+        return nil
+      }
       argOpt = arg
     }
   }
@@ -1435,7 +1495,6 @@ private func getEnumCasesForSwitchEnumInst(_ sei: SwitchEnumInst) -> [(Int, Basi
   var enumCases = [(Int, BasicBlock)]()
   for i in 0...sei.bridged.SwitchEnumInst_getNumCases() {
     let bbForCase = sei.getUniqueSuccessor(forCaseIndex: i)
-    // MYTODO: ensure that identical indexes have identical textual values like bb1, bb2, ...
     if bbForCase != nil {
       enumCases.append((i, bbForCase!))
     }
@@ -1481,11 +1540,9 @@ extension SpecializationCloner {
 
     for bb in self.cloned.blocks {
       if bb == self.cloned.entryBlock {
-        // MYTODO: add check
         let sei = bb.terminator as! SwitchEnumInst
         let builderEntry = Builder(before: sei, self.context)
 
-        // MYTODO: ensure that no default block is present
         builderEntry.createSwitchEnum(
           enum: sei.enumOp, cases: getEnumCasesForSwitchEnumInst(sei))
         bb.eraseInstruction(sei)
@@ -1502,9 +1559,9 @@ extension SpecializationCloner {
       }
 
       var closureInfoArray = [ClosureInfoCFG]()
-      var rewriter = BridgedEnumRewriter()
+      var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
       defer {
-        rewriter.clearClosuresBufferForPb()
+        adcsHelper.clearClosuresBufferForPb()
       }
       for (opIdx, op) in ti.operands.enumerated() {
         let val = op.value
@@ -1512,7 +1569,7 @@ extension SpecializationCloner {
           if closureInfo.closure == val && closureInfo.payloadTuple == ti {
             assert(closureInfo.idxInEnumPayload == opIdx)
             closureInfoArray.append(closureInfo)
-            rewriter.appendToClosuresBufferForPb(
+            adcsHelper.appendToClosuresBufferForPb(
               closureInfo.closure.bridged,
               closureInfo.idxInEnumPayload)
           }
@@ -1520,7 +1577,7 @@ extension SpecializationCloner {
       }
       let newArg = bb.bridged.recreateTupleBlockArgument(arg.bridged).argument
 
-      assert(newArg.uses.count == 0 || newArg.uses.count == 1)
+      assert(newArg.uses.count <= 1)
       if newArg.uses.singleUse == nil {
         continue
       }
@@ -1544,7 +1601,7 @@ extension SpecializationCloner {
     usingOrigCalleeAt callSite: CallSite, enumDict: EnumDict
   ) {
     let pb = callSite.applyCallee
-    let enumType = getEnumArgOfEntryPbBB(pb.entryBlock).type
+    let enumType = getEnumArgOfEntryPbBB(pb.entryBlock)!.type
 
     let originalEntryBlock = callSite.applyCallee.entryBlock
     let clonedFunction = self.cloned
@@ -1553,6 +1610,8 @@ extension SpecializationCloner {
     for arg in originalEntryBlock.arguments {
       var clonedEntryBlockArgType = arg.type.getLoweredType(in: clonedFunction)
       if clonedEntryBlockArgType == enumType {
+        // This should always hold since we have at least 1 closure (otherwise, we wouldn't go here).
+        // It causes re-write of the corresponding branch tracing enum, and the top enum type will be re-written transitively.
         assert(enumDict[enumType] != nil)
         clonedEntryBlockArgType = enumDict[enumType]!
       }
@@ -2301,10 +2360,9 @@ private struct CallSite {
       from: applyCallee)
   }
 
-  func specializedCalleeNameCFG(_ context: FunctionPassContext) -> String {
-    // MYTODO: this should be enums and not closures
+  func specializedCalleeNameCFG(arg: Value, idx: Int, _ context: FunctionPassContext) -> String {
     return context.mangle(
-      withEnumArguments: [closureInfosCFG[0].closure], enumArgIndices: [0],
+      withBranchTracingEnum: arg, argIdx: idx,
       from: applyCallee)
   }
 }

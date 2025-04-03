@@ -787,7 +787,6 @@ struct BridgedInstruction {
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedBasicBlock BranchInst_getTargetBlock() const;
   BRIDGED_INLINE SwiftInt SwitchEnumInst_getNumCases() const;
   BRIDGED_INLINE SwiftInt SwitchEnumInst_getCaseIndex(SwiftInt idx) const;
-  // MYTODO: use this
   BRIDGED_INLINE OptionalBridgedBasicBlock
   SwitchEnumInst_getSuccessorForDefault() const;
   BRIDGED_INLINE SwiftInt StoreInst_getStoreOwnership() const;
@@ -1119,7 +1118,7 @@ struct OptionalBridgedDefaultWitnessTable {
   const swift::SILDefaultWitnessTable * _Nullable table;
 };
 
-struct BridgedEnumRewriter {
+struct BridgedAutoDiffClosureSpecializationHelper {
   SWIFT_IMPORT_UNSAFE void appendToClosuresBuffer(BridgedType enumType,
                                                   SwiftInt caseIdx,
                                                   BridgedInstruction closure,
@@ -1129,6 +1128,7 @@ struct BridgedEnumRewriter {
                               SwiftInt idxInPayload);
   SWIFT_IMPORT_UNSAFE void clearClosuresBuffer();
   SWIFT_IMPORT_UNSAFE void clearClosuresBufferForPb();
+  SWIFT_IMPORT_UNSAFE void clearEnumDict();
   SWIFT_IMPORT_UNSAFE BridgedType
   rewriteBranchTracingEnum(BridgedType enumType, BridgedFunction topVjp) const;
 };
@@ -1283,8 +1283,8 @@ struct BridgedBuilder{
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
   createTuple(BridgedValueArray elements) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
-  createTupleWithPredecessor(BridgedValueArray elements,
-                             BridgedType oldTupleTy) const;
+  createPayloadTupleForBranchTracingEnum(BridgedValueArray elements,
+                                         BridgedType tupleWithLabels) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleExtract(BridgedValue str,
                                                                            SwiftInt elementIndex) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleElementAddr(BridgedValue addr,

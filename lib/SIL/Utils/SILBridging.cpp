@@ -228,7 +228,6 @@ BridgedBasicBlock::recreateTupleBlockArgument(BridgedArgument arg) const {
           assert(closuresBuffersForPb[j].first.unbridged() ==
                  closuresBuffersForPb[idxInClosuresBuffer].first.unbridged());
         }
-        // assert(idxInClosuresBuffer == unsigned(-1));
         idxInClosuresBuffer = j;
       }
     }
@@ -610,33 +609,40 @@ convertCases(SILType enumTy, const void * _Nullable enumCases, SwiftInt numEnumC
   return convertedCases;
 }
 
-void BridgedEnumRewriter::appendToClosuresBuffer(BridgedType enumType,
-                                                 SwiftInt caseIdx,
-                                                 BridgedInstruction closure,
-                                                 SwiftInt idxInPayload) {
+void BridgedAutoDiffClosureSpecializationHelper::appendToClosuresBuffer(
+    BridgedType enumType, SwiftInt caseIdx, BridgedInstruction closure,
+    SwiftInt idxInPayload) {
   closuresBuffers[enumType.unbridged()][caseIdx].emplace_back(closure,
                                                               idxInPayload);
 }
 
-void BridgedEnumRewriter::appendToClosuresBufferForPb(
+void BridgedAutoDiffClosureSpecializationHelper::appendToClosuresBufferForPb(
     BridgedInstruction closure, SwiftInt idxInPayload) {
   closuresBuffersForPb.emplace_back(closure, idxInPayload);
 }
 
-void BridgedEnumRewriter::clearClosuresBuffer() { closuresBuffers.clear(); }
-void BridgedEnumRewriter::clearClosuresBufferForPb() {
+void BridgedAutoDiffClosureSpecializationHelper::clearClosuresBuffer() {
+  closuresBuffers.clear();
+}
+void BridgedAutoDiffClosureSpecializationHelper::clearClosuresBufferForPb() {
   closuresBuffersForPb.clear();
 }
 
+void BridgedAutoDiffClosureSpecializationHelper::clearEnumDict() {
+  enumDict.clear();
+}
+
 BridgedType
-BridgedEnumRewriter::rewriteBranchTracingEnum(BridgedType enumType,
-                                              BridgedFunction topVjp) const {
+BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
+    BridgedType enumType, BridgedFunction topVjp) const {
   EnumDecl *oldED = enumType.unbridged().getEnumOrBoundGenericEnum();
   assert(oldED && "Expected valid enum type");
   assert(!enumDict.contains(enumType.unbridged()));
 
   SILModule &module = topVjp.getFunction()->getModule();
   ASTContext &astContext = oldED->getASTContext();
+
+  // TODO: use better naming
   Twine edNameStr = oldED->getNameStr() + "_specialized";
   Identifier edName = astContext.getIdentifier(edNameStr.str());
 
@@ -681,7 +687,7 @@ BridgedEnumRewriter::rewriteBranchTracingEnum(BridgedType enumType,
         }
       } else {
         type = tt->getElementType(i);
-        // MYTODO: make this less fragile
+        // TODO: make this less fragile
         for (const auto &[enumTypeOld, enumTypeNew] : enumDict) {
           if (enumTypeOld.getDebugDescription() == "$" + type.getString()) {
             assert(i == 0);
@@ -722,7 +728,6 @@ BridgedEnumRewriter::rewriteBranchTracingEnum(BridgedType enumType,
   SILType newEnumType = topVjp.getFunction()->getModule().Types.getLoweredType(
       pattern, traceDeclType, TypeExpansionContext::minimal());
 
-  // MYTODO: clear this at the end
   enumDict[enumType.unbridged()] = newEnumType;
 
   return newEnumType;

@@ -401,16 +401,8 @@ struct FunctionPassContext : MutatingContext {
     }
   }
 
-  func mangle(withEnumArguments enumArgs: [Value], enumArgIndices: [Int], from applySiteCallee: Function) -> String {
-    enumArgs.withBridgedValues { bridgedEnumArgsRef in
-      enumArgIndices.withBridgedArrayRef{bridgedEnumArgIndicesRef in
-        String(taking: _bridged.mangleWithEnumArgs(
-          bridgedEnumArgsRef,
-          bridgedEnumArgIndicesRef,
-          applySiteCallee.bridged
-        ))
-      }
-    }
+  func mangle(withBranchTracingEnum arg: Value, argIdx: Int, from pullback: Function) -> String {
+    String(taking: _bridged.mangleWithAutoDiffBranchTracingEnum(arg.bridged, argIdx, pullback.bridged))
   }
 
   func createGlobalVariable(name: String, type: Type, linkage: Linkage, isLet: Bool) -> GlobalVariable {

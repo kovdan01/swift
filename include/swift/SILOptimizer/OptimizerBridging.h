@@ -254,9 +254,13 @@ struct BridgedPassContext {
   BridgedOwnedString mangleWithClosureArgs(BridgedValueArray closureArgs,
                                                                BridgedArrayRef closureArgIndices,
                                                                BridgedFunction applySiteCallee) const;
-  BridgedOwnedString mangleWithEnumArgs(BridgedValueArray enumArgs,
-                                        BridgedArrayRef enumArgIndices,
-                                        BridgedFunction applySiteCallee) const;
+  BridgedOwnedString
+  mangleWithAutoDiffBranchTracingEnum(BridgedValue arg, SwiftInt argIdx,
+                                      BridgedFunction pullback) const;
+  // BridgedOwnedString mangleWithEnumArgs(BridgedValueArray enumArgs,
+  //                                       BridgedArrayRef enumArgIndices,
+  //                                       BridgedFunction applySiteCallee)
+  //                                       const;
 
   SWIFT_IMPORT_UNSAFE BridgedGlobalVar createGlobalVariable(BridgedStringRef name, BridgedType type,
                                                             BridgedLinkage linkage, bool isLet) const;

@@ -521,9 +521,11 @@ public struct Builder {
     return notifyNew(tuple.getAs(TupleInst.self))
   }
 
-  public func createTupleWithPredecessor(elements: [Value], oldTupleType: Type) -> TupleInst {
+  public func createPayloadTupleForBranchTracingEnum(elements: [Value], tupleWithLabels: Type)
+    -> TupleInst
+  {
     let tuple = elements.withBridgedValues { valuesRef in
-      return bridged.createTupleWithPredecessor(valuesRef, oldTupleType.bridged)
+      return bridged.createPayloadTupleForBranchTracingEnum(valuesRef, tupleWithLabels.bridged)
     }
     return notifyNew(tuple.getAs(TupleInst.self))
   }
