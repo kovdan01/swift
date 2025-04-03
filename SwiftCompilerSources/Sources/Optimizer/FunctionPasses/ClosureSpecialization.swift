@@ -368,6 +368,57 @@ func getVjpBBToTupleInstMap(vjp: Function) -> [BasicBlock: TupleInst]? {
   return vjpBBToTupleInstMap
 }
 
+private func multiBBHelper(
+  callSite: CallSite, function: Function, enumDict: inout EnumDict, context: FunctionPassContext
+) {
+  var closuresSet = Set<SingleValueInstruction>()
+  for closureInfo in callSite.closureInfosCFG {
+    closuresSet.insert(closureInfo.closure)
+  }
+  let totalSupportedClosures = closuresSet.count
+
+  var totalClosures: Int = 0
+  for inst in function.instructions {
+    let paiOpt = inst as? PartialApplyInst
+    let tttfOpt = inst as? ThinToThickFunctionInst
+    if paiOpt != nil || tttfOpt != nil {
+      totalClosures += 1
+    }
+  }
+
+  var (specializedFunction, alreadyExists) =
+    getOrCreateSpecializedFunctionCFG(
+      basedOn: callSite, enumDict: &enumDict, context)
+
+  if !alreadyExists {
+    context.notifyNewFunction(function: specializedFunction, derivedFrom: callSite.applyCallee)
+  }
+
+  rewriteApplyInstructionCFG(
+    using: specializedFunction, callSite: callSite,
+    enumDict: enumDict, context: context)
+
+  var specializedClosures: Int = 0
+  for closure in closuresSet {
+    if closure.uses.count == 0 {
+      specializedClosures += 1
+      // TODO: do we need to manually delete the related function_ref instruction?
+      closure.parentBlock.eraseInstruction(closure)
+    }
+  }
+
+  var msg =
+    "Specialized " + String(specializedClosures) + " out of " + String(totalSupportedClosures)
+    + " supported closures "
+  msg += "(rate " + String(Float(specializedClosures) / Float(totalSupportedClosures)) + "). "
+  msg += "Total number of closures is " + String(totalClosures)
+  logADCS(msg: msg)
+  debugPrint("AAAAAA VJP AFTER BEGIN")
+  debugPrint(function)
+  debugPrint("AAAAAA VJP AFTER END")
+
+}
+
 let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-specialization") {
   (function: Function, context: FunctionPassContext) in
 
@@ -383,8 +434,9 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     if !checkIfCanRun(vjp: function, context: context) {
       return
     }
-    logADCS(msg:
-      "The VJP " + function.name.string
+    logADCS(
+      msg:
+        "The VJP " + function.name.string
         + " has passed the preliminary check. Proceeding to running the pass")
     debugPrint("AAAAA VJP BEFORE BEGIN")
     debugPrint(function)
@@ -411,8 +463,10 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     let callSiteOpt = gatherCallSite(in: function, context)
     if callSiteOpt == nil {
       if !isSingleBB {
-        logADCS(msg:
-          "Unable to detect closures to be specialized in " + function.name.string
+        // TODO: it looks like that we do not have more than 1 round, at least for multi BB case
+        logADCS(
+          msg:
+            "Unable to detect closures to be specialized in " + function.name.string
             + ", skipping the pass")
       }
       break
@@ -455,40 +509,7 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
         function.fixStackNesting(context)
       }
     } else {
-      var closuresSet = Set<SingleValueInstruction>()
-      for closureInfo in callSite.closureInfosCFG {
-        closuresSet.insert(closureInfo.closure)
-      }
-      let totalClosures = closuresSet.count
-      debugPrint("AAAAA TOTAL CLOSURES ", closuresSet.count)
-      var (specializedFunction, alreadyExists) =
-        getOrCreateSpecializedFunctionCFG(
-          basedOn: callSite, enumDict: &enumDict, context)
-
-      if !alreadyExists {
-        context.notifyNewFunction(function: specializedFunction, derivedFrom: callSite.applyCallee)
-      }
-
-      rewriteApplyInstructionCFG(
-        using: specializedFunction, callSite: callSite,
-        enumDict: enumDict, context: context)
-
-      var specializedClosures = 0
-      for closure in closuresSet {
-        if closure.uses.count == 0 {
-          specializedClosures += 1
-          debugPrint("AAAAA ERASE CLOSURE BEGIN")
-          debugPrint(closure)
-          debugPrint("AAAAA ERASE CLOSURE END")
-          closure.parentBlock.eraseInstruction(closure)
-        }
-      }
-
-      debugPrint("AAAA RATE = ", specializedClosures, " / ", totalClosures)
-
-      debugPrint("AAAAAA VJP AFTER BEGIN")
-      debugPrint(function)
-      debugPrint("AAAAAA VJP AFTER END")
+      multiBBHelper(callSite: callSite, function: function, enumDict: &enumDict, context: context)
     }
 
     remainingSpecializationRounds -= 1
