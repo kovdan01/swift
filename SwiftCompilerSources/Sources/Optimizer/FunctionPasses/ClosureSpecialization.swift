@@ -105,6 +105,15 @@ import SILBridging
 
 private let verbose = false
 
+// TODO: unify existing and new logging
+let needLogADCS = true
+private func logADCS(prefix: String = "", msg: String) {
+  if !needLogADCS {
+    return
+  }
+  debugLog("[ADCS] " + prefix + msg)
+}
+
 private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
   if verbose {
     debugLog(prefix: prefix, message())
@@ -152,7 +161,10 @@ extension Type {
 func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
   assert(vjp.blocks.singleElement == nil)
 
+  let prefixFail = "Cannot run AutoDiff Closure Specialization on " + vjp.name.string + ": "
   guard let paiOfPb = getPartialApplyOfPullbackInExitVJPBB(vjp: vjp) else {
+    logADCS(
+      prefix: prefixFail, msg: "partial_apply of pullback not found in exit basic block of VJP")
     return false
   }
   var branchTracingEnumArgCounter = 0
@@ -162,17 +174,34 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
     }
   }
   if branchTracingEnumArgCounter != 1 {
+    logADCS(
+      prefix: prefixFail,
+      msg: "partial_apply of pullback in exit basic block of VJP has "
+        + String(branchTracingEnumArgCounter)
+        + " branch tracing enum arguments, but exactly 1 is expected")
     return false
   }
 
   guard let pb = paiOfPb.referencedFunction else {
+    logADCS(
+      prefix: prefixFail,
+      msg:
+        "cannot obtain pullback function reference from the partial_apply of pullback in exit basic block of VJP"
+    )
     return false
   }
   guard getEnumArgOfEntryPbBB(pb.entryBlock) != nil else {
+    logADCS(
+      prefix: prefixFail,
+      msg: "cannot get branch tracing enum argument of the pullback function " + pb.name.string)
     return false
   }
 
   guard pb.entryBlock.terminator as? SwitchEnumInst != nil else {
+    logADCS(
+      prefix: prefixFail,
+      msg: "unexpected terminator instruction in the entry block of the pullback " + pb.name.string
+        + " (only switch_enum_inst is supported)")
     return false
   }
   for pbBB in pb.blocks {
@@ -180,6 +209,10 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
       continue
     }
     if sei.bridged.SwitchEnumInst_getSuccessorForDefault().block != nil {
+      logADCS(
+        prefix: prefixFail,
+        msg: "switch_enum_inst from the entry block of the pullback " + pb.name.string
+          + " has default destination set, which is not supported")
       return false
     }
   }
@@ -190,15 +223,28 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
     }
     for arg in vjpBB.arguments {
       if arg.type.isBranchTracingEnum {
+        logADCS(
+          prefix: prefixFail,
+          msg: "several arguments of VJP " + vjp.name.string + " basic block "
+            + vjpBB.shortDescription + " are branch tracing enums, but not more than 1 is supported"
+        )
         return false
       }
     }
   }
 
   guard let vjpBBToPbBBMap = getVjpBBToPbBBMap(vjp: vjp, pb: pb) else {
+    logADCS(
+      prefix: prefixFail,
+      msg: "cannot create bijection mapping between VJP and pullback basic blocks")
     return false
   }
   guard let vjpBBToTupleInstMap = getVjpBBToTupleInstMap(vjp: vjp) else {
+    logADCS(
+      prefix: prefixFail,
+      msg:
+        "cannot create mapping from VJP basic blocks to branch tracing enum payload tuples defined in them"
+    )
     return false
   }
 
@@ -206,22 +252,40 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
     guard let argOfPbBB = getEnumPayloadArgOfPbBB(pbBB) else {
       for arg in pbBB.arguments {
         if arg.type.isTuple {
+          logADCS(
+            prefix: prefixFail,
+            msg: "several arguments of pullback " + pb.name.string + " basic block "
+              + pbBB.shortDescription
+              + " are tuples (assuming as payload tuples of branch tracing enums), but not more than 1 is supported"
+          )
           return false
         }
       }
       continue
     }
     if argOfPbBB.uses.count > 1 {
+      logADCS(
+        prefix: prefixFail,
+        msg: "tuple argument of pullback " + pb.name.string + " basic block "
+          + pbBB.shortDescription + " has more than 1 uses")
       return false
     }
     if argOfPbBB.uses.singleUse != nil {
       guard let dti = argOfPbBB.uses.singleUse!.instruction as? DestructureTupleInst else {
+        logADCS(
+          prefix: prefixFail,
+          msg: "tuple argument of pullback " + pb.name.string + " basic block "
+            + pbBB.shortDescription + " single use is not a destructure_tuple_inst")
         return false
       }
       // TODO: do we need to check that results is not empty?
       if dti.operands[0].value.type.tupleElements.count != 0
         && dti.results[0].type.isBranchTracingEnum && dti.results[0].uses.count > 1
       {
+        logADCS(
+          prefix: prefixFail,
+          msg: "predecessor element of the tuple being argument of pullback " + pb.name.string
+            + " basic block " + pbBB.shortDescription + " has more than 1 use")
         return false
       }
       for result in dti.results {
@@ -236,15 +300,29 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
           case _ as SwitchEnumInst:
             ()
           default:
+            logADCS(
+              prefix: prefixFail,
+              msg: "unexpected use of an element of the tuple being argument of pullback "
+                + pb.name.string + " basic block " + pbBB.shortDescription)
             return false
           }
         }
       }
     }
     guard let ti = vjpBBToTupleInstMap[vjpBB] else {
+      logADCS(
+        prefix: prefixFail,
+        msg:
+          "when pullback basic block has a payload tuple argument, the corresponding VJP basic block is expected to have a mapping to the related tuple_inst, but not such mapping was found"
+      )
       return false
     }
     if argOfPbBB.type != ti.type {
+      logADCS(
+        prefix: prefixFail,
+        msg:
+          "type mismatch between pullback basic block payload tuple and the tuple_inst from the corresponding VJP basic block "
+      )
       return false
     }
   }
@@ -300,20 +378,20 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
   }
 
   let isSingleBB = function.blocks.singleElement != nil
-  defer {
-    if !isSingleBB {
-      debugPrint("AAAAA AUTODIFF PASS END")
-    }
-  }
 
   if !isSingleBB {
     if !checkIfCanRun(vjp: function, context: context) {
       return
     }
-    debugPrint("AAAAA AUTODIFF PASS BEGIN")
+    logADCS(msg:
+      "The VJP " + function.name.string
+        + " has passed the preliminary check. Proceeding to running the pass")
     debugPrint("AAAAA VJP BEFORE BEGIN")
     debugPrint(function)
     debugPrint("AAAAA VJP BEFORE END")
+    debugPrint("AAAAA PB BEFORE BEGIN")
+    debugPrint(getPartialApplyOfPullbackInExitVJPBB(vjp: function)!.referencedFunction!)
+    debugPrint("AAAAA PB BEFORE END")
   }
 
   var remainingSpecializationRounds = 5
@@ -325,10 +403,18 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
   }
 
   repeat {
+    if !isSingleBB {
+      logADCS(msg: "Remaining specialization rounds: " + String(remainingSpecializationRounds))
+    }
     // TODO: Names here are pretty misleading. We are looking for a place where
     // the pullback closure is created (so for `partial_apply` instruction).
     let callSiteOpt = gatherCallSite(in: function, context)
     if callSiteOpt == nil {
+      if !isSingleBB {
+        logADCS(msg:
+          "Unable to detect closures to be specialized in " + function.name.string
+            + ", skipping the pass")
+      }
       break
     }
 
@@ -369,6 +455,12 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
         function.fixStackNesting(context)
       }
     } else {
+      var closuresSet = Set<SingleValueInstruction>()
+      for closureInfo in callSite.closureInfosCFG {
+        closuresSet.insert(closureInfo.closure)
+      }
+      let totalClosures = closuresSet.count
+      debugPrint("AAAAA TOTAL CLOSURES ", closuresSet.count)
       var (specializedFunction, alreadyExists) =
         getOrCreateSpecializedFunctionCFG(
           basedOn: callSite, enumDict: &enumDict, context)
@@ -380,6 +472,19 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
       rewriteApplyInstructionCFG(
         using: specializedFunction, callSite: callSite,
         enumDict: enumDict, context: context)
+
+      var specializedClosures = 0
+      for closure in closuresSet {
+        if closure.uses.count == 0 {
+          specializedClosures += 1
+          debugPrint("AAAAA ERASE CLOSURE BEGIN")
+          debugPrint(closure)
+          debugPrint("AAAAA ERASE CLOSURE END")
+          closure.parentBlock.eraseInstruction(closure)
+        }
+      }
+
+      debugPrint("AAAA RATE = ", specializedClosures, " / ", totalClosures)
 
       debugPrint("AAAAAA VJP AFTER BEGIN")
       debugPrint(function)
@@ -464,6 +569,9 @@ private func gatherCallSite(in caller: Function, _ context: FunctionPassContext)
           for: rootClosure, in: &callSiteOpt,
           convertedAndReabstractedClosures: &convertedAndReabstractedClosures, context)
       } else {
+        debugPrint("AAAAA ROOT CLOSURE BEGIN")
+        debugPrint(rootClosure)
+        debugPrint("AAAAA ROOT CLOSURE END")
         let closureInfoArr = handleNonAppliesCFG(for: rootClosure, context)
         if closureInfoArr.count == 0 {
           continue
@@ -527,6 +635,9 @@ private func getOrCreateSpecializedFunctionCFG(
   }
 
   let closureInfos = callSite.closureInfosCFG
+  debugPrint("AAAAAA CLOSURE INFOS BEGIN")
+  debugPrint(closureInfos)
+  debugPrint("AAAAAA CLOSURE INFOS BEGIN")
   var bbVisited = [BasicBlock: Bool]()
   var bbWorklist = [callSite.applyCallee.entryBlock]
   var enumTypesReverseQueue = [Type]()
