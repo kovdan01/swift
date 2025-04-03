@@ -413,9 +413,6 @@ private func multiBBHelper(
   msg += "(rate " + String(Float(specializedClosures) / Float(totalSupportedClosures)) + "). "
   msg += "Total number of closures is " + String(totalClosures)
   logADCS(msg: msg)
-  debugPrint("AAAAAA VJP AFTER BEGIN")
-  debugPrint(function)
-  debugPrint("AAAAAA VJP AFTER END")
 
 }
 
@@ -431,6 +428,9 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
   let isSingleBB = function.blocks.singleElement != nil
 
   if !isSingleBB {
+    logADCS(
+      msg:
+        "Trying to run AutoDiff Closure Specialization pass on " + function.name.string)
     if !checkIfCanRun(vjp: function, context: context) {
       return
     }
@@ -438,12 +438,6 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
       msg:
         "The VJP " + function.name.string
         + " has passed the preliminary check. Proceeding to running the pass")
-    debugPrint("AAAAA VJP BEFORE BEGIN")
-    debugPrint(function)
-    debugPrint("AAAAA VJP BEFORE END")
-    debugPrint("AAAAA PB BEFORE BEGIN")
-    debugPrint(getPartialApplyOfPullbackInExitVJPBB(vjp: function)!.referencedFunction!)
-    debugPrint("AAAAA PB BEFORE END")
   }
 
   var remainingSpecializationRounds = 5
@@ -590,9 +584,6 @@ private func gatherCallSite(in caller: Function, _ context: FunctionPassContext)
           for: rootClosure, in: &callSiteOpt,
           convertedAndReabstractedClosures: &convertedAndReabstractedClosures, context)
       } else {
-        debugPrint("AAAAA ROOT CLOSURE BEGIN")
-        debugPrint(rootClosure)
-        debugPrint("AAAAA ROOT CLOSURE END")
         let closureInfoArr = handleNonAppliesCFG(for: rootClosure, context)
         if closureInfoArr.count == 0 {
           continue
@@ -656,9 +647,6 @@ private func getOrCreateSpecializedFunctionCFG(
   }
 
   let closureInfos = callSite.closureInfosCFG
-  debugPrint("AAAAAA CLOSURE INFOS BEGIN")
-  debugPrint(closureInfos)
-  debugPrint("AAAAAA CLOSURE INFOS BEGIN")
   var bbVisited = [BasicBlock: Bool]()
   var bbWorklist = [callSite.applyCallee.entryBlock]
   var enumTypesReverseQueue = [Type]()
@@ -731,9 +719,6 @@ private func getOrCreateSpecializedFunctionCFG(
       closureSpecCloner.cloneAndSpecializeFunctionBodyCFG(
         using: callSite, enumDict: enumDict)
     })
-  debugPrint("AAAAAA PB AFTER BEGIN")
-  debugPrint(specializedPb)
-  debugPrint("AAAAAA PB AFTER END")
 
   return (specializedPb, false)
 }
