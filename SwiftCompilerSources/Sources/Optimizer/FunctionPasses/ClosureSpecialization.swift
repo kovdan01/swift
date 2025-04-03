@@ -155,6 +155,16 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
   guard let paiOfPb = getPartialApplyOfPullbackInExitVJPBB(vjp: vjp) else {
     return false
   }
+  var branchTracingEnumArgCounter = 0
+  for arg in paiOfPb.arguments {
+    if arg.type.isBranchTracingEnum {
+      branchTracingEnumArgCounter += 1
+    }
+  }
+  if branchTracingEnumArgCounter != 1 {
+    return false
+  }
+
   guard let pb = paiOfPb.referencedFunction else {
     return false
   }
@@ -511,17 +521,7 @@ private func getOrCreateSpecializedFunctionCFG(
   let pb = callSite.applyCallee
   let vjp = callSite.applySite.parentFunction
 
-  let paiOfPbInExitVjpBB = getPartialApplyOfPullbackInExitVJPBB(vjp: vjp)!
-  var argAndIdxInPbPAI = (arg: Value, idx: Int)?(nil)
-  for (argIdx, arg) in paiOfPbInExitVjpBB.arguments.enumerated() {
-    if arg.type.isBranchTracingEnum {
-      assert(argAndIdxInPbPAI == nil)
-      argAndIdxInPbPAI = (arg: arg, idx: argIdx)
-    }
-  }
-  assert(argAndIdxInPbPAI != nil)
-  let specializedPbName = callSite.specializedCalleeNameCFG(
-    arg: argAndIdxInPbPAI!.arg, idx: argAndIdxInPbPAI!.idx, context)
+  let specializedPbName = callSite.specializedCalleeNameCFG(vjp: vjp, context)
   if let specializedPb = context.lookupFunction(name: specializedPbName) {
     return (specializedPb, true)
   }
@@ -2360,9 +2360,19 @@ private struct CallSite {
       from: applyCallee)
   }
 
-  func specializedCalleeNameCFG(arg: Value, idx: Int, _ context: FunctionPassContext) -> String {
+  func specializedCalleeNameCFG(vjp: Function, _ context: FunctionPassContext) -> String {
+    let paiOfPbInExitVjpBB = getPartialApplyOfPullbackInExitVJPBB(vjp: vjp)!
+    var argAndIdxInPbPAI = (arg: Value, idx: Int)?(nil)
+    for (argIdx, arg) in paiOfPbInExitVjpBB.arguments.enumerated() {
+      if arg.type.isBranchTracingEnum {
+        assert(argAndIdxInPbPAI == nil)
+        argAndIdxInPbPAI = (arg: arg, idx: argIdx)
+      }
+    }
+    assert(argAndIdxInPbPAI != nil)
+
     return context.mangle(
-      withBranchTracingEnum: arg, argIdx: idx,
+      withBranchTracingEnum: argAndIdxInPbPAI!.arg, argIdx: argAndIdxInPbPAI!.idx,
       from: applyCallee)
   }
 }
