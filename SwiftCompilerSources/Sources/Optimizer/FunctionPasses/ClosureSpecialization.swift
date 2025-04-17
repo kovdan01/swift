@@ -107,11 +107,21 @@ private let verbose = false
 
 // TODO: unify existing and new logging
 let needLogADCS = true
+var passRunCount = 0
 private func logADCS(prefix: String = "", msg: String) {
   if !needLogADCS {
     return
   }
-  debugLog("[ADCS] " + prefix + msg)
+  assert(passRunCount == 1 || passRunCount == 2)
+  let allLinesPrefix = "[ADCS][" + String(passRunCount) + "] "
+  let linesArray = msg.split(separator: "\n")
+  for (idx, line) in linesArray.enumerated() {
+    if idx == 0 {
+      debugLog(allLinesPrefix + prefix + line)
+    } else {
+      debugLog(allLinesPrefix + line)
+    }
+  }
 }
 
 private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
@@ -158,6 +168,85 @@ extension Type {
   }
 }
 
+func dumpVJP(vjp: Function) {
+  logADCS(msg: "VJP dump begin")
+  logADCS(msg: vjp.description)
+  logADCS(msg: "VJP dump end")
+}
+
+func dumpPB(pb: Function) {
+  logADCS(msg: "PB dump begin")
+  logADCS(msg: pb.description)
+  logADCS(msg: "PB dump end")
+}
+
+func dumpVJPAndPB(vjp: Function, pb: Function) {
+  dumpVJP(vjp: vjp)
+  dumpPB(pb: pb)
+}
+
+func checkSinglePathToNormalExit(vjp: Function, pb: Function) -> Bool {
+  var pathsToNormalExitCnt = 0
+  var exitBBOpt = BasicBlock?(nil)
+  for bb in vjp.blocks {
+    if bb.isReachableExitBlock {
+      let unreachableInstOpt = bb.terminator as? UnreachableInst
+      if unreachableInstOpt != nil {
+        continue
+      }
+      assert(exitBBOpt == nil)
+      exitBBOpt = bb
+    }
+  }
+  if exitBBOpt == nil {
+    logADCS(msg: "checkSinglePathToNormalExit: vjp has no reachable exit block")
+    return true
+  }
+  let exitBB = exitBBOpt!
+  // MYTODO: can we assume that there are no loops since that case is handled earlier?
+  // Just in case, use this counter and high enough limit to abort if we run into loop
+  var dfsIteration = 0
+  let dfsIterationLimit = 999999
+  func dfs(bb: BasicBlock) {
+    dfsIteration += 1
+    if dfsIteration > dfsIterationLimit {
+      return
+    }
+    if pathsToNormalExitCnt > 1 {
+      return
+    }
+    if bb == exitBB {
+      pathsToNormalExitCnt += 1
+      return
+    }
+    for succBB in bb.successors {
+      dfs(bb: succBB)
+    }
+  }
+  dfs(bb: vjp.entryBlock)
+  if dfsIteration > dfsIterationLimit {
+    logADCS(
+      msg: "checkSinglePathToNormalExit: probably with a loop, vjp.blocks.count = "
+        + String(vjp.blocks.count)
+        + ", pb.blocks.count = 1")
+    dumpVJPAndPB(vjp: vjp, pb: pb)
+    return true
+  }
+  assert(pathsToNormalExitCnt > 0)
+  if pathsToNormalExitCnt > 1 {
+    logADCS(
+      msg: "checkSinglePathToNormalExit: vjp.blocks.count = " + String(vjp.blocks.count)
+        + ", pb.blocks.count = 1")
+    dumpVJPAndPB(vjp: vjp, pb: pb)
+    return true
+  } else {
+    logADCS(
+      msg: "checkSinglePathToNormalExit: vjp has " + String(vjp.blocks.count)
+        + " blocks but only 1 path to normal exit, this will be handled later")
+    return false
+  }
+}
+
 func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
   assert(vjp.blocks.singleElement == nil)
 
@@ -174,11 +263,36 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
     }
   }
   if branchTracingEnumArgCounter != 1 {
+    let pbOpt = paiOfPb.referencedFunction
+    assert(pbOpt != nil)
+    let pb = pbOpt!
+    for inst in vjp.instructions {
+      let builtinInstOpt = inst as? BuiltinInst
+      if builtinInstOpt == nil {
+        continue
+      }
+      let builtinInst = builtinInstOpt!
+      if builtinInst.name.string == "autoDiffProjectTopLevelSubcontext" {
+        logADCS(
+          prefix: prefixFail,
+          msg:
+            "VJP seems to contain a loop (builtin autoDiffProjectTopLevelSubcontext detected), this is not supported"
+        )
+        return false
+      }
+    }
+    if pb.blocks.count == 1 {
+      if !checkSinglePathToNormalExit(vjp: vjp, pb: pb) {
+        logADCS(prefix: prefixFail, msg: "single path leads to normal exit in multi-BB VJP")
+        return false
+      }
+    }
     logADCS(
       prefix: prefixFail,
       msg: "partial_apply of pullback in exit basic block of VJP has "
         + String(branchTracingEnumArgCounter)
         + " branch tracing enum arguments, but exactly 1 is expected")
+    dumpVJPAndPB(vjp: vjp, pb: pb)
     return false
   }
 
@@ -202,6 +316,10 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
       prefix: prefixFail,
       msg: "unexpected terminator instruction in the entry block of the pullback " + pb.name.string
         + " (only switch_enum_inst is supported)")
+    logADCS(msg: "  terminator: " + pb.entryBlock.terminator.description)
+    logADCS(msg: "  parent block begin")
+    logADCS(msg: "  " + pb.entryBlock.description)
+    logADCS(msg: "  parent block end")
     return false
   }
   for pbBB in pb.blocks {
@@ -276,6 +394,11 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
           prefix: prefixFail,
           msg: "tuple argument of pullback " + pb.name.string + " basic block "
             + pbBB.shortDescription + " single use is not a destructure_tuple_inst")
+        logADCS(msg: "  use: " + argOfPbBB.uses.singleUse!.description)
+        logADCS(msg: "  instruction: " + argOfPbBB.uses.singleUse!.instruction.description)
+        logADCS(msg: "  parent block begin")
+        logADCS(msg: "  " + argOfPbBB.uses.singleUse!.instruction.parentBlock.description)
+        logADCS(msg: "  parent block end")
         return false
       }
       // TODO: do we need to check that results is not empty?
@@ -331,6 +454,7 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
 }
 
 func getVjpBBToTupleInstMap(vjp: Function) -> [BasicBlock: TupleInst]? {
+  let prefix = "getVjpBBToTupleInstMap: failure reason "
   var vjpBBToTupleInstMap = [BasicBlock: TupleInst]()
   for bb in vjp.blocks {
     var tiOpt = TupleInst?(nil)
@@ -352,10 +476,25 @@ func getVjpBBToTupleInstMap(vjp: Function) -> [BasicBlock: TupleInst]? {
         }
       }
       if useCountNonBranchTracingEnum != 0 && useCountBranchTracingEnum != 0 {
+        logADCS(prefix: prefix, msg: "0")
+        logADCS(msg: "  useCountBranchTracingEnum: " + String(useCountBranchTracingEnum))
+        logADCS(msg: "  useCountNonBranchTracingEnum: " + String(useCountNonBranchTracingEnum))
+        logADCS(msg: "  ti: " + ti.description)
+        logADCS(msg: "  parent block begin")
+        logADCS(msg: "  " + ti.parentBlock.description)
+        logADCS(msg: "  parent block end")
         return nil
       }
       if useCountBranchTracingEnum != 0 {
         if tiOpt != nil {
+          logADCS(prefix: prefix, msg: "1")
+          logADCS(msg: "  useCountBranchTracingEnum: " + String(useCountBranchTracingEnum))
+          logADCS(msg: "  useCountNonBranchTracingEnum: " + String(useCountNonBranchTracingEnum))
+          logADCS(msg: "  ti: " + ti.description)
+          logADCS(msg: "  tiOpt!: " + tiOpt!.description)
+          logADCS(msg: "  parent block begin")
+          logADCS(msg: "  " + ti.parentBlock.description)
+          logADCS(msg: "  parent block end")
           return nil
         }
         tiOpt = ti
@@ -416,8 +555,19 @@ private func multiBBHelper(
 
 }
 
-let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-specialization") {
+let autodiffClosureSpecialization1 = FunctionPass(name: "autodiff-closure-specialization1") {
   (function: Function, context: FunctionPassContext) in
+  passRunCount = 1
+  autodiffClosureSpecialization(function: function, context: context)
+}
+
+let autodiffClosureSpecialization2 = FunctionPass(name: "autodiff-closure-specialization2") {
+  (function: Function, context: FunctionPassContext) in
+  passRunCount = 2
+  autodiffClosureSpecialization(function: function, context: context)
+}
+
+func autodiffClosureSpecialization(function: Function, context: FunctionPassContext) {
 
   guard !function.isDefinedExternally,
     function.isAutodiffVJP
@@ -515,6 +665,7 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 private let specializationLevelLimit = 2
 
 private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApplyInst? {
+  let prefix = "getPartialApplyOfPullbackInExitVJPBB: failure reason "
   var exitBBOpt = BasicBlock?(nil)
   for block in vjp.blocks {
     if block.isReachableExitBlock {
@@ -522,22 +673,70 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
         continue
       }
       if exitBBOpt != nil {
+        logADCS(prefix: prefix, msg: "0")
         return nil
       }
       exitBBOpt = block
     }
   }
   if exitBBOpt == nil {
+    logADCS(prefix: prefix, msg: "1")
     return nil
   }
   let ri = exitBBOpt!.terminator as! ReturnInst
-  guard let ti = ri.returnedValue.definingInstruction as? TupleInst else {
+  if ri.returnedValue.definingInstruction == nil {
+    logADCS(prefix: prefix, msg: "2")
     return nil
   }
+
+  func handleConvertFunctionOrPartialApply(inst: Instruction) -> PartialApplyInst? {
+    let paiOpt = inst as? PartialApplyInst
+    let cfOpt = inst as? ConvertFunctionInst
+    if paiOpt != nil {
+      return paiOpt!
+    }
+    if cfOpt == nil {
+      logADCS(prefix: prefix, msg: "3")
+      logADCS(msg: "  instruction: " + inst.description)
+      logADCS(msg: "  parent block begin")
+      logADCS(msg: "  " + inst.parentBlock.description)
+      logADCS(msg: "  parent block end")
+      return nil
+    }
+    let pai = cfOpt!.operands[0].value as? PartialApplyInst
+    if pai == nil {
+      logADCS(prefix: prefix, msg: "4")
+      logADCS(msg: "  value: " + cfOpt!.operands[0].value.description)
+      logADCS(msg: "  parent block begin")
+      logADCS(msg: "  " + cfOpt!.parentBlock.description)
+      logADCS(msg: "  parent block end")
+    }
+    return pai
+  }
+
+  let tiOpt = ri.returnedValue.definingInstruction as? TupleInst
+  if tiOpt == nil {
+    return handleConvertFunctionOrPartialApply(inst: ri.returnedValue.definingInstruction!)
+  }
+  let ti = tiOpt!
   if ti.operands.count != 2 {
+    logADCS(prefix: prefix, msg: "5")
+    logADCS(msg: "  ti: " + ti.description)
+    logADCS(msg: "  parent block begin")
+    logADCS(msg: "  " + ti.parentBlock.description)
+    logADCS(msg: "  parent block end")
     return nil
   }
-  return ti.operands[1].value.definingInstruction as? PartialApplyInst
+  if ti.operands[1].value.definingInstruction == nil {
+    logADCS(prefix: prefix, msg: "6")
+    logADCS(msg: "  ti: " + ti.description)
+    logADCS(msg: "  value: " + ti.operands[1].value.description)
+    logADCS(msg: "  parent block begin")
+    logADCS(msg: "  " + ti.parentBlock.description)
+    logADCS(msg: "  parent block end")
+    return nil
+  }
+  return handleConvertFunctionOrPartialApply(inst: ti.operands[1].value.definingInstruction!)
 }
 
 private func gatherCallSite(in caller: Function, _ context: FunctionPassContext) -> CallSite? {
@@ -574,11 +773,13 @@ private func gatherCallSite(in caller: Function, _ context: FunctionPassContext)
 
   var callSiteOpt = CallSite?(nil)
   let isSingleBB = caller.blocks.singleElement != nil
+  var supportedClosuresCount = 0
 
   for inst in caller.instructions {
     if !convertedAndReabstractedClosures.contains(inst),
       let rootClosure = inst.asSupportedClosure
     {
+      supportedClosuresCount += 1
       if isSingleBB {
         updateCallSite(
           for: rootClosure, in: &callSiteOpt,
@@ -586,8 +787,10 @@ private func gatherCallSite(in caller: Function, _ context: FunctionPassContext)
       } else {
         let closureInfoArr = handleNonAppliesCFG(for: rootClosure, context)
         if closureInfoArr.count == 0 {
+          logADCS(msg: "closureInfoArr.count ZERO")
           continue
         }
+        logADCS(msg: "closureInfoArr.count = " + String(closureInfoArr.count))
         if callSiteOpt == nil {
           callSiteOpt = CallSite(applySite: getPartialApplyOfPullbackInExitVJPBB(vjp: caller)!)
         }
@@ -596,6 +799,10 @@ private func gatherCallSite(in caller: Function, _ context: FunctionPassContext)
         }
       }
     }
+  }
+
+  if supportedClosuresCount == 0 && !isSingleBB {
+    logADCS(msg: "No supported closures found in " + caller.name.string)
   }
 
   return callSiteOpt
@@ -755,40 +962,32 @@ private func rewriteApplyInstructionCFG(
     }
     bb.bridged.recreateEnumBlockArgument(arg.bridged)
   }
+  let pai = callSite.applySite as! PartialApplyInst
 
   let builderSucc = Builder(
-    atEndOf: callSite.applySite.parentBlock,
+    before: pai,
     location: callSite.applySite.parentBlock.instructions.last!.location, context)
 
-  let pai = callSite.applySite as! PartialApplyInst
   let paiFunction = pai.operands[0].value
   let paiConvention = pai.calleeConvention
   let paiHasUnknownResultIsolation = pai.hasUnknownResultIsolation
   let paiSubstitutionMap = SubstitutionMap(bridged: pai.bridged.getSubstitutionMap())
   let paiIsOnStack = pai.isOnStack
 
-  let returnInst = vjpExitBB.terminator as! ReturnInst
-  let tupleInst = returnInst.returnedValue.definingInstruction as! TupleInst
-  let tupleElem = tupleInst.operands[0].value
+  // TODO assert that PAI is on index 1 in tuple
   let functionRefInst = paiFunction as! FunctionRefInst
 
+  let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
   var newCapturedArgs = [Value]()
   for paiArg in pai.arguments {
     newCapturedArgs.append(paiArg)
   }
-
-  vjpExitBB.eraseInstruction(returnInst)
-  vjpExitBB.eraseInstruction(tupleInst)
-  vjpExitBB.eraseInstruction(pai)
-  let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
-  functionRefInst.replace(with: newFunctionRefInst, context)
-
   let newPai: PartialApplyInst = builderSucc.createPartialApply(
     function: newFunctionRefInst, substitutionMap: paiSubstitutionMap,
     capturedArguments: newCapturedArgs, calleeConvention: paiConvention,
     hasUnknownResultIsolation: paiHasUnknownResultIsolation, isOnStack: paiIsOnStack)
-  let newTupleInst = builderSucc.createTuple(elements: [tupleElem, newPai])
-  builderSucc.createReturn(of: newTupleInst)
+
+  pai.replace(with: newPai, context)
 
   let vjpBBToTupleInstMap = getVjpBBToTupleInstMap(vjp: vjp)!
 
@@ -1016,7 +1215,31 @@ extension UseList {
 }
 
 private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: BasicBlock]? {
+  let prefix = "getVjpBBToPbBBMap: failure reason "
   if vjp.blocks.count != pb.blocks.count {
+    logADCS(prefix: prefix, msg: "00")
+    logADCS(
+      msg: "vjp.blocks.count = " + String(vjp.blocks.count)
+        + ", pb.blocks.count = " + String(pb.blocks.count))
+    func printBlocks(f: Function) {
+      for bb in f.blocks {
+        var msg = bb.shortDescription + " -> "
+        let riOpt = bb.terminator as? ReturnInst
+        if riOpt != nil {
+          msg = "exit " + msg
+        }
+        for succBB in bb.successors {
+          msg += succBB.shortDescription + " "
+        }
+        logADCS(msg: msg)
+      }
+    }
+    logADCS(msg: "VJP BBs begin")
+    printBlocks(f: vjp)
+    logADCS(msg: "VJP BBs end")
+    logADCS(msg: "PB BBs begin")
+    printBlocks(f: pb)
+    logADCS(msg: "PB BBs end")
     return nil
   }
   var dict = [BasicBlock: BasicBlock]()
@@ -1026,12 +1249,14 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
   for pbBB in pb.blocks {
     if pbBB.isReachableExitBlock {
       if pbBBOpt != nil {
+        logADCS(prefix: prefix, msg: "01")
         return nil
       }
       pbBBOpt = pbBB
     }
   }
   if pbBBOpt == nil {
+    logADCS(prefix: prefix, msg: "02")
     return nil
   }
   let pbBB = pbBBOpt!
@@ -1042,6 +1267,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
     }
     dict[vjpBBArg] = pbBBArg
     if (vjpBBArg.singleSuccessor == nil) != (pbBBArg.singlePredecessor == nil) {
+      logADCS(prefix: prefix, msg: "03")
       return false
     }
     if vjpBBArg.singleSuccessor != nil {
@@ -1057,6 +1283,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
         vjpSuccOKCount += 1
         predPbBBToSuccVjpBB[pb.entryBlock] = vjpSuccBB
         if !dfs(vjpBBArg: vjpSuccBB, pbBBArg: pb.entryBlock) {
+          logADCS(prefix: prefix, msg: "04")
           return false
         }
         continue
@@ -1075,6 +1302,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
         break
       }
       if eiOpt == nil {
+        logADCS(prefix: prefix, msg: "05")
         return false
       }
       let enumType = eiOpt!.results[0].type
@@ -1088,6 +1316,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
           && pbPredBBArg.type.tupleElements[0] == enumType
         {
           if newPredBB != nil {
+            logADCS(prefix: prefix, msg: "06")
             return false
           }
           newPredBB = pbPredBB
@@ -1095,6 +1324,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
       }
       if newPredBB == nil {
         if remainingVjpBB != nil {
+          logADCS(prefix: prefix, msg: "07")
           return false
         }
         remainingVjpBB = vjpSuccBB
@@ -1103,6 +1333,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
       vjpSuccOKCount += 1
       predPbBBToSuccVjpBB[newPredBB!] = vjpSuccBB
       if !dfs(vjpBBArg: vjpSuccBB, pbBBArg: newPredBB!) {
+        logADCS(prefix: prefix, msg: "08")
         return false
       }
     }
@@ -1117,6 +1348,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
       }
       assert(remainingPbBB != nil)
       if !dfs(vjpBBArg: remainingVjpBB!, pbBBArg: remainingPbBB!) {
+        logADCS(prefix: prefix, msg: "09")
         return false
       }
     }
@@ -1128,6 +1360,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
     assert(dict.count == vjp.blocks.count)
     return dict
   }
+  logADCS(prefix: prefix, msg: "10")
   return nil
 }
 
@@ -1139,15 +1372,63 @@ private func handleNonAppliesCFG(
 {
   var closureInfoArr = [ClosureInfoCFG]()
 
-  for use in rootClosure.uses {
+  var closure: SingleValueInstruction = rootClosure
+  //  for use in rootClosure.uses {
+  //    let cfiOpt = use.instruction as? ConvertFunctionInst
+  //    if cfiOpt == nil {
+  //      continue
+  //    }
+  //    if rootClosure.uses.count != 1 {
+  //      logADCS(msg: "handleNonAppliesCFG: convert_function is present, but is not the only use of the closure (total uses " + String(rootClosure.uses.count) + ")")
+  //      logADCS(msg: "handleNonAppliesCFG:   closure: " + rootClosure.description)
+  //      logADCS(msg: "handleNonAppliesCFG:   uses begin")
+  //      for inner in rootClosure.uses {
+  //        logADCS(msg: "handleNonAppliesCFG:     " + inner.instruction.description)
+  //      }
+  //      logADCS(msg: "handleNonAppliesCFG:   uses end")
+  //      return []
+  //    }
+  //    closure = cfiOpt!
+  //  }
+
+  for use in closure.uses {
     guard let ti = use.instruction as? TupleInst else {
+      logADCS(msg: "handleNonAppliesCFG: unexpected use of closure")
+      logADCS(msg: "handleNonAppliesCFG:   closure: " + rootClosure.description)
+      logADCS(msg: "handleNonAppliesCFG:   use.instruction: " + use.instruction.description)
+      logADCS(msg: "handleNonAppliesCFG:   parent block of use begin")
+      logADCS(msg: "handleNonAppliesCFG:   " + use.instruction.parentBlock.description)
+      logADCS(msg: "handleNonAppliesCFG:   parent block of use end")
       return []
     }
     for tiUse in ti.uses {
       guard let ei = tiUse.instruction as? EnumInst else {
+        let riOpt = tiUse.instruction as? ReturnInst
+        if riOpt == nil {
+          logADCS(msg: "handleNonAppliesCFG: unexpected use of tuple")
+          logADCS(msg: "handleNonAppliesCFG:   closure: " + rootClosure.description)
+          logADCS(msg: "handleNonAppliesCFG:   tuple: " + ti.description)
+          logADCS(msg: "handleNonAppliesCFG:   tiUse.instruction: " + tiUse.instruction.description)
+          return []
+        }
+        let paiOfPbInExitVjpBB = getPartialApplyOfPullbackInExitVJPBB(
+          vjp: rootClosure.parentFunction)!
+        let paiOpt = rootClosure as? PartialApplyInst
+        if paiOpt != paiOfPbInExitVjpBB {
+          logADCS(msg: "handleNonAppliesCFG: unexpected use of tuple")
+          logADCS(msg: "handleNonAppliesCFG:   closure: " + rootClosure.description)
+          logADCS(msg: "handleNonAppliesCFG:   tuple: " + ti.description)
+          logADCS(msg: "handleNonAppliesCFG:   tiUse.instruction: " + tiUse.instruction.description)
+        } else {
+          logADCS(
+            msg:
+              "handleNonAppliesCFG: this is partial_apply of top-level pullback and return of corresponding tuple; it is expected behavior"
+          )
+        }
         return []
       }
       if !ei.type.isBranchTracingEnum {
+        logADCS(msg: "handleNonAppliesCFG: unexpected enum type:" + ei.type.description)
         return []
       }
       var capturedArgs = [Value]()
@@ -1165,6 +1446,9 @@ private func handleNonAppliesCFG(
           enumTypeAndCase: enumTypeAndCase, payloadTuple: ti
         ))
     }
+  }
+  if closureInfoArr.count == 0 {
+    logADCS(msg: "handleNonAppliesCFG: returning empty closure info array")
   }
   return closureInfoArr
 }
