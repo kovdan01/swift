@@ -522,20 +522,54 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
         continue
       }
       if exitBBOpt != nil {
+        logADCS(msg: "AAAAAA 00")
         return nil
       }
       exitBBOpt = block
     }
   }
   if exitBBOpt == nil {
+    logADCS(msg: "AAAAAA 01")
     return nil
   }
   let ri = exitBBOpt!.terminator as! ReturnInst
-  guard let ti = ri.returnedValue.definingInstruction as? TupleInst else {
+  let tiOpt = ri.returnedValue.definingInstruction as? TupleInst
+  let paiOpt = ri.returnedValue.definingInstruction as? PartialApplyInst
+  let cfOpt = ri.returnedValue.definingInstruction as? ConvertFunctionInst
+  if tiOpt == nil && paiOpt == nil && cfOpt == nil {
+    logADCS(msg: "AAAAAA 02 BEGIN")
+    debugPrint("AAAAAA 02 BEGIN X")
+    debugPrint(ri.returnedValue.definingInstruction)
+    logADCS(msg: "AAAAAA 02 MIDDLE")
+    debugPrint("AAAAAA 02 MIDDLE X")
+    debugPrint(exitBBOpt!)
+    logADCS(msg: "AAAAAA 02 END")
+    debugLog("AAAAAA 02 END X")
     return nil
   }
+  if paiOpt != nil {
+    return paiOpt
+  }
+  if cfOpt != nil {
+    let pai = cfOpt!.operands[0].value as? PartialApplyInst
+    if pai == nil {
+      debugPrint("AAAAAAA 05")
+      logADCS(msg: "AAAAAAA 05")
+    }
+    return pai
+  }
+  assert(tiOpt != nil)
+  let ti = tiOpt!
+  //  guard let ti = ri.returnedValue.definingInstruction as? TupleInst else {
+  //    return nil
+  //  }
   if ti.operands.count != 2 {
+    logADCS(msg: "AAAAAA 03")
     return nil
+  }
+  let tmp = ti.operands[1].value.definingInstruction as? PartialApplyInst
+  if tmp == nil {
+    logADCS(msg: "AAAAAA 04")
   }
   return ti.operands[1].value.definingInstruction as? PartialApplyInst
 }
@@ -768,27 +802,55 @@ private func rewriteApplyInstructionCFG(
   let paiIsOnStack = pai.isOnStack
 
   let returnInst = vjpExitBB.terminator as! ReturnInst
-  let tupleInst = returnInst.returnedValue.definingInstruction as! TupleInst
-  let tupleElem = tupleInst.operands[0].value
+  let tupleInst = returnInst.returnedValue.definingInstruction as? TupleInst
+  var tupleElem = Value?(nil)
+  if tupleInst != nil {
+    tupleElem = tupleInst!.operands[0].value
+  }
+  if tupleInst == nil {
+    let paiOpt = returnInst.returnedValue.definingInstruction as? PartialApplyInst
+    if paiOpt != nil {
+      assert(pai == paiOpt)
+    } else {
+      let cfOpt = returnInst.returnedValue.definingInstruction as? ConvertFunctionInst
+      assert(cfOpt != nil)
+      let paiOpt = cfOpt!.operands[0].value as? PartialApplyInst
+      assert(paiOpt != nil)
+    }
+  }
+  // TODO assert that PAI is on index 1 in tuple
   let functionRefInst = paiFunction as! FunctionRefInst
 
+  let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
   var newCapturedArgs = [Value]()
   for paiArg in pai.arguments {
     newCapturedArgs.append(paiArg)
   }
-
-  vjpExitBB.eraseInstruction(returnInst)
-  vjpExitBB.eraseInstruction(tupleInst)
-  vjpExitBB.eraseInstruction(pai)
-  let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
-  functionRefInst.replace(with: newFunctionRefInst, context)
-
   let newPai: PartialApplyInst = builderSucc.createPartialApply(
     function: newFunctionRefInst, substitutionMap: paiSubstitutionMap,
     capturedArguments: newCapturedArgs, calleeConvention: paiConvention,
     hasUnknownResultIsolation: paiHasUnknownResultIsolation, isOnStack: paiIsOnStack)
-  let newTupleInst = builderSucc.createTuple(elements: [tupleElem, newPai])
-  builderSucc.createReturn(of: newTupleInst)
+
+
+  if tupleInst != nil {
+  vjpExitBB.eraseInstruction(returnInst)
+    vjpExitBB.eraseInstruction(tupleInst!)
+  vjpExitBB.eraseInstruction(pai)
+  }
+  //let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
+  //functionRefInst.replace(with: newFunctionRefInst, context)
+
+//  let newPai: PartialApplyInst = builderSucc.createPartialApply(
+//    function: newFunctionRefInst, substitutionMap: paiSubstitutionMap,
+//    capturedArguments: newCapturedArgs, calleeConvention: paiConvention,
+//    hasUnknownResultIsolation: paiHasUnknownResultIsolation, isOnStack: paiIsOnStack)
+  if tupleInst != nil {
+    let newTupleInst = builderSucc.createTuple(elements: [tupleElem!, newPai])
+    builderSucc.createReturn(of: newTupleInst)
+  } else {
+    //builderSucc.createReturn(of: newPai)
+    pai.replace(with: newPai, context)
+  }
 
   let vjpBBToTupleInstMap = getVjpBBToTupleInstMap(vjp: vjp)!
 
