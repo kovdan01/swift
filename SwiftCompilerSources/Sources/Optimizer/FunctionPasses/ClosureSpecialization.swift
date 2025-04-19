@@ -174,6 +174,27 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
     }
   }
   if branchTracingEnumArgCounter != 1 {
+    let pbOpt = paiOfPb.referencedFunction
+    if pbOpt == nil {
+      debugPrint("CCCCCC 00")
+    } else {
+      debugPrint("CCCCCC 01")
+      debugPrint("vjp blocks count = ", vjp.blocks.count, ", pb blocks count = ", pbOpt!.blocks.count)
+      if vjp.blocks.count == pbOpt!.blocks.count {
+        debugPrint("CCCCCC TRUE!!!")
+      }
+      debugPrint("CCCCCC 02")
+      if pbOpt!.blocks.count == 1 {
+        debugPrint("CCCCCC 04")
+        debugPrint(vjp)
+        debugPrint("CCCCCC 05")
+        debugPrint(pbOpt!)
+        debugPrint("CCCCCC 06")
+      } else {
+        debugPrint(pbOpt!.entryBlock)
+      }
+      debugPrint("CCCCCC 03")
+    }
     logADCS(
       prefix: prefixFail,
       msg: "partial_apply of pullback in exit basic block of VJP has "
@@ -438,6 +459,10 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
       msg:
         "The VJP " + function.name.string
         + " has passed the preliminary check. Proceeding to running the pass")
+  } else {
+     logADCS(
+      msg:
+        "SINGLE BB: Trying to run AutoDiff Closure Specialization pass on " + function.name.string)
   }
 
   var remainingSpecializationRounds = 5
@@ -608,11 +633,13 @@ private func gatherCallSite(in caller: Function, _ context: FunctionPassContext)
 
   var callSiteOpt = CallSite?(nil)
   let isSingleBB = caller.blocks.singleElement != nil
+  var supportedClosuresCount = 0
 
   for inst in caller.instructions {
     if !convertedAndReabstractedClosures.contains(inst),
       let rootClosure = inst.asSupportedClosure
     {
+      supportedClosuresCount += 1
       if isSingleBB {
         updateCallSite(
           for: rootClosure, in: &callSiteOpt,
@@ -620,8 +647,10 @@ private func gatherCallSite(in caller: Function, _ context: FunctionPassContext)
       } else {
         let closureInfoArr = handleNonAppliesCFG(for: rootClosure, context)
         if closureInfoArr.count == 0 {
+          logADCS(msg: "closureInfoArr.count ZERO")
           continue
         }
+        logADCS(msg: "closureInfoArr.count = " + String(closureInfoArr.count))
         if callSiteOpt == nil {
           callSiteOpt = CallSite(applySite: getPartialApplyOfPullbackInExitVJPBB(vjp: caller)!)
         }
@@ -630,6 +659,10 @@ private func gatherCallSite(in caller: Function, _ context: FunctionPassContext)
         }
       }
     }
+  }
+
+  if supportedClosuresCount == 0 && !isSingleBB {
+    logADCS(msg: "No supported closures found in " + caller.name.string)
   }
 
   return callSiteOpt
@@ -1079,6 +1112,14 @@ extension UseList {
 
 private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: BasicBlock]? {
   if vjp.blocks.count != pb.blocks.count {
+    debugPrint("BBBBBB 00 BEGIN")
+    debugPrint(vjp.blocks.count)
+    debugPrint(vjp)
+    debugPrint("BBBBBB 00 MIDDLE")
+    debugPrint(pb.blocks.count)
+    debugPrint(pb)
+    debugPrint("BBBBBB 00 END")
+    logADCS(msg: "BBBBBB 00")
     return nil
   }
   var dict = [BasicBlock: BasicBlock]()
@@ -1088,12 +1129,14 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
   for pbBB in pb.blocks {
     if pbBB.isReachableExitBlock {
       if pbBBOpt != nil {
+        logADCS(msg: "BBBBBB 01")
         return nil
       }
       pbBBOpt = pbBB
     }
   }
   if pbBBOpt == nil {
+    logADCS(msg: "BBBBBB 02")
     return nil
   }
   let pbBB = pbBBOpt!
@@ -1104,6 +1147,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
     }
     dict[vjpBBArg] = pbBBArg
     if (vjpBBArg.singleSuccessor == nil) != (pbBBArg.singlePredecessor == nil) {
+      logADCS(msg: "BBBBBB 03")
       return false
     }
     if vjpBBArg.singleSuccessor != nil {
@@ -1119,6 +1163,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
         vjpSuccOKCount += 1
         predPbBBToSuccVjpBB[pb.entryBlock] = vjpSuccBB
         if !dfs(vjpBBArg: vjpSuccBB, pbBBArg: pb.entryBlock) {
+          logADCS(msg: "BBBBBB 04")
           return false
         }
         continue
@@ -1137,6 +1182,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
         break
       }
       if eiOpt == nil {
+        logADCS(msg: "BBBBBB 05")
         return false
       }
       let enumType = eiOpt!.results[0].type
@@ -1150,6 +1196,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
           && pbPredBBArg.type.tupleElements[0] == enumType
         {
           if newPredBB != nil {
+            logADCS(msg: "BBBBBB 06")
             return false
           }
           newPredBB = pbPredBB
@@ -1157,6 +1204,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
       }
       if newPredBB == nil {
         if remainingVjpBB != nil {
+          logADCS(msg: "BBBBBB 07")
           return false
         }
         remainingVjpBB = vjpSuccBB
@@ -1165,6 +1213,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
       vjpSuccOKCount += 1
       predPbBBToSuccVjpBB[newPredBB!] = vjpSuccBB
       if !dfs(vjpBBArg: vjpSuccBB, pbBBArg: newPredBB!) {
+        logADCS(msg: "BBBBBB 08")
         return false
       }
     }
@@ -1179,6 +1228,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
       }
       assert(remainingPbBB != nil)
       if !dfs(vjpBBArg: remainingVjpBB!, pbBBArg: remainingPbBB!) {
+        logADCS(msg: "BBBBBB 09")
         return false
       }
     }
@@ -1190,6 +1240,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
     assert(dict.count == vjp.blocks.count)
     return dict
   }
+  logADCS(msg: "BBBBBB 10")
   return nil
 }
 
@@ -1201,15 +1252,59 @@ private func handleNonAppliesCFG(
 {
   var closureInfoArr = [ClosureInfoCFG]()
 
-  for use in rootClosure.uses {
+  var closure : SingleValueInstruction = rootClosure
+//  for use in rootClosure.uses {
+//    let cfiOpt = use.instruction as? ConvertFunctionInst
+//    if cfiOpt == nil {
+//      continue
+//    }
+//    if rootClosure.uses.count != 1 {
+//      logADCS(msg: "handleNonAppliesCFG: convert_function is present, but is not the only use of the closure (total uses " + String(rootClosure.uses.count) + ")")
+//      logADCS(msg: "handleNonAppliesCFG:   closure: " + rootClosure.description)
+//      logADCS(msg: "handleNonAppliesCFG:   uses begin")
+//      for inner in rootClosure.uses {
+//        logADCS(msg: "handleNonAppliesCFG:     " + inner.instruction.description)
+//      }
+//      logADCS(msg: "handleNonAppliesCFG:   uses end")
+//      return []
+//    }
+//    closure = cfiOpt!
+//  }
+
+  for use in closure.uses {
     guard let ti = use.instruction as? TupleInst else {
+      logADCS(msg: "handleNonAppliesCFG: unexpected use of closure")
+      logADCS(msg: "handleNonAppliesCFG:   closure: " + rootClosure.description)
+      logADCS(msg: "handleNonAppliesCFG:   use.instruction: " + use.instruction.description)
+      logADCS(msg: "handleNonAppliesCFG: AAAAA")
+      logADCS(msg: "handleNonAppliesCFG: " + use.instruction.parentBlock.description)
+      logADCS(msg: "handleNonAppliesCFG: BBBBB")
       return []
     }
     for tiUse in ti.uses {
       guard let ei = tiUse.instruction as? EnumInst else {
+        let riOpt = tiUse.instruction as? ReturnInst
+        if riOpt == nil {
+          logADCS(msg: "handleNonAppliesCFG: unexpected use of tuple")
+          logADCS(msg: "handleNonAppliesCFG:   closure: " + rootClosure.description)
+          logADCS(msg: "handleNonAppliesCFG:   tuple: " + ti.description)
+          logADCS(msg: "handleNonAppliesCFG:   tiUse.instruction: " + tiUse.instruction.description)
+          return []
+        }
+        let paiOfPbInExitVjpBB = getPartialApplyOfPullbackInExitVJPBB(vjp: rootClosure.parentFunction)!
+        let paiOpt = rootClosure as? PartialApplyInst
+        if paiOpt != paiOfPbInExitVjpBB {
+          logADCS(msg: "handleNonAppliesCFG: unexpected use of tuple")
+          logADCS(msg: "handleNonAppliesCFG:   closure: " + rootClosure.description)
+          logADCS(msg: "handleNonAppliesCFG:   tuple: " + ti.description)
+          logADCS(msg: "handleNonAppliesCFG:   tiUse.instruction: " + tiUse.instruction.description)
+        } else {
+          logADCS(msg: "handleNonAppliesCFG: this is partial_apply of top-level pullback and return of corresponding tuple; it is expected behavior")
+        }
         return []
       }
       if !ei.type.isBranchTracingEnum {
+        logADCS(msg: "handleNonAppliesCFG: unexpected enum type:" + ei.type.description)
         return []
       }
       var capturedArgs = [Value]()
@@ -1227,6 +1322,9 @@ private func handleNonAppliesCFG(
           enumTypeAndCase: enumTypeAndCase, payloadTuple: ti
         ))
     }
+  }
+  if closureInfoArr.count == 0 {
+    logADCS(msg: "handleNonAppliesCFG: returning empty closure info array")
   }
   return closureInfoArr
 }
