@@ -200,7 +200,7 @@ func checkSinglePathToNormalExit(vjp: Function, pb: Function) -> Bool {
   }
   if exitBBOpt == nil {
     logADCS(msg: "checkSinglePathToNormalExit: vjp has no reachable exit block")
-    return false
+    return true
   }
   let exitBB = exitBBOpt!
   // MYTODO: can we assume that there are no loops since that case is handled earlier?
@@ -274,6 +274,7 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
       let builtinInst = builtinInstOpt!
       if builtinInst.name.string == "autoDiffProjectTopLevelSubcontext" {
         logADCS(
+          prefix: prefixFail,
           msg:
             "VJP seems to contain a loop (builtin autoDiffProjectTopLevelSubcontext detected), this is not supported"
         )
@@ -282,6 +283,7 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
     }
     if pb.blocks.count == 1 {
       if !checkSinglePathToNormalExit(vjp: vjp, pb: pb) {
+        logADCS(prefix: prefixFail, msg: "single path leads to normal exit in multi-BB VJP")
         return false
       }
     }
@@ -314,6 +316,10 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
       prefix: prefixFail,
       msg: "unexpected terminator instruction in the entry block of the pullback " + pb.name.string
         + " (only switch_enum_inst is supported)")
+    logADCS(msg: "  terminator: " + pb.entryBlock.terminator.description)
+    logADCS(msg: "  parent block begin")
+    logADCS(msg: "  " + pb.entryBlock.description)
+    logADCS(msg: "  parent block end")
     return false
   }
   for pbBB in pb.blocks {
@@ -388,6 +394,11 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
           prefix: prefixFail,
           msg: "tuple argument of pullback " + pb.name.string + " basic block "
             + pbBB.shortDescription + " single use is not a destructure_tuple_inst")
+        logADCS(msg: "  use: " + argOfPbBB.uses.singleUse!.description)
+        logADCS(msg: "  instruction: " + argOfPbBB.uses.singleUse!.instruction.description)
+        logADCS(msg: "  parent block begin")
+        logADCS(msg: "  " + argOfPbBB.uses.singleUse!.instruction.parentBlock.description)
+        logADCS(msg: "  parent block end")
         return false
       }
       // TODO: do we need to check that results is not empty?
@@ -443,6 +454,7 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
 }
 
 func getVjpBBToTupleInstMap(vjp: Function) -> [BasicBlock: TupleInst]? {
+  let prefix = "getVjpBBToTupleInstMap: failure reason "
   var vjpBBToTupleInstMap = [BasicBlock: TupleInst]()
   for bb in vjp.blocks {
     var tiOpt = TupleInst?(nil)
@@ -464,10 +476,25 @@ func getVjpBBToTupleInstMap(vjp: Function) -> [BasicBlock: TupleInst]? {
         }
       }
       if useCountNonBranchTracingEnum != 0 && useCountBranchTracingEnum != 0 {
+        logADCS(prefix: prefix, msg: "0")
+        logADCS(msg: "  useCountBranchTracingEnum: " + String(useCountBranchTracingEnum))
+        logADCS(msg: "  useCountNonBranchTracingEnum: " + String(useCountNonBranchTracingEnum))
+        logADCS(msg: "  ti: " + ti.description)
+        logADCS(msg: "  parent block begin")
+        logADCS(msg: "  " + ti.parentBlock.description)
+        logADCS(msg: "  parent block end")
         return nil
       }
       if useCountBranchTracingEnum != 0 {
         if tiOpt != nil {
+          logADCS(prefix: prefix, msg: "1")
+          logADCS(msg: "  useCountBranchTracingEnum: " + String(useCountBranchTracingEnum))
+          logADCS(msg: "  useCountNonBranchTracingEnum: " + String(useCountNonBranchTracingEnum))
+          logADCS(msg: "  ti: " + ti.description)
+          logADCS(msg: "  tiOpt!: " + tiOpt!.description)
+          logADCS(msg: "  parent block begin")
+          logADCS(msg: "  " + ti.parentBlock.description)
+          logADCS(msg: "  parent block end")
           return nil
         }
         tiOpt = ti
