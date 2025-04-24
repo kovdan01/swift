@@ -1223,10 +1223,31 @@ extension UseList {
 }
 
 private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: BasicBlock]? {
+  let prefix = "getVjpBBToPbBBMap: failure reason "
   if vjp.blocks.count != pb.blocks.count {
+    logADCS(prefix: prefix, msg: "00")
     logADCS(
-      msg: "getVjpBBToPbBBMap: vjp.blocks.count = " + String(vjp.blocks.count)
+      msg: "vjp.blocks.count = " + String(vjp.blocks.count)
         + ", pb.blocks.count = " + String(pb.blocks.count))
+    func printBlocks(f: Function) {
+      for bb in f.blocks {
+        var msg = bb.shortDescription + " -> "
+        let riOpt = bb.terminator as? ReturnInst
+        if riOpt != nil {
+          msg = "exit " + msg
+        }
+        for succBB in bb.successors {
+          msg += succBB.shortDescription + " "
+        }
+        logADCS(msg: msg)
+      }
+    }
+    logADCS(msg: "VJP BBs begin")
+    printBlocks(f: vjp)
+    logADCS(msg: "VJP BBs end")
+    logADCS(msg: "PB BBs begin")
+    printBlocks(f: pb)
+    logADCS(msg: "PB BBs end")
     return nil
   }
   var dict = [BasicBlock: BasicBlock]()
@@ -1236,14 +1257,14 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
   for pbBB in pb.blocks {
     if pbBB.isReachableExitBlock {
       if pbBBOpt != nil {
-        logADCS(msg: "BBBBBB 01")
+        logADCS(prefix: prefix, msg: "01")
         return nil
       }
       pbBBOpt = pbBB
     }
   }
   if pbBBOpt == nil {
-    logADCS(msg: "BBBBBB 02")
+    logADCS(prefix: prefix, msg: "02")
     return nil
   }
   let pbBB = pbBBOpt!
@@ -1254,7 +1275,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
     }
     dict[vjpBBArg] = pbBBArg
     if (vjpBBArg.singleSuccessor == nil) != (pbBBArg.singlePredecessor == nil) {
-      logADCS(msg: "BBBBBB 03")
+      logADCS(prefix: prefix, msg: "03")
       return false
     }
     if vjpBBArg.singleSuccessor != nil {
@@ -1270,7 +1291,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
         vjpSuccOKCount += 1
         predPbBBToSuccVjpBB[pb.entryBlock] = vjpSuccBB
         if !dfs(vjpBBArg: vjpSuccBB, pbBBArg: pb.entryBlock) {
-          logADCS(msg: "BBBBBB 04")
+          logADCS(prefix: prefix, msg: "04")
           return false
         }
         continue
@@ -1289,7 +1310,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
         break
       }
       if eiOpt == nil {
-        logADCS(msg: "BBBBBB 05")
+        logADCS(prefix: prefix, msg: "05")
         return false
       }
       let enumType = eiOpt!.results[0].type
@@ -1303,7 +1324,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
           && pbPredBBArg.type.tupleElements[0] == enumType
         {
           if newPredBB != nil {
-            logADCS(msg: "BBBBBB 06")
+            logADCS(prefix: prefix, msg: "06")
             return false
           }
           newPredBB = pbPredBB
@@ -1311,7 +1332,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
       }
       if newPredBB == nil {
         if remainingVjpBB != nil {
-          logADCS(msg: "BBBBBB 07")
+          logADCS(prefix: prefix, msg: "07")
           return false
         }
         remainingVjpBB = vjpSuccBB
@@ -1320,7 +1341,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
       vjpSuccOKCount += 1
       predPbBBToSuccVjpBB[newPredBB!] = vjpSuccBB
       if !dfs(vjpBBArg: vjpSuccBB, pbBBArg: newPredBB!) {
-        logADCS(msg: "BBBBBB 08")
+        logADCS(prefix: prefix, msg: "08")
         return false
       }
     }
@@ -1335,7 +1356,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
       }
       assert(remainingPbBB != nil)
       if !dfs(vjpBBArg: remainingVjpBB!, pbBBArg: remainingPbBB!) {
-        logADCS(msg: "BBBBBB 09")
+        logADCS(prefix: prefix, msg: "09")
         return false
       }
     }
@@ -1347,7 +1368,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
     assert(dict.count == vjp.blocks.count)
     return dict
   }
-  logADCS(msg: "BBBBBB 10")
+  logADCS(prefix: prefix, msg: "10")
   return nil
 }
 
