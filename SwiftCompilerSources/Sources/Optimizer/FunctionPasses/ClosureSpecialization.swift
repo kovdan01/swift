@@ -107,11 +107,22 @@ private let verbose = false
 
 // TODO: unify existing and new logging
 let needLogADCS = true
+var passRunCount = 0
 private func logADCS(prefix: String = "", msg: String) {
   if !needLogADCS {
     return
   }
-  debugLog("[ADCS] " + prefix + msg)
+  assert(passRunCount == 1 || passRunCount == 2)
+  let allLinesPrefix = "[ADCS][" + String(passRunCount) + "] "
+  let linesArray = msg.split(separator: "\n")
+  for (idx, line) in linesArray.enumerated() {
+    if idx == 0 {
+      debugLog(allLinesPrefix + prefix + line)
+    } else {
+      debugLog(allLinesPrefix + line)
+    }
+  }
+  //debugLog(prefix + msg)
 }
 
 private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
@@ -492,8 +503,19 @@ private func multiBBHelper(
 
 }
 
-let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-specialization") {
+let autodiffClosureSpecialization1 = FunctionPass(name: "autodiff-closure-specialization1") {
   (function: Function, context: FunctionPassContext) in
+  passRunCount = 1
+  autodiffClosureSpecialization(function: function, context: context)
+}
+
+let autodiffClosureSpecialization2 = FunctionPass(name: "autodiff-closure-specialization2") {
+  (function: Function, context: FunctionPassContext) in
+  passRunCount = 2
+  autodiffClosureSpecialization(function: function, context: context)
+}
+
+func autodiffClosureSpecialization(function: Function, context: FunctionPassContext) {
 
   guard !function.isDefinedExternally,
     function.isAutodiffVJP
@@ -618,11 +640,13 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
   let cfOpt = ri.returnedValue.definingInstruction as? ConvertFunctionInst
   if tiOpt == nil && paiOpt == nil && cfOpt == nil {
     logADCS(msg: "AAAAAA 02 BEGIN")
-    debugPrint("AAAAAA 02 BEGIN X")
-    debugPrint(ri.returnedValue.definingInstruction)
+    if ri.returnedValue.definingInstruction == nil {
+      logADCS(msg: "nil")
+    } else {
+      logADCS(msg: ri.returnedValue.definingInstruction!.description)
+    }
     logADCS(msg: "AAAAAA 02 MIDDLE")
-    debugPrint("AAAAAA 02 MIDDLE X")
-    debugPrint(exitBBOpt!)
+    logADCS(msg: exitBBOpt!.description)
     logADCS(msg: "AAAAAA 02 END")
     debugLog("AAAAAA 02 END X")
     return nil
@@ -633,7 +657,6 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
   if cfOpt != nil {
     let pai = cfOpt!.operands[0].value as? PartialApplyInst
     if pai == nil {
-      debugPrint("AAAAAAA 05")
       logADCS(msg: "AAAAAAA 05")
     }
     return pai
