@@ -962,35 +962,18 @@ private func rewriteApplyInstructionCFG(
     }
     bb.bridged.recreateEnumBlockArgument(arg.bridged)
   }
+  let pai = callSite.applySite as! PartialApplyInst
 
   let builderSucc = Builder(
-    atEndOf: callSite.applySite.parentBlock,
+    before: pai,
     location: callSite.applySite.parentBlock.instructions.last!.location, context)
 
-  let pai = callSite.applySite as! PartialApplyInst
   let paiFunction = pai.operands[0].value
   let paiConvention = pai.calleeConvention
   let paiHasUnknownResultIsolation = pai.hasUnknownResultIsolation
   let paiSubstitutionMap = SubstitutionMap(bridged: pai.bridged.getSubstitutionMap())
   let paiIsOnStack = pai.isOnStack
 
-  let returnInst = vjpExitBB.terminator as! ReturnInst
-  let tupleInst = returnInst.returnedValue.definingInstruction as? TupleInst
-  var tupleElem = Value?(nil)
-  if tupleInst != nil {
-    tupleElem = tupleInst!.operands[0].value
-  }
-  if tupleInst == nil {
-    let paiOpt = returnInst.returnedValue.definingInstruction as? PartialApplyInst
-    if paiOpt != nil {
-      assert(pai == paiOpt)
-    } else {
-      let cfOpt = returnInst.returnedValue.definingInstruction as? ConvertFunctionInst
-      assert(cfOpt != nil)
-      let paiOpt = cfOpt!.operands[0].value as? PartialApplyInst
-      assert(paiOpt != nil)
-    }
-  }
   // TODO assert that PAI is on index 1 in tuple
   let functionRefInst = paiFunction as! FunctionRefInst
 
@@ -1004,25 +987,7 @@ private func rewriteApplyInstructionCFG(
     capturedArguments: newCapturedArgs, calleeConvention: paiConvention,
     hasUnknownResultIsolation: paiHasUnknownResultIsolation, isOnStack: paiIsOnStack)
 
-  if tupleInst != nil {
-    vjpExitBB.eraseInstruction(returnInst)
-    vjpExitBB.eraseInstruction(tupleInst!)
-    vjpExitBB.eraseInstruction(pai)
-  }
-  //let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
-  //functionRefInst.replace(with: newFunctionRefInst, context)
-
-  //  let newPai: PartialApplyInst = builderSucc.createPartialApply(
-  //    function: newFunctionRefInst, substitutionMap: paiSubstitutionMap,
-  //    capturedArguments: newCapturedArgs, calleeConvention: paiConvention,
-  //    hasUnknownResultIsolation: paiHasUnknownResultIsolation, isOnStack: paiIsOnStack)
-  if tupleInst != nil {
-    let newTupleInst = builderSucc.createTuple(elements: [tupleElem!, newPai])
-    builderSucc.createReturn(of: newTupleInst)
-  } else {
-    //builderSucc.createReturn(of: newPai)
-    pai.replace(with: newPai, context)
-  }
+  pai.replace(with: newPai, context)
 
   let vjpBBToTupleInstMap = getVjpBBToTupleInstMap(vjp: vjp)!
 
