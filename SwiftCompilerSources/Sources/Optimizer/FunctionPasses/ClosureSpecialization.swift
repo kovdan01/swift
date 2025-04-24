@@ -122,7 +122,6 @@ private func logADCS(prefix: String = "", msg: String) {
       debugLog(allLinesPrefix + line)
     }
   }
-  //debugLog(prefix + msg)
 }
 
 private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
@@ -169,7 +168,24 @@ extension Type {
   }
 }
 
-func checkSinglePathToNormalExit(vjp: Function) -> Bool {
+func dumpVJP(vjp: Function) {
+  logADCS(msg: "VJP dump begin")
+  logADCS(msg: vjp.description)
+  logADCS(msg: "VJP dump end")
+}
+
+func dumpPB(pb: Function) {
+  logADCS(msg: "PB dump begin")
+  logADCS(msg: pb.description)
+  logADCS(msg: "PB dump end")
+}
+
+func dumpVJPAndPB(vjp: Function, pb: Function) {
+  dumpVJP(vjp: vjp)
+  dumpPB(pb: pb)
+}
+
+func checkSinglePathToNormalExit(vjp: Function, pb: Function) -> Bool {
   var pathsToNormalExitCnt = 0
   var exitBBOpt = BasicBlock?(nil)
   for bb in vjp.blocks {
@@ -188,7 +204,14 @@ func checkSinglePathToNormalExit(vjp: Function) -> Bool {
   }
   let exitBB = exitBBOpt!
   // MYTODO: can we assume that there are no loops since that case is handled earlier?
+  // Just in case, use this counter and high enough limit to abort if we run into loop
+  var dfsIteration = 0
+  let dfsIterationLimit = 999999
   func dfs(bb: BasicBlock) {
+    dfsIteration += 1
+    if dfsIteration > dfsIterationLimit {
+      return
+    }
     if pathsToNormalExitCnt > 1 {
       return
     }
@@ -201,14 +224,20 @@ func checkSinglePathToNormalExit(vjp: Function) -> Bool {
     }
   }
   dfs(bb: vjp.entryBlock)
+  if dfsIteration > dfsIterationLimit {
+    logADCS(
+      msg: "checkSinglePathToNormalExit: probably with a loop, vjp.blocks.count = "
+        + String(vjp.blocks.count)
+        + ", pb.blocks.count = 1")
+    dumpVJPAndPB(vjp: vjp, pb: pb)
+    return true
+  }
   assert(pathsToNormalExitCnt > 0)
   if pathsToNormalExitCnt > 1 {
     logADCS(
       msg: "checkSinglePathToNormalExit: vjp.blocks.count = " + String(vjp.blocks.count)
         + ", pb.blocks.count = 1")
-    logADCS(msg: "DDDDDD 00 BEGIN")
-    logADCS(msg: vjp.description)
-    logADCS(msg: "DDDDDD 00 END")
+    dumpVJPAndPB(vjp: vjp, pb: pb)
     return true
   } else {
     logADCS(
@@ -252,20 +281,16 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
       }
     }
     if pb.blocks.count == 1 {
-      if !checkSinglePathToNormalExit(vjp: vjp) {
+      if !checkSinglePathToNormalExit(vjp: vjp, pb: pb) {
         return false
       }
     }
-    logADCS(msg: "EEEEE 00 BEGIN")
-    logADCS(msg: vjp.description)
-    logADCS(msg: "EEEEE 00 MIDDLE")
-    logADCS(msg: pb.description)
-    logADCS(msg: "EEEEE 00 END")
     logADCS(
       prefix: prefixFail,
       msg: "partial_apply of pullback in exit basic block of VJP has "
         + String(branchTracingEnumArgCounter)
         + " branch tracing enum arguments, but exactly 1 is expected")
+    dumpVJPAndPB(vjp: vjp, pb: pb)
     return false
   }
 
@@ -536,10 +561,6 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
       msg:
         "The VJP " + function.name.string
         + " has passed the preliminary check. Proceeding to running the pass")
-  } else {
-    logADCS(
-      msg:
-        "SINGLE BB: Trying to run AutoDiff Closure Specialization pass on " + function.name.string)
   }
 
   var remainingSpecializationRounds = 5
@@ -617,6 +638,7 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
 private let specializationLevelLimit = 2
 
 private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApplyInst? {
+  let prefix = "getPartialApplyOfPullbackInExitVJPBB: failure reason "
   var exitBBOpt = BasicBlock?(nil)
   for block in vjp.blocks {
     if block.isReachableExitBlock {
@@ -624,57 +646,70 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
         continue
       }
       if exitBBOpt != nil {
-        logADCS(msg: "AAAAAA 00")
+        logADCS(prefix: prefix, msg: "0")
         return nil
       }
       exitBBOpt = block
     }
   }
   if exitBBOpt == nil {
-    logADCS(msg: "AAAAAA 01")
+    logADCS(prefix: prefix, msg: "1")
     return nil
   }
   let ri = exitBBOpt!.terminator as! ReturnInst
-  let tiOpt = ri.returnedValue.definingInstruction as? TupleInst
-  let paiOpt = ri.returnedValue.definingInstruction as? PartialApplyInst
-  let cfOpt = ri.returnedValue.definingInstruction as? ConvertFunctionInst
-  if tiOpt == nil && paiOpt == nil && cfOpt == nil {
-    logADCS(msg: "AAAAAA 02 BEGIN")
-    if ri.returnedValue.definingInstruction == nil {
-      logADCS(msg: "nil")
-    } else {
-      logADCS(msg: ri.returnedValue.definingInstruction!.description)
-    }
-    logADCS(msg: "AAAAAA 02 MIDDLE")
-    logADCS(msg: exitBBOpt!.description)
-    logADCS(msg: "AAAAAA 02 END")
-    debugLog("AAAAAA 02 END X")
+  if ri.returnedValue.definingInstruction == nil {
+    logADCS(prefix: prefix, msg: "2")
     return nil
   }
-  if paiOpt != nil {
-    return paiOpt
-  }
-  if cfOpt != nil {
+
+  func handleConvertFunctionOrPartialApply(inst: Instruction) -> PartialApplyInst? {
+    let paiOpt = inst as? PartialApplyInst
+    let cfOpt = inst as? ConvertFunctionInst
+    if paiOpt != nil {
+      return paiOpt!
+    }
+    if cfOpt == nil {
+      logADCS(prefix: prefix, msg: "3")
+      logADCS(msg: "  instruction: " + inst.description)
+      logADCS(msg: "  parent block begin")
+      logADCS(msg: "  " + inst.parentBlock.description)
+      logADCS(msg: "  parent block end")
+      return nil
+    }
     let pai = cfOpt!.operands[0].value as? PartialApplyInst
     if pai == nil {
-      logADCS(msg: "AAAAAAA 05")
+      logADCS(prefix: prefix, msg: "4")
+      logADCS(msg: "  value: " + cfOpt!.operands[0].value.description)
+      logADCS(msg: "  parent block begin")
+      logADCS(msg: "  " + cfOpt!.parentBlock.description)
+      logADCS(msg: "  parent block end")
     }
     return pai
   }
-  assert(tiOpt != nil)
+
+  let tiOpt = ri.returnedValue.definingInstruction as? TupleInst
+  if tiOpt == nil {
+    return handleConvertFunctionOrPartialApply(inst: ri.returnedValue.definingInstruction!)
+  }
   let ti = tiOpt!
-  //  guard let ti = ri.returnedValue.definingInstruction as? TupleInst else {
-  //    return nil
-  //  }
   if ti.operands.count != 2 {
-    logADCS(msg: "AAAAAA 03")
+    logADCS(prefix: prefix, msg: "5")
+    logADCS(msg: "  ti: " + ti.description)
+    logADCS(msg: "  parent block begin")
+    logADCS(msg: "  " + ti.parentBlock.description)
+    logADCS(msg: "  parent block end")
     return nil
   }
-  let tmp = ti.operands[1].value.definingInstruction as? PartialApplyInst
-  if tmp == nil {
-    logADCS(msg: "AAAAAA 04")
+  if ti.operands[1].value.definingInstruction == nil {
+    logADCS(prefix: prefix, msg: "6")
+    logADCS(msg: "  ti: " + ti.description)
+    logADCS(msg: "  value: " + ti.operands[1].value.description)
+    logADCS(msg: "  parent block begin")
+    logADCS(msg: "  " + ti.parentBlock.description)
+    logADCS(msg: "  parent block end")
+    return nil
   }
-  return ti.operands[1].value.definingInstruction as? PartialApplyInst
+  return handleConvertFunctionOrPartialApply(inst: ti.operands[1].value.definingInstruction!)
 }
 
 private func gatherCallSite(in caller: Function, _ context: FunctionPassContext) -> CallSite? {
@@ -1348,9 +1383,9 @@ private func handleNonAppliesCFG(
       logADCS(msg: "handleNonAppliesCFG: unexpected use of closure")
       logADCS(msg: "handleNonAppliesCFG:   closure: " + rootClosure.description)
       logADCS(msg: "handleNonAppliesCFG:   use.instruction: " + use.instruction.description)
-      logADCS(msg: "handleNonAppliesCFG: AAAAA")
-      logADCS(msg: "handleNonAppliesCFG: " + use.instruction.parentBlock.description)
-      logADCS(msg: "handleNonAppliesCFG: BBBBB")
+      logADCS(msg: "handleNonAppliesCFG:   parent block of use begin")
+      logADCS(msg: "handleNonAppliesCFG:   " + use.instruction.parentBlock.description)
+      logADCS(msg: "handleNonAppliesCFG:   parent block of use end")
       return []
     }
     for tiUse in ti.uses {
