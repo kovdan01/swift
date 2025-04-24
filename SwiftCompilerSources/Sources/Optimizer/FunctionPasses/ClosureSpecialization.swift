@@ -158,6 +158,50 @@ extension Type {
   }
 }
 
+func checkSinglePathToNormalExit(vjp: Function) {
+  var pathsToNormalExitCnt = 0
+  var exitBBOpt = BasicBlock?(nil)
+  for bb in vjp.blocks {
+    if bb.isReachableExitBlock {
+      let unreachableInstOpt = bb.terminator as? UnreachableInst
+      if unreachableInstOpt != nil {
+        continue
+      }
+      assert(exitBBOpt == nil)
+      exitBBOpt = bb
+    }
+  }
+  if exitBBOpt == nil {
+    logADCS(msg: "checkSinglePathToNormalExit: vjp has no reachable exit block")
+    return
+  }
+  let exitBB = exitBBOpt!
+  // MYTODO: can we assume that there are no loops since that case is handled earlier?
+  func dfs(bb: BasicBlock) {
+    if pathsToNormalExitCnt > 1 {
+      return
+    }
+    if bb == exitBB {
+      pathsToNormalExitCnt += 1
+      return
+    }
+    for succBB in bb.successors {
+      dfs(bb: succBB)
+    }
+  }
+  dfs(bb: vjp.entryBlock)
+  assert(pathsToNormalExitCnt > 0)
+  if pathsToNormalExitCnt > 1 {
+    logADCS(
+      msg: "checkSinglePathToNormalExit: vjp.blocks.count = " + String(vjp.blocks.count)
+        + ", pb.blocks.count = 1")
+  } else {
+    logADCS(
+      msg: "checkSinglePathToNormalExit: vjp has " + String(vjp.blocks.count)
+        + " blocks but only 1 path to normal exit, this will be handled later")
+  }
+}
+
 func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
   assert(vjp.blocks.singleElement == nil)
 
@@ -179,7 +223,8 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
       debugPrint("CCCCCC 00")
     } else {
       debugPrint("CCCCCC 01")
-      debugPrint("vjp blocks count = ", vjp.blocks.count, ", pb blocks count = ", pbOpt!.blocks.count)
+      debugPrint(
+        "vjp blocks count = ", vjp.blocks.count, ", pb blocks count = ", pbOpt!.blocks.count)
       if vjp.blocks.count == pbOpt!.blocks.count {
         debugPrint("CCCCCC TRUE!!!")
       }
@@ -190,6 +235,7 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
         debugPrint("CCCCCC 05")
         debugPrint(pbOpt!)
         debugPrint("CCCCCC 06")
+        checkSinglePathToNormalExit(vjp: vjp)
       } else {
         debugPrint(pbOpt!.entryBlock)
       }
@@ -460,7 +506,7 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
         "The VJP " + function.name.string
         + " has passed the preliminary check. Proceeding to running the pass")
   } else {
-     logADCS(
+    logADCS(
       msg:
         "SINGLE BB: Trying to run AutoDiff Closure Specialization pass on " + function.name.string)
   }
@@ -864,19 +910,18 @@ private func rewriteApplyInstructionCFG(
     capturedArguments: newCapturedArgs, calleeConvention: paiConvention,
     hasUnknownResultIsolation: paiHasUnknownResultIsolation, isOnStack: paiIsOnStack)
 
-
   if tupleInst != nil {
-  vjpExitBB.eraseInstruction(returnInst)
+    vjpExitBB.eraseInstruction(returnInst)
     vjpExitBB.eraseInstruction(tupleInst!)
-  vjpExitBB.eraseInstruction(pai)
+    vjpExitBB.eraseInstruction(pai)
   }
   //let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
   //functionRefInst.replace(with: newFunctionRefInst, context)
 
-//  let newPai: PartialApplyInst = builderSucc.createPartialApply(
-//    function: newFunctionRefInst, substitutionMap: paiSubstitutionMap,
-//    capturedArguments: newCapturedArgs, calleeConvention: paiConvention,
-//    hasUnknownResultIsolation: paiHasUnknownResultIsolation, isOnStack: paiIsOnStack)
+  //  let newPai: PartialApplyInst = builderSucc.createPartialApply(
+  //    function: newFunctionRefInst, substitutionMap: paiSubstitutionMap,
+  //    capturedArguments: newCapturedArgs, calleeConvention: paiConvention,
+  //    hasUnknownResultIsolation: paiHasUnknownResultIsolation, isOnStack: paiIsOnStack)
   if tupleInst != nil {
     let newTupleInst = builderSucc.createTuple(elements: [tupleElem!, newPai])
     builderSucc.createReturn(of: newTupleInst)
@@ -1112,14 +1157,9 @@ extension UseList {
 
 private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: BasicBlock]? {
   if vjp.blocks.count != pb.blocks.count {
-    debugPrint("BBBBBB 00 BEGIN")
-    debugPrint(vjp.blocks.count)
-    debugPrint(vjp)
-    debugPrint("BBBBBB 00 MIDDLE")
-    debugPrint(pb.blocks.count)
-    debugPrint(pb)
-    debugPrint("BBBBBB 00 END")
-    logADCS(msg: "BBBBBB 00")
+    logADCS(
+      msg: "getVjpBBToPbBBMap: vjp.blocks.count = " + String(vjp.blocks.count)
+        + ", pb.blocks.count = " + String(pb.blocks.count))
     return nil
   }
   var dict = [BasicBlock: BasicBlock]()
@@ -1252,24 +1292,24 @@ private func handleNonAppliesCFG(
 {
   var closureInfoArr = [ClosureInfoCFG]()
 
-  var closure : SingleValueInstruction = rootClosure
-//  for use in rootClosure.uses {
-//    let cfiOpt = use.instruction as? ConvertFunctionInst
-//    if cfiOpt == nil {
-//      continue
-//    }
-//    if rootClosure.uses.count != 1 {
-//      logADCS(msg: "handleNonAppliesCFG: convert_function is present, but is not the only use of the closure (total uses " + String(rootClosure.uses.count) + ")")
-//      logADCS(msg: "handleNonAppliesCFG:   closure: " + rootClosure.description)
-//      logADCS(msg: "handleNonAppliesCFG:   uses begin")
-//      for inner in rootClosure.uses {
-//        logADCS(msg: "handleNonAppliesCFG:     " + inner.instruction.description)
-//      }
-//      logADCS(msg: "handleNonAppliesCFG:   uses end")
-//      return []
-//    }
-//    closure = cfiOpt!
-//  }
+  var closure: SingleValueInstruction = rootClosure
+  //  for use in rootClosure.uses {
+  //    let cfiOpt = use.instruction as? ConvertFunctionInst
+  //    if cfiOpt == nil {
+  //      continue
+  //    }
+  //    if rootClosure.uses.count != 1 {
+  //      logADCS(msg: "handleNonAppliesCFG: convert_function is present, but is not the only use of the closure (total uses " + String(rootClosure.uses.count) + ")")
+  //      logADCS(msg: "handleNonAppliesCFG:   closure: " + rootClosure.description)
+  //      logADCS(msg: "handleNonAppliesCFG:   uses begin")
+  //      for inner in rootClosure.uses {
+  //        logADCS(msg: "handleNonAppliesCFG:     " + inner.instruction.description)
+  //      }
+  //      logADCS(msg: "handleNonAppliesCFG:   uses end")
+  //      return []
+  //    }
+  //    closure = cfiOpt!
+  //  }
 
   for use in closure.uses {
     guard let ti = use.instruction as? TupleInst else {
@@ -1291,7 +1331,8 @@ private func handleNonAppliesCFG(
           logADCS(msg: "handleNonAppliesCFG:   tiUse.instruction: " + tiUse.instruction.description)
           return []
         }
-        let paiOfPbInExitVjpBB = getPartialApplyOfPullbackInExitVJPBB(vjp: rootClosure.parentFunction)!
+        let paiOfPbInExitVjpBB = getPartialApplyOfPullbackInExitVJPBB(
+          vjp: rootClosure.parentFunction)!
         let paiOpt = rootClosure as? PartialApplyInst
         if paiOpt != paiOfPbInExitVjpBB {
           logADCS(msg: "handleNonAppliesCFG: unexpected use of tuple")
@@ -1299,7 +1340,10 @@ private func handleNonAppliesCFG(
           logADCS(msg: "handleNonAppliesCFG:   tuple: " + ti.description)
           logADCS(msg: "handleNonAppliesCFG:   tiUse.instruction: " + tiUse.instruction.description)
         } else {
-          logADCS(msg: "handleNonAppliesCFG: this is partial_apply of top-level pullback and return of corresponding tuple; it is expected behavior")
+          logADCS(
+            msg:
+              "handleNonAppliesCFG: this is partial_apply of top-level pullback and return of corresponding tuple; it is expected behavior"
+          )
         }
         return []
       }
