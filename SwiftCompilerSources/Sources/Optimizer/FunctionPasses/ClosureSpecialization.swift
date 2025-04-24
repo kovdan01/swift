@@ -158,7 +158,7 @@ extension Type {
   }
 }
 
-func checkSinglePathToNormalExit(vjp: Function) {
+func checkSinglePathToNormalExit(vjp: Function) -> Bool {
   var pathsToNormalExitCnt = 0
   var exitBBOpt = BasicBlock?(nil)
   for bb in vjp.blocks {
@@ -173,7 +173,7 @@ func checkSinglePathToNormalExit(vjp: Function) {
   }
   if exitBBOpt == nil {
     logADCS(msg: "checkSinglePathToNormalExit: vjp has no reachable exit block")
-    return
+    return false
   }
   let exitBB = exitBBOpt!
   // MYTODO: can we assume that there are no loops since that case is handled earlier?
@@ -195,10 +195,15 @@ func checkSinglePathToNormalExit(vjp: Function) {
     logADCS(
       msg: "checkSinglePathToNormalExit: vjp.blocks.count = " + String(vjp.blocks.count)
         + ", pb.blocks.count = 1")
+    logADCS(msg: "DDDDDD 00 BEGIN")
+    logADCS(msg: vjp.description)
+    logADCS(msg: "DDDDDD 00 END")
+    return true
   } else {
     logADCS(
       msg: "checkSinglePathToNormalExit: vjp has " + String(vjp.blocks.count)
         + " blocks but only 1 path to normal exit, this will be handled later")
+    return false
   }
 }
 
@@ -219,28 +224,32 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
   }
   if branchTracingEnumArgCounter != 1 {
     let pbOpt = paiOfPb.referencedFunction
-    if pbOpt == nil {
-      debugPrint("CCCCCC 00")
-    } else {
-      debugPrint("CCCCCC 01")
-      debugPrint(
-        "vjp blocks count = ", vjp.blocks.count, ", pb blocks count = ", pbOpt!.blocks.count)
-      if vjp.blocks.count == pbOpt!.blocks.count {
-        debugPrint("CCCCCC TRUE!!!")
+    assert(pbOpt != nil)
+    let pb = pbOpt!
+    for inst in vjp.instructions {
+      let builtinInstOpt = inst as? BuiltinInst
+      if builtinInstOpt == nil {
+        continue
       }
-      debugPrint("CCCCCC 02")
-      if pbOpt!.blocks.count == 1 {
-        debugPrint("CCCCCC 04")
-        debugPrint(vjp)
-        debugPrint("CCCCCC 05")
-        debugPrint(pbOpt!)
-        debugPrint("CCCCCC 06")
-        checkSinglePathToNormalExit(vjp: vjp)
-      } else {
-        debugPrint(pbOpt!.entryBlock)
+      let builtinInst = builtinInstOpt!
+      if builtinInst.name.string == "autoDiffProjectTopLevelSubcontext" {
+        logADCS(
+          msg:
+            "VJP seems to contain a loop (builtin autoDiffProjectTopLevelSubcontext detected), this is not supported"
+        )
+        return false
       }
-      debugPrint("CCCCCC 03")
     }
+    if pb.blocks.count == 1 {
+      if !checkSinglePathToNormalExit(vjp: vjp) {
+        return false
+      }
+    }
+    logADCS(msg: "EEEEE 00 BEGIN")
+    logADCS(msg: vjp.description)
+    logADCS(msg: "EEEEE 00 MIDDLE")
+    logADCS(msg: pb.description)
+    logADCS(msg: "EEEEE 00 END")
     logADCS(
       prefix: prefixFail,
       msg: "partial_apply of pullback in exit basic block of VJP has "
