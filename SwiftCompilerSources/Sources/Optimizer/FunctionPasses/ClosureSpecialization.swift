@@ -106,8 +106,8 @@ import SILBridging
 private let verbose = false
 
 // TODO: unify existing and new logging
-let needLogADCS = true
-var passRunCount = 0
+private let needLogADCS = true
+private var passRunCount = 0
 private func logADCS(prefix: String = "", msg: String) {
   if !needLogADCS {
     return
@@ -168,24 +168,24 @@ extension Type {
   }
 }
 
-func dumpVJP(vjp: Function) {
+private func dumpVJP(vjp: Function) {
   logADCS(msg: "VJP dump begin")
   logADCS(msg: vjp.description)
   logADCS(msg: "VJP dump end")
 }
 
-func dumpPB(pb: Function) {
+private func dumpPB(pb: Function) {
   logADCS(msg: "PB dump begin")
   logADCS(msg: pb.description)
   logADCS(msg: "PB dump end")
 }
 
-func dumpVJPAndPB(vjp: Function, pb: Function) {
+private func dumpVJPAndPB(vjp: Function, pb: Function) {
   dumpVJP(vjp: vjp)
   dumpPB(pb: pb)
 }
 
-func checkSinglePathToNormalExit(vjp: Function, pb: Function) -> Bool {
+private func checkSinglePathToNormalExit(vjp: Function, pb: Function) -> Bool {
   var pathsToNormalExitCnt = 0
   var exitBBOpt = BasicBlock?(nil)
   for bb in vjp.blocks {
@@ -247,7 +247,7 @@ func checkSinglePathToNormalExit(vjp: Function, pb: Function) -> Bool {
   }
 }
 
-func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
+private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
   assert(vjp.blocks.singleElement == nil)
 
   let prefixFail = "Cannot run AutoDiff Closure Specialization on " + vjp.name.string + ": "
@@ -453,7 +453,7 @@ func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
   return true
 }
 
-func getVjpBBToTupleInstMap(vjp: Function) -> [BasicBlock: TupleInst]? {
+private func getVjpBBToTupleInstMap(vjp: Function) -> [BasicBlock: TupleInst]? {
   let prefix = "getVjpBBToTupleInstMap: failure reason "
   var vjpBBToTupleInstMap = [BasicBlock: TupleInst]()
   for bb in vjp.blocks {
@@ -525,7 +525,7 @@ private func multiBBHelper(
     }
   }
 
-  var (specializedFunction, alreadyExists) =
+  let (specializedFunction, alreadyExists) =
     getOrCreateSpecializedFunctionCFG(
       basedOn: callSite, enumDict: &enumDict, context)
 
@@ -619,7 +619,7 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
     let callSite = callSiteOpt!
 
     if isSingleBB {
-      var (specializedFunction, alreadyExists) = getOrCreateSpecializedFunction(
+      let (specializedFunction, alreadyExists) = getOrCreateSpecializedFunction(
         basedOn: callSite, context)
 
       if !alreadyExists {
@@ -968,14 +968,12 @@ private func rewriteApplyInstructionCFG(
     before: pai,
     location: callSite.applySite.parentBlock.instructions.last!.location, context)
 
-  let paiFunction = pai.operands[0].value
   let paiConvention = pai.calleeConvention
   let paiHasUnknownResultIsolation = pai.hasUnknownResultIsolation
   let paiSubstitutionMap = SubstitutionMap(bridged: pai.bridged.getSubstitutionMap())
   let paiIsOnStack = pai.isOnStack
 
   // TODO assert that PAI is on index 1 in tuple
-  let functionRefInst = paiFunction as! FunctionRefInst
 
   let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
   var newCapturedArgs = [Value]()
