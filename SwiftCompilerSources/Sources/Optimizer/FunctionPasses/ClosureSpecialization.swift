@@ -187,67 +187,7 @@ private func dumpVJPAndPB(vjp: Function, pb: Function) {
   dumpPB(pb: pb)
 }
 
-private func checkSinglePathToNormalExit(vjp: Function, pb: Function) -> Bool {
-  var pathsToNormalExitCnt = 0
-  var exitBBOpt = BasicBlock?(nil)
-  for bb in vjp.blocks {
-    if bb.isReachableExitBlock {
-      let unreachableInstOpt = bb.terminator as? UnreachableInst
-      if unreachableInstOpt != nil {
-        continue
-      }
-      assert(exitBBOpt == nil)
-      exitBBOpt = bb
-    }
-  }
-  if exitBBOpt == nil {
-    logADCS(msg: "checkSinglePathToNormalExit: vjp has no reachable exit block")
-    return true
-  }
-  let exitBB = exitBBOpt!
-  // MYTODO: can we assume that there are no loops since that case is handled earlier?
-  // Just in case, use this counter and high enough limit to abort if we run into loop
-  var dfsIteration = 0
-  let dfsIterationLimit = 999999
-  func dfs(bb: BasicBlock) {
-    dfsIteration += 1
-    if dfsIteration > dfsIterationLimit {
-      return
-    }
-    if pathsToNormalExitCnt > 1 {
-      return
-    }
-    if bb == exitBB {
-      pathsToNormalExitCnt += 1
-      return
-    }
-    for succBB in bb.successors {
-      dfs(bb: succBB)
-    }
-  }
-  dfs(bb: vjp.entryBlock)
-  if dfsIteration > dfsIterationLimit {
-    logADCS(
-      msg: "checkSinglePathToNormalExit: probably with a loop, vjp.blocks.count = "
-        + String(vjp.blocks.count)
-        + ", pb.blocks.count = 1")
-    dumpVJPAndPB(vjp: vjp, pb: pb)
-    return true
-  }
-  assert(pathsToNormalExitCnt > 0)
-  if pathsToNormalExitCnt > 1 {
-    logADCS(
-      msg: "checkSinglePathToNormalExit: vjp.blocks.count = " + String(vjp.blocks.count)
-        + ", pb.blocks.count = 1")
-    dumpVJPAndPB(vjp: vjp, pb: pb)
-    return true
-  } else {
-    logADCS(
-      msg: "checkSinglePathToNormalExit: vjp has " + String(vjp.blocks.count)
-        + " blocks but only 1 path to normal exit, this will be handled later")
-    return false
-  }
-}
+var isMultiBBWithoutBranchTracingEnumPullbackArg: Bool = false
 
 private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
   assert(vjp.blocks.singleElement == nil)
@@ -283,11 +223,10 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
         return false
       }
     }
-    if pb.blocks.count == 1 {
-      if !checkSinglePathToNormalExit(vjp: vjp, pb: pb) {
-        logADCS(prefix: prefixFail, msg: "single path leads to normal exit in multi-BB VJP")
-        return false
-      }
+    if branchTracingEnumArgCounter == 0 {
+      isMultiBBWithoutBranchTracingEnumPullbackArg = true
+      logADCS(msg: "This is multi-BB case which would be handled as single-BB case")
+      return true
     }
     logADCS(
       prefix: prefixFail,
@@ -589,6 +528,12 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
       msg:
         "The VJP " + function.name.string
         + " has passed the preliminary check. Proceeding to running the pass")
+    if isMultiBBWithoutBranchTracingEnumPullbackArg {
+      logADCS(msg: "Dumping VJP and PB before pass run begin")
+      dumpVJPAndPB(
+        vjp: function, pb: getPartialApplyOfPullbackInExitVJPBB(vjp: function)!.referencedFunction!)
+      logADCS(msg: "Dumping VJP and PB before pass run end")
+    }
   }
 
   var remainingSpecializationRounds = 5
@@ -607,7 +552,7 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
     // the pullback closure is created (so for `partial_apply` instruction).
     let callSiteOpt = gatherCallSite(in: function, context)
     if callSiteOpt == nil {
-      if !isSingleBB {
+      if !(isSingleBB || isMultiBBWithoutBranchTracingEnumPullbackArg) {
         // TODO: it looks like that we do not have more than 1 round, at least for multi BB case
         logADCS(
           msg:
@@ -619,7 +564,7 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
 
     let callSite = callSiteOpt!
 
-    if isSingleBB {
+    if isSingleBB || isMultiBBWithoutBranchTracingEnumPullbackArg {
       let (specializedFunction, alreadyExists) = getOrCreateSpecializedFunction(
         basedOn: callSite, context)
 
@@ -652,6 +597,12 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
 
       if context.needFixStackNesting {
         function.fixStackNesting(context)
+      }
+
+      if isMultiBBWithoutBranchTracingEnumPullbackArg {
+        logADCS(msg: "Dumping VJP and PB at round \(remainingSpecializationRounds) begin")
+        dumpVJPAndPB(vjp: function, pb: specializedFunction)
+        logADCS(msg: "Dumping VJP and PB at round \(remainingSpecializationRounds) end")
       }
     } else {
       multiBBHelper(callSite: callSite, function: function, enumDict: &enumDict, context: context)
@@ -782,7 +733,7 @@ private func gatherCallSite(in caller: Function, _ context: FunctionPassContext)
       let rootClosure = inst.asSupportedClosure
     {
       supportedClosuresCount += 1
-      if isSingleBB {
+      if isSingleBB || isMultiBBWithoutBranchTracingEnumPullbackArg {
         updateCallSite(
           for: rootClosure, in: &callSiteOpt,
           convertedAndReabstractedClosures: &convertedAndReabstractedClosures, context)
@@ -811,7 +762,7 @@ private func gatherCallSite(in caller: Function, _ context: FunctionPassContext)
     }
   }
 
-  if supportedClosuresCount == 0 && !isSingleBB {
+  if supportedClosuresCount == 0 && !(isSingleBB || isMultiBBWithoutBranchTracingEnumPullbackArg) {
     logADCS(msg: "No supported closures found in " + caller.name.string)
   }
 
@@ -823,6 +774,11 @@ private func getOrCreateSpecializedFunction(
 )
   -> (function: Function, alreadyExists: Bool)
 {
+  if isMultiBBWithoutBranchTracingEnumPullbackArg {
+    logADCS(msg: "getOrCreateSpecializedFunction: callSite begin")
+    logADCS(msg: "\(callSite)")
+    logADCS(msg: "getOrCreateSpecializedFunction: callSite end")
+  }
   let specializedFunctionName = callSite.specializedCalleeName(context)
   if let specializedFunction = context.lookupFunction(name: specializedFunctionName) {
     return (specializedFunction, true)
