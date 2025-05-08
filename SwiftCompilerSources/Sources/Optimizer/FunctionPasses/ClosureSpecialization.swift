@@ -109,7 +109,7 @@ private let verbose = false
 private let needLogADCS = true
 private var passRunCount = 0
 private func logADCS(prefix: String = "", msg: String) {
-  if !needLogADCS {
+  if !needLogADCS || passRunCount == 0 {
     return
   }
   assert(passRunCount == 1 || passRunCount == 2)
@@ -187,67 +187,7 @@ private func dumpVJPAndPB(vjp: Function, pb: Function) {
   dumpPB(pb: pb)
 }
 
-private func checkSinglePathToNormalExit(vjp: Function, pb: Function) -> Bool {
-  var pathsToNormalExitCnt = 0
-  var exitBBOpt = BasicBlock?(nil)
-  for bb in vjp.blocks {
-    if bb.isReachableExitBlock {
-      let unreachableInstOpt = bb.terminator as? UnreachableInst
-      if unreachableInstOpt != nil {
-        continue
-      }
-      assert(exitBBOpt == nil)
-      exitBBOpt = bb
-    }
-  }
-  if exitBBOpt == nil {
-    logADCS(msg: "checkSinglePathToNormalExit: vjp has no reachable exit block")
-    return true
-  }
-  let exitBB = exitBBOpt!
-  // MYTODO: can we assume that there are no loops since that case is handled earlier?
-  // Just in case, use this counter and high enough limit to abort if we run into loop
-  var dfsIteration = 0
-  let dfsIterationLimit = 999999
-  func dfs(bb: BasicBlock) {
-    dfsIteration += 1
-    if dfsIteration > dfsIterationLimit {
-      return
-    }
-    if pathsToNormalExitCnt > 1 {
-      return
-    }
-    if bb == exitBB {
-      pathsToNormalExitCnt += 1
-      return
-    }
-    for succBB in bb.successors {
-      dfs(bb: succBB)
-    }
-  }
-  dfs(bb: vjp.entryBlock)
-  if dfsIteration > dfsIterationLimit {
-    logADCS(
-      msg: "checkSinglePathToNormalExit: probably with a loop, vjp.blocks.count = "
-        + String(vjp.blocks.count)
-        + ", pb.blocks.count = 1")
-    dumpVJPAndPB(vjp: vjp, pb: pb)
-    return true
-  }
-  assert(pathsToNormalExitCnt > 0)
-  if pathsToNormalExitCnt > 1 {
-    logADCS(
-      msg: "checkSinglePathToNormalExit: vjp.blocks.count = " + String(vjp.blocks.count)
-        + ", pb.blocks.count = 1")
-    dumpVJPAndPB(vjp: vjp, pb: pb)
-    return true
-  } else {
-    logADCS(
-      msg: "checkSinglePathToNormalExit: vjp has " + String(vjp.blocks.count)
-        + " blocks but only 1 path to normal exit, this will be handled later")
-    return false
-  }
-}
+var isMultiBBWithoutBranchTracingEnumPullbackArg: Bool = false
 
 private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
   assert(vjp.blocks.singleElement == nil)
@@ -283,11 +223,10 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
         return false
       }
     }
-    if pb.blocks.count == 1 {
-      if !checkSinglePathToNormalExit(vjp: vjp, pb: pb) {
-        logADCS(prefix: prefixFail, msg: "single path leads to normal exit in multi-BB VJP")
-        return false
-      }
+    if branchTracingEnumArgCounter == 0 {
+      isMultiBBWithoutBranchTracingEnumPullbackArg = true
+      logADCS(msg: "This is multi-BB case which would be handled as single-BB case")
+      return true
     }
     logADCS(
       prefix: prefixFail,
@@ -510,10 +449,10 @@ private func getVjpBBToTupleInstMap(vjp: Function) -> [BasicBlock: TupleInst]? {
 }
 
 private func multiBBHelper(
-  callSite: CallSite, function: Function, enumDict: inout EnumDict, context: FunctionPassContext
+  pullbackClosureInfo: PullbackClosureInfo, function: Function, enumDict: inout EnumDict, context: FunctionPassContext
 ) {
   var closuresSet = Set<SingleValueInstruction>()
-  for closureInfo in callSite.closureInfosCFG {
+  for closureInfo in pullbackClosureInfo.closureInfosCFG {
     closuresSet.insert(closureInfo.closure)
   }
   let totalSupportedClosures = closuresSet.count
@@ -529,14 +468,14 @@ private func multiBBHelper(
 
   let (specializedFunction, alreadyExists) =
     getOrCreateSpecializedFunctionCFG(
-      basedOn: callSite, enumDict: &enumDict, context)
+      basedOn: pullbackClosureInfo, enumDict: &enumDict, context)
 
   if !alreadyExists {
-    context.notifyNewFunction(function: specializedFunction, derivedFrom: callSite.applyCallee)
+    context.notifyNewFunction(function: specializedFunction, derivedFrom: pullbackClosureInfo.pullbackFn)
   }
 
   rewriteApplyInstructionCFG(
-    using: specializedFunction, callSite: callSite,
+    using: specializedFunction, pullbackClosureInfo: pullbackClosureInfo,
     enumDict: enumDict, context: context)
 
   var specializedClosures: Int = 0
@@ -577,79 +516,101 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
   }
 
   let isSingleBB = function.blocks.singleElement != nil
+  isMultiBBWithoutBranchTracingEnumPullbackArg = false
+  var canRunMultiBB = false
 
   if !isSingleBB {
     logADCS(
       msg:
         "Trying to run AutoDiff Closure Specialization pass on " + function.name.string)
-    if !checkIfCanRun(vjp: function, context: context) {
-      return
+    canRunMultiBB = checkIfCanRun(vjp: function, context: context)
+    if canRunMultiBB {
+      logADCS(
+        msg:
+          "The VJP " + function.name.string
+          + " has passed the preliminary check. Proceeding to running the pass")
+      if isMultiBBWithoutBranchTracingEnumPullbackArg {
+        logADCS(msg: "Dumping VJP and PB before pass run begin")
+        dumpVJPAndPB(
+          vjp: function,
+          pb: getPartialApplyOfPullbackInExitVJPBB(vjp: function)!.referencedFunction!)
+        logADCS(msg: "Dumping VJP and PB before pass run end")
+      }
     }
-    logADCS(
-      msg:
-        "The VJP " + function.name.string
-        + " has passed the preliminary check. Proceeding to running the pass")
   }
 
   var remainingSpecializationRounds = 5
 
-  var enumDict: EnumDict = [:]
-  var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
-  defer {
-    adcsHelper.clearEnumDict()
-  }
-
   repeat {
-    if !isSingleBB {
-      logADCS(msg: "Remaining specialization rounds: " + String(remainingSpecializationRounds))
-    }
     guard let pullbackClosureInfo = getPullbackClosureInfo(in: function, context) else {
-      if !isSingleBB {
+      break
+    }
+
+    var (specializedFunction, alreadyExists) = getOrCreateSpecializedFunction(
+      basedOn: pullbackClosureInfo, context)
+
+    if !alreadyExists {
+      context.notifyNewFunction(function: specializedFunction, derivedFrom: pullbackClosureInfo.pullbackFn)
+    }
+
+    rewriteApplyInstruction(using: specializedFunction, pullbackClosureInfo: pullbackClosureInfo, context)
+
+    var deadClosures = InstructionWorklist(context)
+    pullbackClosureInfo.closureArgDescriptors
+      .map { $0.closure }
+      .forEach { deadClosures.pushIfNotVisited($0) }
+
+    defer {
+      deadClosures.deinitialize()
+    }
+
+    while let deadClosure = deadClosures.pop() {
+      let isDeleted = context.tryDeleteDeadClosure(closure: deadClosure as! SingleValueInstruction)
+      if isDeleted {
+        context.notifyInvalidatedStackNesting()
+      }
+    }
+
+
+    if context.needFixStackNesting {
+      function.fixStackNesting(context)
+    }
+
+    if isMultiBBWithoutBranchTracingEnumPullbackArg {
+      logADCS(msg: "Dumping VJP and PB at round \(remainingSpecializationRounds) begin")
+      dumpVJPAndPB(vjp: function, pb: specializedFunction)
+      logADCS(msg: "Dumping VJP and PB at round \(remainingSpecializationRounds) end")
+    }
+
+    remainingSpecializationRounds -= 1
+  } while remainingSpecializationRounds > 0
+
+  if !isSingleBB && canRunMultiBB && !isMultiBBWithoutBranchTracingEnumPullbackArg {
+    var enumDict: EnumDict = [:]
+    var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
+    defer {
+      adcsHelper.clearEnumDict()
+    }
+
+    remainingSpecializationRounds = 5
+    repeat {
+      logADCS(msg: "Remaining specialization rounds: " + String(remainingSpecializationRounds))
+      // TODO: Names here are pretty misleading. We are looking for a place where
+      // the pullback closure is created (so for `partial_apply` instruction).
+      guard let pullbackClosureInfo = getPullbackClosureInfoCFG(in: function, context) else {
         // TODO: it looks like that we do not have more than 1 round, at least for multi BB case
         logADCS(
           msg:
             "Unable to detect closures to be specialized in " + function.name.string
             + ", skipping the pass")
-      }
-      break
-    }
-
-    if isSingleBB {
-      var (specializedFunction, alreadyExists) = getOrCreateSpecializedFunction(
-        basedOn: pullbackClosureInfo, context)
-
-      if !alreadyExists {
-        context.notifyNewFunction(function: specializedFunction, derivedFrom: pullbackClosureInfo.pullbackFn)
+        break
       }
 
-      rewriteApplyInstruction(using: specializedFunction, pullbackClosureInfo: pullbackClosureInfo, context)
+      multiBBHelper(pullbackClosureInfo: pullbackClosureInfo, function: function, enumDict: &enumDict, context: context)
 
-      var deadClosures = InstructionWorklist(context)
-      pullbackClosureInfo.closureArgDescriptors
-        .map { $0.closure }
-        .forEach { deadClosures.pushIfNotVisited($0) }
-
-      defer {
-        deadClosures.deinitialize()
-      }
-
-      while let deadClosure = deadClosures.pop() {
-        let isDeleted = context.tryDeleteDeadClosure(closure: deadClosure as! SingleValueInstruction)
-        if isDeleted {
-          context.notifyInvalidatedStackNesting()
-        }
-      }
-
-
-      if context.needFixStackNesting {
-        function.fixStackNesting(context)
-      }
-    } else {
-      multiBBHelper(callSite: callSite, function: function, enumDict: &enumDict, context: context)
-    }
-
-    remainingSpecializationRounds -= 1
-  } while remainingSpecializationRounds > 0
+      remainingSpecializationRounds -= 1
+    } while remainingSpecializationRounds > 0
+  }
 }
 
 // =========== Top-level functions ========== //
@@ -731,6 +692,52 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
   return handleConvertFunctionOrPartialApply(inst: ti.operands[1].value.definingInstruction!)
 }
 
+
+private func getPullbackClosureInfoCFG(in caller: Function, _ context: FunctionPassContext) -> PullbackClosureInfo? {
+  var pullbackClosureInfoOpt = PullbackClosureInfo?(nil)
+  var supportedClosuresCount = 0
+  var subsetThunkArr = [SingleValueInstruction]()
+
+  for inst in caller.instructions {
+    if let rootClosure = inst.asSupportedClosure {
+      logADCS(msg: "AAAAAA 00 \(rootClosure)")
+      supportedClosuresCount += 1
+
+      if rootClosure == getPartialApplyOfPullbackInExitVJPBB(vjp: rootClosure.parentFunction)! {
+        continue
+      }
+      logADCS(msg: "AAAAAA 01 \(rootClosure)")
+      if subsetThunkArr.contains(rootClosure) {
+        continue
+      }
+      logADCS(msg: "AAAAAA 02 \(rootClosure)")
+      let closureInfoArr = handleNonAppliesCFG(for: rootClosure, context)
+      logADCS(msg: "closureInfoArr.count = " + String(closureInfoArr.count))
+      if closureInfoArr.count == 0 {
+        continue
+      }
+      logADCS(msg: "AAAAAA 03 \(rootClosure)")
+      if pullbackClosureInfoOpt == nil {
+        pullbackClosureInfoOpt = PullbackClosureInfo(paiOfPullback: getPartialApplyOfPullbackInExitVJPBB(vjp: caller)!)
+      logADCS(msg: "AAAAAA 04 \(rootClosure)")
+      }
+      for closureInfo in closureInfoArr {
+        pullbackClosureInfoOpt!.closureInfosCFG.append(closureInfo)
+        if closureInfo.subsetThunk != nil {
+          subsetThunkArr.append(closureInfo.subsetThunk!)
+        }
+      }
+
+    }
+  }
+
+  if supportedClosuresCount == 0 {
+    logADCS(msg: "No supported closures found in " + caller.name.string)
+  }
+
+  return pullbackClosureInfoOpt
+}
+
 private func getPullbackClosureInfo(in caller: Function, _ context: FunctionPassContext) -> PullbackClosureInfo? {
   /// __Root__ closures created via `partial_apply` or `thin_to_thick_function` may be converted and reabstracted
   /// before finally being used at an apply site. We do not want to handle these intermediate closures separately
@@ -775,38 +782,7 @@ private func getPullbackClosureInfo(in caller: Function, _ context: FunctionPass
       updatePullbackClosureInfo(
         for: rootClosure, in: &pullbackClosureInfoOpt,
         convertedAndReabstractedClosures: &convertedAndReabstractedClosures, context)
-      supportedClosuresCount += 1
-      if isSingleBB {
-        updateCallSite(
-          for: rootClosure, in: &callSiteOpt,
-          convertedAndReabstractedClosures: &convertedAndReabstractedClosures, context)
-      } else {
-        if rootClosure == getPartialApplyOfPullbackInExitVJPBB(vjp: rootClosure.parentFunction)! {
-          continue
-        }
-        if subsetThunkArr.contains(rootClosure) {
-          continue
-        }
-        let closureInfoArr = handleNonAppliesCFG(for: rootClosure, context)
-        logADCS(msg: "closureInfoArr.count = " + String(closureInfoArr.count))
-        if closureInfoArr.count == 0 {
-          continue
-        }
-        if callSiteOpt == nil {
-          callSiteOpt = CallSite(applySite: getPartialApplyOfPullbackInExitVJPBB(vjp: caller)!)
-        }
-        for closureInfo in closureInfoArr {
-          callSiteOpt!.closureInfosCFG.append(closureInfo)
-          if closureInfo.subsetThunk != nil {
-            subsetThunkArr.append(closureInfo.subsetThunk!)
-          }
-        }
-      }
     }
-  }
-
-  if supportedClosuresCount == 0 && !isSingleBB {
-    logADCS(msg: "No supported closures found in " + caller.name.string)
   }
 
   return pullbackClosureInfoOpt
@@ -842,23 +818,23 @@ private func getOrCreateSpecializedFunction(
 }
 
 private func getOrCreateSpecializedFunctionCFG(
-  basedOn callSite: CallSite, enumDict: inout EnumDict,
+  basedOn pullbackClosureInfo: PullbackClosureInfo, enumDict: inout EnumDict,
   _ context: FunctionPassContext
 )
   -> (function: Function, alreadyExists: Bool)
 {
-  assert(callSite.closureArgDescriptors.count == 0)
-  let pb = callSite.applyCallee
-  let vjp = callSite.applySite.parentFunction
+  assert(pullbackClosureInfo.closureArgDescriptors.count == 0)
+  let pb = pullbackClosureInfo.pullbackFn
+  let vjp = pullbackClosureInfo.paiOfPullback.parentFunction
 
-  let specializedPbName = callSite.specializedCalleeNameCFG(vjp: vjp, context)
+  let specializedPbName = pullbackClosureInfo.specializedCalleeNameCFG(vjp: vjp, context)
   if let specializedPb = context.lookupFunction(name: specializedPbName) {
     return (specializedPb, true)
   }
 
-  let closureInfos = callSite.closureInfosCFG
+  let closureInfos = pullbackClosureInfo.closureInfosCFG
   var bbVisited = [BasicBlock: Bool]()
-  var bbWorklist = [callSite.applyCallee.entryBlock]
+  var bbWorklist = [pullbackClosureInfo.pullbackFn.entryBlock]
   var enumTypesReverseQueue = [Type]()
   let enumTypeOfEntryBBArg = getEnumArgOfEntryPbBB(pb.entryBlock)!.type
   while bbWorklist.count != 0 {
@@ -908,18 +884,17 @@ private func getOrCreateSpecializedFunctionCFG(
     enumDict[enumType] =
       adcsHelper.rewriteBranchTracingEnum( /*enumType: */
         enumType.bridged,
-        /*topVjp: */callSite.applySite.parentFunction.bridged
+        /*topVjp: */pullbackClosureInfo.paiOfPullback.parentFunction.bridged
       ).type
   }
 
   let specializedParameters = getSpecializedParametersCFG(
-    basedOn: callSite, pb: pb, enumType: enumTypeOfEntryBBArg, enumDict: enumDict, context)
+    basedOn: pullbackClosureInfo, pb: pb, enumType: enumTypeOfEntryBBArg, enumDict: enumDict, context)
 
   let specializedPb =
-    context.createFunctionForClosureSpecialization(
-      from: pb, withName: specializedPbName,
-      withParams: specializedParameters,
-      withSerialization: pb.isSerialized)
+    context.createSpecializedFunctionDeclaration(from: pb, withName: specializedPbName,
+                                                 withParams: specializedParameters,
+                                                 makeThin: true, makeBare: true)
 
   context.buildSpecializedFunction(
     specializedFunction: specializedPb,
@@ -927,20 +902,20 @@ private func getOrCreateSpecializedFunctionCFG(
       let closureSpecCloner = SpecializationCloner(
         emptySpecializedFunction: emptySpecializedFunction, functionPassContext)
       closureSpecCloner.cloneAndSpecializeFunctionBodyCFG(
-        using: callSite, enumDict: enumDict)
+        using: pullbackClosureInfo, enumDict: enumDict)
     })
 
   return (specializedPb, false)
 }
 
 private func rewriteApplyInstructionCFG(
-  using specializedCallee: Function, callSite: CallSite,
+  using specializedCallee: Function, pullbackClosureInfo: PullbackClosureInfo,
   enumDict: EnumDict,
   context: FunctionPassContext
 ) {
-  let vjp = callSite.applySite.parentFunction
-  let vjpExitBB = callSite.applySite.parentBlock
-  let closureInfos = callSite.closureInfosCFG
+  let vjp = pullbackClosureInfo.paiOfPullback.parentFunction
+  let vjpExitBB = pullbackClosureInfo.paiOfPullback.parentBlock
+  let closureInfos = pullbackClosureInfo.closureInfosCFG
 
   for inst in vjp.instructions {
     guard let ei = inst as? EnumInst else {
@@ -965,11 +940,11 @@ private func rewriteApplyInstructionCFG(
     }
     bb.bridged.recreateEnumBlockArgument(arg.bridged)
   }
-  let pai = callSite.applySite as! PartialApplyInst
+  let pai = pullbackClosureInfo.paiOfPullback as! PartialApplyInst
 
   let builderSucc = Builder(
     before: pai,
-    location: callSite.applySite.parentBlock.instructions.last!.location, context)
+    location: pullbackClosureInfo.paiOfPullback.parentBlock.instructions.last!.location, context)
 
   let paiConvention = pai.calleeConvention
   let paiHasUnknownResultIsolation = pai.hasUnknownResultIsolation
@@ -1983,22 +1958,22 @@ extension BasicBlock {
 
 extension SpecializationCloner {
   fileprivate func cloneAndSpecializeFunctionBodyCFG(
-    using callSite: CallSite, enumDict: EnumDict
+    using pullbackClosureInfo: PullbackClosureInfo, enumDict: EnumDict
   ) {
-    let closureInfos = callSite.closureInfosCFG
+    let closureInfos = pullbackClosureInfo.closureInfosCFG
     self.cloneEntryBlockArgsWithoutOrigClosuresCFG(
-      usingOrigCalleeAt: callSite, enumDict: enumDict)
+      usingOrigCalleeAt: pullbackClosureInfo, enumDict: enumDict)
 
     var args = [Value]()
     for arg in self.entryBlock.arguments {
       args.append(arg)
     }
 
-    self.cloneFunctionBody(from: callSite.applyCallee, entryBlockArguments: args)
+    self.cloneFunctionBody(from: pullbackClosureInfo.pullbackFn, entryBlockArguments: args)
 
     let clonedPbBBToVjpBBMap = getPbBBToVjpBBMap(
-      getVjpBBToPbBBMap(vjp: callSite.applySite.parentFunction, pb: self.cloned)!)
-    let vjpBBToTupleInstMap = getVjpBBToTupleInstMap(vjp: callSite.applySite.parentFunction)!
+      getVjpBBToPbBBMap(vjp: pullbackClosureInfo.paiOfPullback.parentFunction, pb: self.cloned)!)
+    let vjpBBToTupleInstMap = getVjpBBToTupleInstMap(vjp: pullbackClosureInfo.paiOfPullback.parentFunction)!
 
     for bb in self.cloned.blocks {
       if bb == self.cloned.entryBlock {
@@ -2063,12 +2038,12 @@ extension SpecializationCloner {
   }
 
   private func cloneEntryBlockArgsWithoutOrigClosuresCFG(
-    usingOrigCalleeAt callSite: CallSite, enumDict: EnumDict
+    usingOrigCalleeAt pullbackClosureInfo: PullbackClosureInfo, enumDict: EnumDict
   ) {
-    let pb = callSite.applyCallee
+    let pb = pullbackClosureInfo.pullbackFn
     let enumType = getEnumArgOfEntryPbBB(pb.entryBlock)!.type
 
-    let originalEntryBlock = callSite.applyCallee.entryBlock
+    let originalEntryBlock = pullbackClosureInfo.pullbackFn.entryBlock
     let clonedFunction = self.cloned
     let clonedEntryBlock = self.entryBlock
 
@@ -2082,12 +2057,12 @@ extension SpecializationCloner {
       }
       let clonedEntryBlockArg = clonedEntryBlock.addFunctionArgument(
         type: clonedEntryBlockArgType, self.context)
-      clonedEntryBlockArg.copyFlags(from: arg as! FunctionArgument)
+      clonedEntryBlockArg.copyFlags(from: arg as! FunctionArgument, self.context)
     }
   }
 
-  fileprivate func cloneAndSpecializeFunctionBody(using callSite: CallSite) {
-    self.cloneEntryBlockArgsWithoutOrigClosures(usingOrigCalleeAt: callSite)
+  fileprivate func cloneAndSpecializeFunctionBody(using pullbackClosureInfo: PullbackClosureInfo) {
+    self.cloneEntryBlockArgsWithoutOrigClosures(usingOrigCalleeAt: pullbackClosureInfo)
 
     let (allSpecializedEntryBlockArgs, closureArgIndexToAllClonedReleasableClosures) =
       cloneAllClosures(at: pullbackClosureInfo)
@@ -2374,34 +2349,32 @@ extension Builder {
         origToClonedValueMap[reabstractedClosure] = clonedRootClosure
         return clonedRootClosure
 
-        case let pai as PartialApplyInst:
-          let toBeReabstracted = inner(rootClosure, clonedRootClosure, pai.arguments[0], 
-                                       &origToClonedValueMap)
+      case let cvt as ConvertFunctionInst:
+        let toBeReabstracted = inner(
+          rootClosure, clonedRootClosure, cvt.fromFunction,
+          &origToClonedValueMap)
+        let reabstracted = self.createConvertFunction(
+          originalFunction: toBeReabstracted, resultType: cvt.type,
+          withoutActuallyEscaping: cvt.withoutActuallyEscaping)
+        origToClonedValueMap[cvt] = reabstracted
+        return reabstracted
 
-          guard let function = pai.referencedFunction else {
-            log("Parent function of pullbackClosureInfo: \(rootClosure.parentFunction)")
-            log("Root closure: \(rootClosure)")
-            log("Unsupported reabstraction closure: \(pai)")
-            fatalError("Encountered unsupported reabstraction (via partial_apply) of root closure!")
-          }
+      case let cvt as ConvertEscapeToNoEscapeInst:
+        let toBeReabstracted = inner(
+          rootClosure, clonedRootClosure, cvt.fromFunction,
+          &origToClonedValueMap)
+        let reabstracted = self.createConvertEscapeToNoEscape(
+          originalFunction: toBeReabstracted, resultType: cvt.type,
+          isLifetimeGuaranteed: true)
+        origToClonedValueMap[cvt] = reabstracted
+        return reabstracted
 
-          let fri = self.createFunctionRef(function)
-          let reabstracted = self.createPartialApply(function: fri, substitutionMap: SubstitutionMap(), 
-                                                     capturedArguments: [toBeReabstracted], 
-                                                     calleeConvention: pai.calleeConvention, 
-                                                     hasUnknownResultIsolation: pai.hasUnknownResultIsolation, 
-                                                     isOnStack: pai.isOnStack)
-          origToClonedValueMap[pai] = reabstracted
-          return reabstracted
+      case let pai as PartialApplyInst:
+        let toBeReabstracted = inner(
+          rootClosure, clonedRootClosure, pai.arguments[0],
+          &origToClonedValueMap)
 
-        case let mdi as MarkDependenceInst:
-          let toBeReabstracted = inner(rootClosure, clonedRootClosure, mdi.value, &origToClonedValueMap)
-          let base = origToClonedValueMap[mdi.base]!
-          let reabstracted = self.createMarkDependence(value: toBeReabstracted, base: base, kind: .Escaping)
-          origToClonedValueMap[mdi] = reabstracted
-          return reabstracted
-
-        default:
+        guard let function = pai.referencedFunction else {
           log("Parent function of pullbackClosureInfo: \(rootClosure.parentFunction)")
           log("Root closure: \(rootClosure)")
           log("Unsupported reabstraction closure: \(pai)")
@@ -2428,7 +2401,7 @@ extension Builder {
         return reabstracted
 
       default:
-        log("Parent function of callSite: \(rootClosure.parentFunction)")
+        log("Parent function of pullbackClosureInfo: \(rootClosure.parentFunction)")
         log("Root closure: \(rootClosure)")
         log("Converted/reabstracted closure: \(reabstractedClosure)")
         fatalError("Encountered unsupported reabstraction of root closure: \(reabstractedClosure)")
@@ -2472,16 +2445,13 @@ extension Builder {
   }
 }
 
-private extension FunctionConvention {
-  func getSpecializedParameters(basedOn pullbackClosureInfo: PullbackClosureInfo) -> [ParameterInfo] {
-    let pullbackFn = pullbackClosureInfo.pullbackFn
 typealias EnumDict = [Type: Type]
 
 private func getSpecializedParametersCFG(
-  basedOn callSite: CallSite, pb: Function, enumType: Type, enumDict: EnumDict,
+  basedOn pullbackClosureInfo: PullbackClosureInfo, pb: Function, enumType: Type, enumDict: EnumDict,
   _ context: FunctionPassContext
 ) -> [ParameterInfo] {
-  let applySiteCallee = callSite.applyCallee
+  let applySiteCallee = pullbackClosureInfo.pullbackFn
   var specializedParamInfoList: [ParameterInfo] = []
   var foundBranchTracingEnumParam = false
   // Start by adding all original parameters except for the closure parameters.
@@ -2502,7 +2472,7 @@ private func getSpecializedParametersCFG(
   return specializedParamInfoList
 }
 
-extension FunctionConvention {
+private extension FunctionConvention {
   func getSpecializedParameters(basedOn pullbackClosureInfo: PullbackClosureInfo) -> [ParameterInfo] {
     let pullbackFn = pullbackClosureInfo.pullbackFn
     var specializedParamInfoList: [ParameterInfo] = []
@@ -2841,7 +2811,7 @@ private struct PullbackClosureInfo {
 
     return context.mangle(
       withBranchTracingEnum: argAndIdxInPbPAI!.arg, argIdx: argAndIdxInPbPAI!.idx,
-      from: applyCallee)
+      from: pullbackFn)
   }
 }
 
