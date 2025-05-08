@@ -187,67 +187,7 @@ private func dumpVJPAndPB(vjp: Function, pb: Function) {
   dumpPB(pb: pb)
 }
 
-private func checkSinglePathToNormalExit(vjp: Function, pb: Function) -> Bool {
-  var pathsToNormalExitCnt = 0
-  var exitBBOpt = BasicBlock?(nil)
-  for bb in vjp.blocks {
-    if bb.isReachableExitBlock {
-      let unreachableInstOpt = bb.terminator as? UnreachableInst
-      if unreachableInstOpt != nil {
-        continue
-      }
-      assert(exitBBOpt == nil)
-      exitBBOpt = bb
-    }
-  }
-  if exitBBOpt == nil {
-    logADCS(msg: "checkSinglePathToNormalExit: vjp has no reachable exit block")
-    return true
-  }
-  let exitBB = exitBBOpt!
-  // MYTODO: can we assume that there are no loops since that case is handled earlier?
-  // Just in case, use this counter and high enough limit to abort if we run into loop
-  var dfsIteration = 0
-  let dfsIterationLimit = 999999
-  func dfs(bb: BasicBlock) {
-    dfsIteration += 1
-    if dfsIteration > dfsIterationLimit {
-      return
-    }
-    if pathsToNormalExitCnt > 1 {
-      return
-    }
-    if bb == exitBB {
-      pathsToNormalExitCnt += 1
-      return
-    }
-    for succBB in bb.successors {
-      dfs(bb: succBB)
-    }
-  }
-  dfs(bb: vjp.entryBlock)
-  if dfsIteration > dfsIterationLimit {
-    logADCS(
-      msg: "checkSinglePathToNormalExit: probably with a loop, vjp.blocks.count = "
-        + String(vjp.blocks.count)
-        + ", pb.blocks.count = 1")
-    dumpVJPAndPB(vjp: vjp, pb: pb)
-    return true
-  }
-  assert(pathsToNormalExitCnt > 0)
-  if pathsToNormalExitCnt > 1 {
-    logADCS(
-      msg: "checkSinglePathToNormalExit: vjp.blocks.count = " + String(vjp.blocks.count)
-        + ", pb.blocks.count = 1")
-    dumpVJPAndPB(vjp: vjp, pb: pb)
-    return true
-  } else {
-    logADCS(
-      msg: "checkSinglePathToNormalExit: vjp has " + String(vjp.blocks.count)
-        + " blocks but only 1 path to normal exit, this will be handled later")
-    return false
-  }
-}
+var isMultiBBWithoutBranchTracingEnumPullbackArg: Bool = false
 
 private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
   assert(vjp.blocks.singleElement == nil)
@@ -283,11 +223,10 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
         return false
       }
     }
-    if pb.blocks.count == 1 {
-      if !checkSinglePathToNormalExit(vjp: vjp, pb: pb) {
-        logADCS(prefix: prefixFail, msg: "single path leads to normal exit in multi-BB VJP")
-        return false
-      }
+    if branchTracingEnumArgCounter == 0 {
+      isMultiBBWithoutBranchTracingEnumPullbackArg = true
+      logADCS(msg: "This is multi-BB case which would be handled as single-BB case")
+      return true
     }
     logADCS(
       prefix: prefixFail,
@@ -577,88 +516,113 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
   }
 
   let isSingleBB = function.blocks.singleElement != nil
+  isMultiBBWithoutBranchTracingEnumPullbackArg = false
+  var canRunMultiBB = false
 
   if !isSingleBB {
     logADCS(
       msg:
         "Trying to run AutoDiff Closure Specialization pass on " + function.name.string)
-    if !checkIfCanRun(vjp: function, context: context) {
-      return
+    canRunMultiBB = checkIfCanRun(vjp: function, context: context)
+    if canRunMultiBB {
+      logADCS(
+        msg:
+          "The VJP " + function.name.string
+          + " has passed the preliminary check. Proceeding to running the pass")
+      if isMultiBBWithoutBranchTracingEnumPullbackArg {
+        logADCS(msg: "Dumping VJP and PB before pass run begin")
+        dumpVJPAndPB(
+          vjp: function,
+          pb: getPartialApplyOfPullbackInExitVJPBB(vjp: function)!.referencedFunction!)
+        logADCS(msg: "Dumping VJP and PB before pass run end")
+      }
     }
-    logADCS(
-      msg:
-        "The VJP " + function.name.string
-        + " has passed the preliminary check. Proceeding to running the pass")
   }
 
   var remainingSpecializationRounds = 5
 
-  var enumDict: EnumDict = [:]
-  var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
-  defer {
-    adcsHelper.clearEnumDict()
-  }
-
   repeat {
-    if !isSingleBB {
-      logADCS(msg: "Remaining specialization rounds: " + String(remainingSpecializationRounds))
-    }
     // TODO: Names here are pretty misleading. We are looking for a place where
     // the pullback closure is created (so for `partial_apply` instruction).
     let callSiteOpt = gatherCallSite(in: function, context)
     if callSiteOpt == nil {
-      if !isSingleBB {
-        // TODO: it looks like that we do not have more than 1 round, at least for multi BB case
-        logADCS(
-          msg:
-            "Unable to detect closures to be specialized in " + function.name.string
-            + ", skipping the pass")
-      }
       break
     }
 
     let callSite = callSiteOpt!
 
-    if isSingleBB {
-      let (specializedFunction, alreadyExists) = getOrCreateSpecializedFunction(
-        basedOn: callSite, context)
+    let (specializedFunction, alreadyExists) = getOrCreateSpecializedFunction(
+      basedOn: callSite, context)
 
-      if !alreadyExists {
-        context.notifyNewFunction(function: specializedFunction, derivedFrom: callSite.applyCallee)
+    if !alreadyExists {
+      context.notifyNewFunction(function: specializedFunction, derivedFrom: callSite.applyCallee)
+    }
+
+    rewriteApplyInstruction(using: specializedFunction, callSite: callSite, context)
+
+    // TODO avoid this array
+    let callSites = [callSite]
+    var deadClosures: InstructionWorklist = callSites.reduce(into: InstructionWorklist(context)) {
+      deadClosures, callSite in
+      callSite.closureArgDescriptors
+        .map { $0.closure }
+        .forEach { deadClosures.pushIfNotVisited($0) }
+    }
+
+    defer {
+      deadClosures.deinitialize()
+    }
+
+    while let deadClosure = deadClosures.pop() {
+      let isDeleted = context.tryDeleteDeadClosure(
+        closure: deadClosure as! SingleValueInstruction)
+      if isDeleted {
+        context.notifyInvalidatedStackNesting()
       }
+    }
 
-      rewriteApplyInstruction(using: specializedFunction, callSite: callSite, context)
+    if context.needFixStackNesting {
+      function.fixStackNesting(context)
+    }
 
-      // TODO avoid this array
-      let callSites = [callSite]
-      var deadClosures: InstructionWorklist = callSites.reduce(into: InstructionWorklist(context)) {
-        deadClosures, callSite in
-        callSite.closureArgDescriptors
-          .map { $0.closure }
-          .forEach { deadClosures.pushIfNotVisited($0) }
-      }
-
-      defer {
-        deadClosures.deinitialize()
-      }
-
-      while let deadClosure = deadClosures.pop() {
-        let isDeleted = context.tryDeleteDeadClosure(
-          closure: deadClosure as! SingleValueInstruction)
-        if isDeleted {
-          context.notifyInvalidatedStackNesting()
-        }
-      }
-
-      if context.needFixStackNesting {
-        function.fixStackNesting(context)
-      }
-    } else {
-      multiBBHelper(callSite: callSite, function: function, enumDict: &enumDict, context: context)
+    if isMultiBBWithoutBranchTracingEnumPullbackArg {
+      logADCS(msg: "Dumping VJP and PB at round \(remainingSpecializationRounds) begin")
+      dumpVJPAndPB(vjp: function, pb: specializedFunction)
+      logADCS(msg: "Dumping VJP and PB at round \(remainingSpecializationRounds) end")
     }
 
     remainingSpecializationRounds -= 1
   } while remainingSpecializationRounds > 0
+
+  if !isSingleBB && canRunMultiBB && !isMultiBBWithoutBranchTracingEnumPullbackArg {
+    var enumDict: EnumDict = [:]
+    var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
+    defer {
+      adcsHelper.clearEnumDict()
+    }
+
+    remainingSpecializationRounds = 5
+    repeat {
+      logADCS(msg: "Remaining specialization rounds: " + String(remainingSpecializationRounds))
+      // TODO: Names here are pretty misleading. We are looking for a place where
+      // the pullback closure is created (so for `partial_apply` instruction).
+      let callSiteOpt = gatherCallSiteCFG(in: function, context)
+      if callSiteOpt == nil {
+        // TODO: it looks like that we do not have more than 1 round, at least for multi BB case
+        logADCS(
+          msg:
+            "Unable to detect closures to be specialized in " + function.name.string
+            + ", skipping the pass")
+        break
+      }
+
+      let callSite = callSiteOpt!
+
+      multiBBHelper(callSite: callSite, function: function, enumDict: &enumDict, context: context)
+
+      remainingSpecializationRounds -= 1
+    } while remainingSpecializationRounds > 0
+  }
 }
 
 // =========== Top-level functions ========== //
@@ -740,6 +704,46 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
   return handleConvertFunctionOrPartialApply(inst: ti.operands[1].value.definingInstruction!)
 }
 
+private func gatherCallSiteCFG(in caller: Function, _ context: FunctionPassContext) -> CallSite? {
+  var callSiteOpt = CallSite?(nil)
+  var supportedClosuresCount = 0
+  var subsetThunkArr = [SingleValueInstruction]()
+
+  for inst in caller.instructions {
+    if let rootClosure = inst.asSupportedClosure {
+      supportedClosuresCount += 1
+
+      if rootClosure == getPartialApplyOfPullbackInExitVJPBB(vjp: rootClosure.parentFunction)! {
+        continue
+      }
+      if subsetThunkArr.contains(rootClosure) {
+        continue
+      }
+      let closureInfoArr = handleNonAppliesCFG(for: rootClosure, context)
+      logADCS(msg: "closureInfoArr.count = " + String(closureInfoArr.count))
+      if closureInfoArr.count == 0 {
+        continue
+      }
+      if callSiteOpt == nil {
+        callSiteOpt = CallSite(applySite: getPartialApplyOfPullbackInExitVJPBB(vjp: caller)!)
+      }
+      for closureInfo in closureInfoArr {
+        callSiteOpt!.closureInfosCFG.append(closureInfo)
+        if closureInfo.subsetThunk != nil {
+          subsetThunkArr.append(closureInfo.subsetThunk!)
+        }
+      }
+
+    }
+  }
+
+  if supportedClosuresCount == 0 {
+    logADCS(msg: "No supported closures found in " + caller.name.string)
+  }
+
+  return callSiteOpt
+}
+
 private func gatherCallSite(in caller: Function, _ context: FunctionPassContext) -> CallSite? {
   /// __Root__ closures created via `partial_apply` or `thin_to_thick_function` may be converted and reabstracted
   /// before finally being used at an apply site. We do not want to handle these intermediate closures separately
@@ -773,46 +777,15 @@ private func gatherCallSite(in caller: Function, _ context: FunctionPassContext)
   }
 
   var callSiteOpt = CallSite?(nil)
-  let isSingleBB = caller.blocks.singleElement != nil
-  var supportedClosuresCount = 0
-  var subsetThunkArr = [SingleValueInstruction]()
 
   for inst in caller.instructions {
     if !convertedAndReabstractedClosures.contains(inst),
       let rootClosure = inst.asSupportedClosure
     {
-      supportedClosuresCount += 1
-      if isSingleBB {
-        updateCallSite(
-          for: rootClosure, in: &callSiteOpt,
-          convertedAndReabstractedClosures: &convertedAndReabstractedClosures, context)
-      } else {
-        if rootClosure == getPartialApplyOfPullbackInExitVJPBB(vjp: rootClosure.parentFunction)! {
-          continue
-        }
-        if subsetThunkArr.contains(rootClosure) {
-          continue
-        }
-        let closureInfoArr = handleNonAppliesCFG(for: rootClosure, context)
-        logADCS(msg: "closureInfoArr.count = " + String(closureInfoArr.count))
-        if closureInfoArr.count == 0 {
-          continue
-        }
-        if callSiteOpt == nil {
-          callSiteOpt = CallSite(applySite: getPartialApplyOfPullbackInExitVJPBB(vjp: caller)!)
-        }
-        for closureInfo in closureInfoArr {
-          callSiteOpt!.closureInfosCFG.append(closureInfo)
-          if closureInfo.subsetThunk != nil {
-            subsetThunkArr.append(closureInfo.subsetThunk!)
-          }
-        }
-      }
+      updateCallSite(
+        for: rootClosure, in: &callSiteOpt,
+        convertedAndReabstractedClosures: &convertedAndReabstractedClosures, context)
     }
-  }
-
-  if supportedClosuresCount == 0 && !isSingleBB {
-    logADCS(msg: "No supported closures found in " + caller.name.string)
   }
 
   return callSiteOpt
@@ -823,6 +796,11 @@ private func getOrCreateSpecializedFunction(
 )
   -> (function: Function, alreadyExists: Bool)
 {
+  if isMultiBBWithoutBranchTracingEnumPullbackArg {
+    logADCS(msg: "getOrCreateSpecializedFunction: callSite begin")
+    logADCS(msg: "\(callSite)")
+    logADCS(msg: "getOrCreateSpecializedFunction: callSite end")
+  }
   let specializedFunctionName = callSite.specializedCalleeName(context)
   if let specializedFunction = context.lookupFunction(name: specializedFunctionName) {
     return (specializedFunction, true)
