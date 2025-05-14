@@ -517,14 +517,14 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
 
   let isSingleBB = function.blocks.singleElement != nil
   isMultiBBWithoutBranchTracingEnumPullbackArg = false
-  var canRunMultiBB = Bool?(nil)
+  var canRunMultiBB = false
 
   if !isSingleBB {
     logADCS(
       msg:
         "Trying to run AutoDiff Closure Specialization pass on " + function.name.string)
     canRunMultiBB = checkIfCanRun(vjp: function, context: context)
-    if canRunMultiBB! {
+    if canRunMultiBB {
       logADCS(
         msg:
           "The VJP " + function.name.string
@@ -538,7 +538,6 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
       }
     }
   }
-  assert((isSingleBB && canRunMultiBB == nil) || (!isSingleBB && canRunMultiBB != nil))
 
   var remainingSpecializationRounds = 5
 
@@ -595,7 +594,7 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
     remainingSpecializationRounds -= 1
   } while remainingSpecializationRounds > 0
 
-  if !isSingleBB && canRunMultiBB! && !isMultiBBWithoutBranchTracingEnumPullbackArg {
+  if !isSingleBB && canRunMultiBB && !isMultiBBWithoutBranchTracingEnumPullbackArg {
     var enumDict: EnumDict = [:]
     var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
     defer {
