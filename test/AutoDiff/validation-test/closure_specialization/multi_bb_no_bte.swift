@@ -1,3 +1,6 @@
+/// AutoDiff Closure Specialization pass for cases when top-level pullback does
+/// not have branch tracing enum argument.
+
 // REQUIRES: executable_test
 
 // RUN: %empty-directory(%t)
@@ -6,53 +9,34 @@
 // RUN: %target-run %t/none.out
 // RUN: %target-run %t/opt.out
 
-/// TODO: make this agnostic to functions order in SIL
-// RUN: %target-swift-frontend -emit-sil %s -o - -O 2> %t/adcs.log | %FileCheck %s
-// CHECK-NONE: {{^}}// pullback of multiply
-// CHECK-NONE: {{^}}// pullback of methodWrapper
-// CHECK-NONE: {{^}}// pullback of sumFirstThreeConcatenating2
-// CHECK-NONE: {{^}}// pullback of sumFirstThreeConcatenating1
+// RUN: %target-swift-frontend -emit-sil %s -o - -O 1> %t/out.sil 2> %t/adcs.log
 
-// CHECK:      {{^}}// specialized pullback of multiply
-// CHECK-NEXT: {{^}}sil private
-// CHECK-SAME: : $@convention(thin) (Float, Float, Float) -> RealPropertyWrappers.TangentVector {{{$}}
+// RUN: cat %t/out.sil | %FileCheck %s --check-prefix=CHECK1
+// RUN: cat %t/out.sil | %FileCheck %s --check-prefix=CHECK2
+// RUN: cat %t/out.sil | %FileCheck %s --check-prefix=CHECK3
+// RUN: cat %t/out.sil | %FileCheck %s --check-prefix=CHECK4
 
-/// TODO: even though branch tracing enum was not passed to top-level pullback
-/// directly, it was captured by one of the closures which was specialized.
-/// Because of that, this enum argument is now an argument of top-level pullback.
-/// Specializing closures passed as payload tuple elements of the enum is currently
-/// not supported.
-// CHECK:      {{^}}// specialized pullback of methodWrapper
-// CHECK-NEXT: {{^}}sil private
-// CHECK-SAME: : $@convention(thin) (Float, @owned _AD__$s40closure_spec_without_branch_tracing_enumyycfU2_5ClassL_V6methodSfyF_bb3__Pred__src_0_wrt_0) -> Class.TangentVector {{{$}}
-
-// CHECK:      {{^}}// specialized pullback of sumFirstThreeConcatenating2
-// CHECK-NEXT: {{^}}sil private
-// CHECK-SAME: : $@convention(thin) (Float, Int, @owned Array<Float>, Int, @owned Array<Float>, Int, @owned Array<Float>, Int) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView) {{{$}}
-
-// CHECK:      {{^}}// specialized pullback of sumFirstThreeConcatenating1
-// CHECK-NEXT: {{^}}sil private
-// CHECK-SAME: : $@convention(thin) (Float, @owned @callee_guaranteed (@guaranteed Array<Float>.DifferentiableView) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView), @owned Array<Float>, Int, @owned Array<Float>, Int, @owned Array<Float>, Int) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView) {{{$}}
-
-// RUN: cat %t/adcs.log | grep \[ADCS\] | %FileCheck --check-prefix=LOG %s
-// LOG:      [ADCS][1] Trying to run AutoDiff Closure Specialization pass on $s40closure_spec_without_branch_tracing_enumyycfU2_13methodWrapperL_ySfAAyycfU2_5ClassL_VFTJrSpSr
-// LOG-NEXT: This is multi-BB case which would be handled as single-BB case
-// LOG:      [ADCS][2] Trying to run AutoDiff Closure Specialization pass on $s40closure_spec_without_branch_tracing_enumyycfU1_8multiplyL_ySfAAyycfU1_20RealPropertyWrappersL_VFTJrSpSr
-// LOG-NEXT: This is multi-BB case which would be handled as single-BB case
-// LOG:      [ADCS][2] Trying to run AutoDiff Closure Specialization pass on $s40closure_spec_without_branch_tracing_enumyycfU0_27sumFirstThreeConcatenating2L_ySfSaySfG_ACtFTJrSSpSr
-// LOG-NEXT: This is multi-BB case which would be handled as single-BB case
-// LOG:      [ADCS][2] Trying to run AutoDiff Closure Specialization pass on $s40closure_spec_without_branch_tracing_enumyycfU_27sumFirstThreeConcatenating1L_ySfSaySfG_ACtFTJrSSpSr
-// LOG-NEXT: This is multi-BB case which would be handled as single-BB case
+// RUN: grep \[ADCS\] %t/adcs.log | %FileCheck --check-prefix=LOG1 %s
+// RUN: grep \[ADCS\] %t/adcs.log | %FileCheck --check-prefix=LOG2 %s
+// RUN: grep \[ADCS\] %t/adcs.log | %FileCheck --check-prefix=LOG3 %s
+// RUN: grep \[ADCS\] %t/adcs.log | %FileCheck --check-prefix=LOG4 %s
 
 import DifferentiationUnittest
 import StdlibUnittest
 
-var AutoDiffClosureSpecializationWOBranchTracingEnumTests = TestSuite(
-  "AutoDiffClosureSpecializationWOBranchTracingEnum")
+var AutoDiffClosureSpecNoBTETests = TestSuite("AutoDiffClosureSpecNoBTE")
 
 typealias FloatArrayTan = Array<Float>.TangentVector
 
-AutoDiffClosureSpecializationWOBranchTracingEnumTests.testWithLeakChecking("Test1") {
+AutoDiffClosureSpecNoBTETests.testWithLeakChecking("Test1") {
+  // CHECK1-NONE:  {{^}}// pullback of sumFirstThreeConcatenating1
+  // CHECK1-LABEL: {{^}}// specialized pullback of sumFirstThreeConcatenating1
+  // CHECK1-NEXT:  {{^}}sil private
+  // CHECK1-SAME:  : $@convention(thin) (Float, @owned @callee_guaranteed (@guaranteed Array<Float>.DifferentiableView) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView), @owned Array<Float>, Int, @owned Array<Float>, Int, @owned Array<Float>, Int) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView) {{{$}}
+
+  // LOG1-LABEL: [ADCS][2] Trying to run AutoDiff Closure Specialization pass on $s15multi_bb_no_bteyycfU_27sumFirstThreeConcatenating1L_ySfSaySfG_ACtFTJrSSpSr
+  // LOG1-NEXT:  This is multi-BB case which would be handled as single-BB case
+
   func sumFirstThreeConcatenating1(_ a: [Float], _ b: [Float]) -> Float {
     let c = a + b
     return c[0] + c[1] + c[2]
@@ -67,23 +51,17 @@ AutoDiffClosureSpecializationWOBranchTracingEnumTests.testWithLeakChecking("Test
   expectEqual(
     (.init([]), .init([1, 1, 1, 0])),
     gradient(at: [], [0, 0, 0, 0], of: sumFirstThreeConcatenating1))
-
-  func identity(_ array: [Float]) -> [Float] {
-    var results: [Float] = []
-    for i in withoutDerivative(at: array.indices) {
-      results = results + [array[i]]
-    }
-    return results
-  }
-  let v = FloatArrayTan([4, -5, 6])
-  expectEqual(v, pullback(at: [1, 2, 3], of: identity)(v))
-
-  let v1: [Float] = [1, 1]
-  let v2: [Float] = [1, 1, 1]
-  expectEqual((.zero, .zero), pullback(at: v1, v2, of: +)(.zero))
 }
 
-AutoDiffClosureSpecializationWOBranchTracingEnumTests.testWithLeakChecking("Test2") {
+AutoDiffClosureSpecNoBTETests.testWithLeakChecking("Test2") {
+  // CHECK2-NONE:  {{^}}// pullback of sumFirstThreeConcatenating2
+  // CHECK2-LABEL: {{^}}// specialized pullback of sumFirstThreeConcatenating2
+  // CHECK2-NEXT:  {{^}}sil private
+  // CHECK2-SAME:  : $@convention(thin) (Float, Int, @owned Array<Float>, Int, @owned Array<Float>, Int, @owned Array<Float>, Int) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView) {{{$}}
+
+  // LOG2-LABEL: [ADCS][2] Trying to run AutoDiff Closure Specialization pass on $s15multi_bb_no_bteyycfU0_27sumFirstThreeConcatenating2L_ySfSaySfG_ACtFTJrSSpSr
+  // LOG2-NEXT:  This is multi-BB case which would be handled as single-BB case
+
   func sumFirstThreeConcatenating2(_ a: [Float], _ b: [Float]) -> Float {
     var c = a
     c += b
@@ -101,7 +79,7 @@ AutoDiffClosureSpecializationWOBranchTracingEnumTests.testWithLeakChecking("Test
     gradient(at: [], [0, 0, 0, 0], of: sumFirstThreeConcatenating2))
 }
 
-AutoDiffClosureSpecializationWOBranchTracingEnumTests.testWithLeakChecking("Test3") {
+AutoDiffClosureSpecNoBTETests.testWithLeakChecking("Test3") {
   // From: https://github.com/apple/swift-evolution/blob/master/proposals/0258-property-wrappers.md#proposed-solution
   // Tests the following functionality:
   // - Enum property wrapper.
@@ -168,6 +146,14 @@ AutoDiffClosureSpecializationWOBranchTracingEnumTests.testWithLeakChecking("Test
     var y: Float = 4
   }
 
+  // CHECK3-NONE:  {{^}}// pullback of multiply
+  // CHECK3-LABEL: {{^}}// specialized pullback of multiply
+  // CHECK3-NEXT:  {{^}}sil private
+  // CHECK3-SAME:  : $@convention(thin) (Float, Float, Float) -> RealPropertyWrappers.TangentVector {{{$}}
+
+  // LOG3-LABEL: [ADCS][2] Trying to run AutoDiff Closure Specialization pass on $s15multi_bb_no_bteyycfU1_8multiplyL_ySfAAyycfU1_20RealPropertyWrappersL_VFTJrSpSr
+  // LOG3-NEXT:  This is multi-BB case which would be handled as single-BB case
+
   @differentiable(reverse)
   func multiply(_ s: RealPropertyWrappers) -> Float {
     return s.x * s.y
@@ -178,7 +164,7 @@ AutoDiffClosureSpecializationWOBranchTracingEnumTests.testWithLeakChecking("Test
     gradient(at: RealPropertyWrappers(x: 3, y: 4), of: multiply))
 }
 
-AutoDiffClosureSpecializationWOBranchTracingEnumTests.testWithLeakChecking("Test4") {
+AutoDiffClosureSpecNoBTETests.testWithLeakChecking("Test4") {
   struct Class: Differentiable {
     var stored: Float
     var optional: Float?
@@ -202,6 +188,20 @@ AutoDiffClosureSpecializationWOBranchTracingEnumTests.testWithLeakChecking("Test
       return c.stored
     }
   }
+
+  /// TODO: even though branch tracing enum is not passed to top-level pullback
+  /// directly, it is captured by one of the closures which was specialized.
+  /// Because of that, this enum argument is now an argument of specialized top-level
+  /// pullback. Specializing closures passed as payload tuple elements of the enum
+  /// is currently not supported.
+
+  // CHECK4-NONE:  {{^}}// pullback of methodWrapper
+  // CHECK4-LABEL: {{^}}// specialized pullback of methodWrapper
+  // CHECK4-NEXT:  {{^}}sil private
+  // CHECK4-SAME:  : $@convention(thin) (Float, @owned _AD__$s15multi_bb_no_bteyycfU2_5ClassL_V6methodSfyF_bb3__Pred__src_0_wrt_0) -> Class.TangentVector {{{$}}
+
+  // LOG4-LABEL: [ADCS][1] Trying to run AutoDiff Closure Specialization pass on $s15multi_bb_no_bteyycfU2_13methodWrapperL_ySfAAyycfU2_5ClassL_VFTJrSpSr
+  // LOG4-NEXT:  This is multi-BB case which would be handled as single-BB case
 
   @differentiable(reverse)
   func methodWrapper(_ x: Class) -> Float {
