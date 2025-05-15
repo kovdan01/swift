@@ -9,7 +9,7 @@
 // RUN: %target-run %t/none.out
 // RUN: %target-run %t/opt.out
 
-// RUN: %target-swift-frontend -emit-sil %s -o - -O 1> %t/out.sil 2> %t/adcs.log
+// RUN: %target-swift-frontend -emit-sil %s -O -o %t/out.sil 2> %t/adcs.log
 
 // RUN: cat %t/out.sil | %FileCheck %s --check-prefix=CHECK1
 // RUN: cat %t/out.sil | %FileCheck %s --check-prefix=CHECK2
@@ -34,7 +34,7 @@ AutoDiffClosureSpecNoBTETests.testWithLeakChecking("Test1") {
   // CHECK1-NEXT:  {{^}}sil private
   // CHECK1-SAME:  : $@convention(thin) (Float, @owned @callee_guaranteed (@guaranteed Array<Float>.DifferentiableView) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView), @owned Array<Float>, Int, @owned Array<Float>, Int, @owned Array<Float>, Int) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView) {{{$}}
 
-  // LOG1-LABEL: [ADCS][2] Trying to run AutoDiff Closure Specialization pass on $s15multi_bb_no_bteyycfU_27sumFirstThreeConcatenating1L_ySfSaySfG_ACtFTJrSSpSr
+  // LOG1-LABEL: [ADCS][2] Trying to run AutoDiff Closure Specialization pass on $s3outyycfU_27sumFirstThreeConcatenating1L_ySfSaySfG_ACtFTJrSSpSr
   // LOG1-NEXT:  This is multi-BB case which would be handled as single-BB case
 
   func sumFirstThreeConcatenating1(_ a: [Float], _ b: [Float]) -> Float {
@@ -59,7 +59,7 @@ AutoDiffClosureSpecNoBTETests.testWithLeakChecking("Test2") {
   // CHECK2-NEXT:  {{^}}sil private
   // CHECK2-SAME:  : $@convention(thin) (Float, Int, @owned Array<Float>, Int, @owned Array<Float>, Int, @owned Array<Float>, Int) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView) {{{$}}
 
-  // LOG2-LABEL: [ADCS][2] Trying to run AutoDiff Closure Specialization pass on $s15multi_bb_no_bteyycfU0_27sumFirstThreeConcatenating2L_ySfSaySfG_ACtFTJrSSpSr
+  // LOG2-LABEL: [ADCS][2] Trying to run AutoDiff Closure Specialization pass on $s3outyycfU0_27sumFirstThreeConcatenating2L_ySfSaySfG_ACtFTJrSSpSr
   // LOG2-NEXT:  This is multi-BB case which would be handled as single-BB case
 
   func sumFirstThreeConcatenating2(_ a: [Float], _ b: [Float]) -> Float {
@@ -151,7 +151,7 @@ AutoDiffClosureSpecNoBTETests.testWithLeakChecking("Test3") {
   // CHECK3-NEXT:  {{^}}sil private
   // CHECK3-SAME:  : $@convention(thin) (Float, Float, Float) -> RealPropertyWrappers.TangentVector {{{$}}
 
-  // LOG3-LABEL: [ADCS][2] Trying to run AutoDiff Closure Specialization pass on $s15multi_bb_no_bteyycfU1_8multiplyL_ySfAAyycfU1_20RealPropertyWrappersL_VFTJrSpSr
+  // LOG3-LABEL: [ADCS][2] Trying to run AutoDiff Closure Specialization pass on $s3outyycfU1_8multiplyL_ySfAAyycfU1_20RealPropertyWrappersL_VFTJrSpSr
   // LOG3-NEXT:  This is multi-BB case which would be handled as single-BB case
 
   @differentiable(reverse)
@@ -198,9 +198,9 @@ AutoDiffClosureSpecNoBTETests.testWithLeakChecking("Test4") {
   // CHECK4-NONE:  {{^}}// pullback of methodWrapper
   // CHECK4-LABEL: {{^}}// specialized pullback of methodWrapper
   // CHECK4-NEXT:  {{^}}sil private
-  // CHECK4-SAME:  : $@convention(thin) (Float, @owned _AD__$s15multi_bb_no_bteyycfU2_5ClassL_V6methodSfyF_bb3__Pred__src_0_wrt_0) -> Class.TangentVector {{{$}}
+  // CHECK4-SAME:  : $@convention(thin) (Float, @owned _AD__$s3outyycfU2_5ClassL_V6methodSfyF_bb3__Pred__src_0_wrt_0) -> Class.TangentVector {{{$}}
 
-  // LOG4-LABEL: [ADCS][1] Trying to run AutoDiff Closure Specialization pass on $s15multi_bb_no_bteyycfU2_13methodWrapperL_ySfAAyycfU2_5ClassL_VFTJrSpSr
+  // LOG4-LABEL: [ADCS][1] Trying to run AutoDiff Closure Specialization pass on $s3outyycfU2_13methodWrapperL_ySfAAyycfU2_5ClassL_VFTJrSpSr
   // LOG4-NEXT:  This is multi-BB case which would be handled as single-BB case
 
   @differentiable(reverse)
