@@ -706,7 +706,6 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
 
 private func gatherCallSiteCFG(in caller: Function, _ context: FunctionPassContext) -> CallSite? {
   var callSiteOpt = CallSite?(nil)
-  let isSingleBB = caller.blocks.singleElement != nil
   var supportedClosuresCount = 0
   var subsetThunkArr = [SingleValueInstruction]()
 
