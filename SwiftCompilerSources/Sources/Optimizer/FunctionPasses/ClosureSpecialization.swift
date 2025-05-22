@@ -1387,7 +1387,7 @@ private func handleNonAppliesCFG(
         logADCS(msg: "  argumentOperands.count = \(maybeSubsetThunkOpt!.argumentOperands.count)")
         logADCS(msg: "  referencedFunction = \(maybeSubsetThunkOpt!.referencedFunction)")
       } else {
-        logADCS(msg: "handleNonAppliesCFG: not a subset thunk, unexpected instruction type")
+        logADCS(msg: "handleNonAppliesCFG: not a subset thunk, unexpected instruction type: \(closure.uses.singleElement!.instruction)")
       }
     }
   }
