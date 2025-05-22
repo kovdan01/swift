@@ -293,6 +293,9 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
   }
 
   guard let vjpBBToPbBBMap = getVjpBBToPbBBMap(vjp: vjp, pb: pb) else {
+    logADCS(msg: "AAAAAAAAAAAA BEGIN")
+    dumpVJPAndPB(vjp: vjp, pb: pb)
+    logADCS(msg: "AAAAAAAAAAAA END")
     logADCS(
       prefix: prefixFail,
       msg: "cannot create bijection mapping between VJP and pullback basic blocks")
@@ -311,6 +314,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     guard let argOfPbBB = getEnumPayloadArgOfPbBB(pbBB) else {
       for arg in pbBB.arguments {
         if arg.type.isTuple {
+          // MYTODO: what if we have tuple which is not payload but just tuple?
           logADCS(
             prefix: prefixFail,
             msg: "several arguments of pullback " + pb.name.string + " basic block "
