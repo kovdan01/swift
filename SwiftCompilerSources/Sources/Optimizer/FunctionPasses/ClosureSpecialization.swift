@@ -311,6 +311,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     guard let argOfPbBB = getEnumPayloadArgOfPbBB(pbBB) else {
       for arg in pbBB.arguments {
         if arg.type.isTuple {
+          // MYTODO: what if we have tuple which is not payload but just tuple?
           logADCS(
             prefix: prefixFail,
             msg: "several arguments of pullback " + pb.name.string + " basic block "
