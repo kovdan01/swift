@@ -533,13 +533,13 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
         msg:
           "The VJP " + function.name.string
           + " has passed the preliminary check. Proceeding to running the pass")
-      //if isMultiBBWithoutBranchTracingEnumPullbackArg {
+      if isMultiBBWithoutBranchTracingEnumPullbackArg {
         logADCS(msg: "Dumping VJP and PB before pass run begin")
         dumpVJPAndPB(
           vjp: function,
           pb: getPartialApplyOfPullbackInExitVJPBB(vjp: function)!.referencedFunction!)
         logADCS(msg: "Dumping VJP and PB before pass run end")
-      //}
+      }
     }
   }
 
@@ -869,7 +869,7 @@ private func getOrCreateSpecializedFunctionCFG(
         }
       }
     }
-    if currentEnumTypeOpt != nil && !enumTypesReverseQueue.contains(currentEnumTypeOpt!) {
+    if currentEnumTypeOpt != nil {
       enumTypesReverseQueue.append(currentEnumTypeOpt!)
     }
     for succ in block.successors {
@@ -879,10 +879,6 @@ private func getOrCreateSpecializedFunctionCFG(
     }
   }
 
-
-//  logADCS(msg: "BBBBBBB 00 BEGIN")
-//  logADCS(msg: "\(enumTypesReverseQueue)")
-//  logADCS(msg: "BBBBBBB 00 END")
   for enumType in enumTypesReverseQueue.reversed() {
     var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
     defer {
@@ -1177,8 +1173,8 @@ private func getEnumArgOfVJPBB(_ bb: BasicBlock) -> Argument? {
 }
 
 private func getEnumPayloadArgOfPbBB(_ bb: BasicBlock) -> Argument? {
-  // MYTODO: now we just assume that if we have exactly one tuple argument,
-  //         this is what we need. This is not always true.
+  // TODO: now we just assume that if we have exactly one tuple argument,
+  //       this is what we need. This is not always true.
   var argOpt = Argument?(nil)
   for arg in bb.arguments {
     if !arg.type.isTuple {
@@ -1287,7 +1283,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
         continue
       }
       var eiOpt = EnumInst?(nil)
-      // MYTODO: support cases when this is not the first enum inst
+      // TODO: support cases when this is not the first enum inst
       for inst in vjpSuccBB.instructions {
         eiOpt = inst as? EnumInst
         if eiOpt == nil {
