@@ -13,12 +13,14 @@
 /// Particular optimizations are checked in SILOptimizer tests, here we only check that optimizations occur
 // RUN: %target-swift-frontend -emit-sil -I%t %s -o - -O | %FileCheck %s
 /// TODO: support myfoo7. Now unsupported because of unexpected location of payload tuple instructions in vjp
+// CHECK-NONE: {{^}}// pullback of myfoo8
 // CHECK-NONE: {{^}}// pullback of myfoo6
 // CHECK-NONE: {{^}}// pullback of myfoo5
 // CHECK-NONE: {{^}}// pullback of myfoo4
 // CHECK-NONE: {{^}}// pullback of myfoo3
 // CHECK-NONE: {{^}}// pullback of myfoo2
 // CHECK-NONE: {{^}}// pullback of myfoo1
+// CHECK:      {{^}}// specialized pullback of myfoo8
 // CHECK:      {{^}}// specialized pullback of myfoo6
 // CHECK:      {{^}}// specialized pullback of myfoo5
 // CHECK:      {{^}}// specialized pullback of myfoo4
@@ -239,6 +241,43 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
     }
     expectEqual(gradient(at: Float(x), of: { myfoo7(Float($0), true)  }), myfoo7_derivative(Float(x), true))
     expectEqual((100000 * gradient(at: Float(x), of: { myfoo7(Float($0), false) })).rounded(), (100000 * myfoo7_derivative(Float(x), false)).rounded())
+  }
+
+  // x0 > x1  && x1 < 0:  1 - x1 / x0
+  // x0 > x1  && x1 >= 0: 1 + x1 / x0
+  // x0 <= x1:            1
+  @differentiable(reverse)
+  func myfoo8(_ x0: Float, _ x1: Float) -> Float {
+    let t1 = x1 + x0;
+    let t2 = x0 - x1;
+    let t4 = x0 > x1 ? t1 : x0;
+    let t6 = 1 / x0;
+    let t5 = x0 > t4 ? t2 : t4;
+    let t7 = t5 * t6;
+    return t7;
+  }
+
+  func myfoo8_gradient(_ x0: Float, _ x1: Float) -> (Float, Float) {
+    if x0 > x1 {
+      if x1 < 0 {
+        return (x1 / (x0 * x0), -1 / x0)
+      }
+      return (-x1 / (x0 * x0), 1 / x0)
+    }
+    // TODO: shouldn't this be (0, 0)?
+    return (1 / x0, 0)
+  }
+
+  for x0 in -10...10 {
+    if x0 == 0 {
+      continue
+    }
+    for x1 in -10...10 {
+      let got = gradient(at: Float(x0), Float(x1), of: myfoo8)
+      let expected = myfoo8_gradient(Float(x0), Float(x1))
+      expectEqual((100000 * got.0).rounded(), (100000 * expected.0).rounded())
+      expectEqual((100000 * got.1).rounded(), (100000 * expected.1).rounded())
+    }
   }
 }
 
