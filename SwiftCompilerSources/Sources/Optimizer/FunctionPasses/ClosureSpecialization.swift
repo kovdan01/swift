@@ -865,7 +865,7 @@ private func getOrCreateSpecializedFunctionCFG(
         }
       }
     }
-    if currentEnumTypeOpt != nil {
+    if currentEnumTypeOpt != nil && !enumTypesReverseQueue.contains(currentEnumTypeOpt!) {
       enumTypesReverseQueue.append(currentEnumTypeOpt!)
     }
     for succ in block.successors {
