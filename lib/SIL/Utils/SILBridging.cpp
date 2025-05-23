@@ -672,12 +672,19 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
     BridgedType enumType, BridgedFunction topVjp) const {
   EnumDecl *oldED = enumType.unbridged().getEnumOrBoundGenericEnum();
   assert(oldED && "Expected valid enum type");
+  // llvm::errs() << "\nAAAAAAAAAA BEGIN\n";
+  // llvm::errs() << enumType.unbridged() << '\n';
+  // if (enumDict.contains(enumType.unbridged())) {
+  //   llvm::errs() << "\nAAAAAAAAAA MIDDLE\n";
+  //   llvm::errs() << enumDict[enumType.unbridged()] << '\n';
+  // }
+  // llvm::errs() << "\nAAAAAAAAAA END\n";
   assert(!enumDict.contains(enumType.unbridged()));
 
   SILModule &module = topVjp.getFunction()->getModule();
   ASTContext &astContext = oldED->getASTContext();
 
-  // TODO: use better naming
+  // MYTODO: use better naming
   Twine edNameStr = oldED->getNameStr() + "_specialized";
   Identifier edName = astContext.getIdentifier(edNameStr.str());
 
