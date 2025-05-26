@@ -276,6 +276,23 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     }
   }
 
+  for pbBB in pb.blocks {
+    for predBB in pbBB.predecessors {
+      let seiOpt = predBB.terminator as? SwitchEnumInst
+      let brOpt = predBB.terminator as? BranchInst
+      let condOpt = predBB.terminator as? CondBranchInst
+      let argOpt = getEnumPayloadArgOfPbBB(pbBB)
+      if seiOpt == nil && brOpt == nil {
+        if condOpt == nil || argOpt != nil {
+          logADCS(
+            prefix: prefixFail,
+            msg: "unexpected terminator in PB BB which has successors\n\(predBB)")
+          return false
+        }
+      }
+    }
+  }
+
   for vjpBB in vjp.blocks {
     if getEnumArgOfVJPBB(vjpBB) != nil {
       break
@@ -348,6 +365,8 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
           case _ as UncheckedEnumDataInst:
             ()
           case _ as SwitchEnumInst:
+            ()
+          case _ as BeginBorrowInst:
             ()
           default:
             logADCS(
@@ -445,14 +464,19 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
         msg:
           "The VJP " + function.name.string
           + " has passed the preliminary check. Proceeding to running the pass")
-      if isMultiBBWithoutBranchTracingEnumPullbackArg {
+//      if isMultiBBWithoutBranchTracingEnumPullbackArg {
         logADCS(msg: "Dumping VJP and PB before pass run begin")
         dumpVJPAndPB(
           vjp: function,
           pb: getPartialApplyOfPullbackInExitVJPBB(vjp: function)!.referencedFunction!)
         logADCS(msg: "Dumping VJP and PB before pass run end")
-      }
+//      }
     }
+//    logADCS(msg: "Dumping VJP and PB before pass run begin")
+//    dumpVJPAndPB(
+//      vjp: function,
+//      pb: getPartialApplyOfPullbackInExitVJPBB(vjp: function)!.referencedFunction!)
+//    logADCS(msg: "Dumping VJP and PB before pass run end")
   }
 
   var remainingSpecializationRounds = 5
@@ -1714,6 +1738,31 @@ private func rewriteUsesOfPayloadItem(
       enum: newDti.results[resultIdx], cases: getEnumCasesForSwitchEnumInst(sei))
     newSEI.parentBlock.eraseInstruction(sei)
 
+  case let bbi as BeginBorrowInst:
+    assert(bbi.uses.count == 2)
+    let parentBB = bbi.parentBlock
+    var aiCnt = 0
+    var endCnt = 0
+    for bbiUse in bbi.uses {
+      let ai = bbiUse.instruction as? ApplyInst
+      if ai != nil {
+        aiCnt += 1
+        rewriteUsesOfPayloadItem(use: bbiUse, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti, context: context)
+      } else {
+        let ebi = bbiUse.instruction as? EndBorrowInst
+        assert(ebi != nil)
+        endCnt += 1
+        parentBB.eraseInstruction(ebi!)
+      }
+    }
+    assert(aiCnt == 1 && endCnt == 1)
+    parentBB.eraseInstruction(bbi)
+//    assert(ai != nil)
+//    let builder = Builder(before: bbi, context)
+//    let newBbi = builder.createBeginBorrow(
+//      of: newDti.results[resultIdx], isLexical: bbi.isLexical, hasPointerEscape: bbi.hasPointerEscape, isFromVarDecl: bbi.isFromVarDecl)
+//    bbi.replace(with: newBbi, context)
+
   default:
     assert(false)
   }
@@ -1806,6 +1855,11 @@ extension SpecializationCloner {
         }
       } else {
         let sei = predBB.terminator as? SwitchEnumInst
+        if sei == nil {
+          logADCS(msg: "BBBBBB 00 BEGIN")
+          logADCS(msg: "\(predBB.terminator)")
+          logADCS(msg: "BBBBBB 00 END")
+        }
         assert(sei != nil)
         let enumType = sei!.enumOp.type
         var enumTypeNotSpec = Optional<Type>(nil)
