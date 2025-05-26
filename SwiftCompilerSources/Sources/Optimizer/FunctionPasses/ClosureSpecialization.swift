@@ -292,16 +292,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     }
   }
 
-  guard let vjpBBToPbBBMap = getVjpBBToPbBBMap(vjp: vjp, pb: pb) else {
-    logADCS(msg: "AAAAAAAAAAAA BEGIN")
-    dumpVJPAndPB(vjp: vjp, pb: pb)
-    logADCS(msg: "AAAAAAAAAAAA END")
-    logADCS(
-      prefix: prefixFail,
-      msg: "cannot create bijection mapping between VJP and pullback basic blocks")
-    return false
-  }
-  for (vjpBB, pbBB) in vjpBBToPbBBMap {
+  for pbBB in pb.blocks {
     guard let argOfPbBB = getEnumPayloadArgOfPbBB(pbBB) else {
       for arg in pbBB.arguments {
         if arg.type.isTuple {
@@ -1139,156 +1130,6 @@ extension UseList {
   }
 }
 
-private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: BasicBlock]? {
-  let prefix = "getVjpBBToPbBBMap: failure reason "
-  if vjp.blocks.count != pb.blocks.count {
-    logADCS(prefix: prefix, msg: "00")
-    logADCS(
-      msg: "vjp.blocks.count = " + String(vjp.blocks.count)
-        + ", pb.blocks.count = " + String(pb.blocks.count))
-    func printBlocks(f: Function) {
-      for bb in f.blocks {
-        var msg = bb.shortDescription + " -> "
-        let riOpt = bb.terminator as? ReturnInst
-        if riOpt != nil {
-          msg = "exit " + msg
-        }
-        for succBB in bb.successors {
-          msg += succBB.shortDescription + " "
-        }
-        logADCS(msg: msg)
-      }
-    }
-    logADCS(msg: "VJP BBs begin")
-    printBlocks(f: vjp)
-    logADCS(msg: "VJP BBs end")
-    logADCS(msg: "PB BBs begin")
-    printBlocks(f: pb)
-    logADCS(msg: "PB BBs end")
-    return nil
-  }
-  var dict = [BasicBlock: BasicBlock]()
-
-  let vjpBB = vjp.entryBlock
-  var pbBBOpt = BasicBlock?(nil)
-  for pbBB in pb.blocks {
-    if pbBB.isReachableExitBlock {
-      if pbBBOpt != nil {
-        logADCS(prefix: prefix, msg: "01")
-        return nil
-      }
-      pbBBOpt = pbBB
-    }
-  }
-  if pbBBOpt == nil {
-    logADCS(prefix: prefix, msg: "02")
-    return nil
-  }
-  let pbBB = pbBBOpt!
-
-  func dfs(vjpBBArg: BasicBlock, pbBBArg: BasicBlock) -> Bool {
-    if dict[vjpBBArg] != nil {
-      return true
-    }
-    dict[vjpBBArg] = pbBBArg
-    if (vjpBBArg.singleSuccessor == nil) != (pbBBArg.singlePredecessor == nil) {
-      logADCS(prefix: prefix, msg: "03")
-      return false
-    }
-    if vjpBBArg.singleSuccessor != nil {
-      return dfs(vjpBBArg: vjpBBArg.singleSuccessor!, pbBBArg: pbBBArg.singlePredecessor!)
-    }
-    var remainingVjpBB = BasicBlock?(nil)
-    var predPbBBToSuccVjpBB = [BasicBlock: BasicBlock]()
-    var vjpSuccTotalCount = 0
-    var vjpSuccOKCount = 0
-    for vjpSuccBB in vjpBBArg.successors {
-      vjpSuccTotalCount += 1
-      if vjpSuccBB.isReachableExitBlock {
-        vjpSuccOKCount += 1
-        predPbBBToSuccVjpBB[pb.entryBlock] = vjpSuccBB
-        if !dfs(vjpBBArg: vjpSuccBB, pbBBArg: pb.entryBlock) {
-          logADCS(prefix: prefix, msg: "04")
-          return false
-        }
-        continue
-      }
-      var eiOpt = EnumInst?(nil)
-      // TODO: support cases when this is not the first enum inst
-      for inst in vjpSuccBB.instructions {
-        eiOpt = inst as? EnumInst
-        if eiOpt == nil {
-          continue
-        }
-        if !eiOpt!.results[0].type.isBranchTracingEnum {
-          eiOpt = nil
-          continue
-        }
-        break
-      }
-      if eiOpt == nil {
-        logADCS(prefix: prefix, msg: "05")
-        return false
-      }
-      let enumType = eiOpt!.results[0].type
-      assert(enumType.isBranchTracingEnum)
-      var newPredBB = BasicBlock?(nil)
-      for pbPredBB in pbBBArg.predecessors {
-        guard let pbPredBBArg = getEnumPayloadArgOfPbBB(pbPredBB) else {
-          continue
-        }
-        if pbPredBBArg.type.tupleElements.count != 0
-          && pbPredBBArg.type.tupleElements[0] == enumType
-        {
-          if newPredBB != nil {
-            logADCS(prefix: prefix, msg: "06")
-            return false
-          }
-          newPredBB = pbPredBB
-        }
-      }
-      if newPredBB == nil {
-        if remainingVjpBB != nil {
-          logADCS(prefix: prefix, msg: "07")
-          return false
-        }
-        remainingVjpBB = vjpSuccBB
-        continue
-      }
-      vjpSuccOKCount += 1
-      predPbBBToSuccVjpBB[newPredBB!] = vjpSuccBB
-      if !dfs(vjpBBArg: vjpSuccBB, pbBBArg: newPredBB!) {
-        logADCS(prefix: prefix, msg: "08")
-        return false
-      }
-    }
-    if vjpSuccOKCount + 1 == vjpSuccTotalCount {
-      assert(remainingVjpBB != nil)
-      var remainingPbBB = BasicBlock?(nil)
-      for pbPredBB in pbBBArg.predecessors {
-        if predPbBBToSuccVjpBB[pbPredBB] == nil {
-          assert(remainingPbBB == nil)
-          remainingPbBB = pbPredBB
-        }
-      }
-      assert(remainingPbBB != nil)
-      if !dfs(vjpBBArg: remainingVjpBB!, pbBBArg: remainingPbBB!) {
-        logADCS(prefix: prefix, msg: "09")
-        return false
-      }
-    }
-    return true
-  }
-
-  let status = dfs(vjpBBArg: vjpBB, pbBBArg: pbBB)
-  if status {
-    assert(dict.count == vjp.blocks.count)
-    return dict
-  }
-  logADCS(prefix: prefix, msg: "10")
-  return nil
-}
-
 private func handleNonAppliesCFG(
   for rootClosure: SingleValueInstruction,
   _ context: FunctionPassContext
@@ -1889,17 +1730,6 @@ private func getEnumCasesForSwitchEnumInst(_ sei: SwitchEnumInst) -> [(Int, Basi
   return enumCases
 }
 
-private func getPbBBToVjpBBMap(_ vjpBBToPbBBMap: [BasicBlock: BasicBlock]) -> [BasicBlock:
-  BasicBlock]
-{
-  var pbBBToVjpBBMap = [BasicBlock: BasicBlock]()
-  for (vjpBB, pbBB) in vjpBBToPbBBMap {
-    pbBBToVjpBBMap[pbBB] = vjpBB
-  }
-  assert(pbBBToVjpBBMap.count == vjpBBToPbBBMap.count)
-  return pbBBToVjpBBMap
-}
-
 extension BasicBlock {
   func eraseInstruction(_ inst: Instruction) {
     self.bridged.eraseInstruction(inst.bridged)
@@ -1920,9 +1750,6 @@ extension SpecializationCloner {
     }
 
     self.cloneFunctionBody(from: callSite.applyCallee, entryBlockArguments: args)
-
-    let clonedPbBBToVjpBBMap = getPbBBToVjpBBMap(
-      getVjpBBToPbBBMap(vjp: callSite.applySite.parentFunction, pb: self.cloned)!)
 
     for bb in self.cloned.blocks {
       if bb == self.cloned.entryBlock {
