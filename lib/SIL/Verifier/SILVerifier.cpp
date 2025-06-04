@@ -3647,6 +3647,8 @@ public:
       SILType caseTy = UI->getType().getEnumElementType(
           UI->getElement(), F.getModule(), F.getTypeExpansionContext());
       if (UI->getModule().getStage() != SILStage::Lowered) {
+        // llvm::errs() << "\n\nAAAAAAA caseTy = '" << caseTy << "'\nAAAAAAA
+        // enumTy = '" << UI->getOperand()->getType() << "'\n\n";
         requireSameType(caseTy, UI->getOperand()->getType(),
                         "EnumInst operand type does not match type of case");
       }

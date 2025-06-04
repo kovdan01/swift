@@ -349,6 +349,11 @@ void State::initializeConsumingUse(Operand *consumingUse,
     llvm::errs() << "Found over consume?!\n";
     if (auto v = value) {
       llvm::errs() << "Value: " << *v;
+      if (v->getDefiningInstruction()) {
+        llvm::errs() << "\nBB BEGIN\n"
+                     << *v->getDefiningInstruction()->getParent()
+                     << "\nBB END\n\n";
+      }
     } else {
       llvm::errs() << "Value: N/A\n";
     }

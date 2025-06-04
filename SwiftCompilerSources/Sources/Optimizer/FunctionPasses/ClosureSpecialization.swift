@@ -165,8 +165,97 @@ typealias ClosureInfoCFG = (
 )
 
 extension Type {
-  var isBranchTracingEnum: Bool {
-    self.isEnum && self.description.hasPrefix("$_AD__")
+  func isBranchTracingEnum(function: Function) -> Bool {
+    if !(self.isEnum && self.description.hasPrefix("$_AD__$s")) {
+      return false
+    }
+    assert(function.isAutodiffVJP) 
+    logADCS(msg: "EEEEE: \(function.bridged.isAutodiffBranchTracingEnumValid(self.bridged))")
+    return function.bridged.isAutodiffBranchTracingEnumValid(self.bridged)
+      //function.bridged.getOriginalFunctionNameForVJP()
+    //logADCS(msg: "CCCCCCC 00 \(function.name)")
+    //logADCS(msg: "CCCCCCC 01 \(self.description)")
+    //assert(function.name.string.hasPrefix("$s"))
+    //let functionName = function.name.string[String.Index(encodedOffset: 2)..<function.name.string.endIndex]
+    //logADCS(msg: "CCCCCC 02")
+    //let enumName = self.description[String.Index(encodedOffset: 8)..<self.description.endIndex]
+    //logADCS(msg: "CCCCCC 03")
+
+    //func getNumberPrefix(s: String) -> (Int, Int) {
+    //  var res = 0
+    //  var cnt = 0
+    //  for c in s {
+    //    if let num = c.wholeNumberValue {
+    //      res *= 10
+    //      res += num
+    //      cnt += 1
+    //    } else {
+    //      break
+    //    }
+    //  }
+    //  return (res, cnt)
+    //}
+    //let (functionFileLen, functionFileLenDigits) = getNumberPrefix(s: String(functionName))
+    //logADCS(msg: "CCCCCC 04")
+    //let (enumFileLen, enumFileLenDigits) = getNumberPrefix(s: String(enumName))
+    //logADCS(msg: "CCCCCC 05")
+    //assert(functionFileLenDigits != 0 && enumFileLenDigits != 0)
+    //if functionFileLen != enumFileLen {
+    //logADCS(msg: "CCCCCC 06")
+    //  return false
+    //}
+    //logADCS(msg: "CCCCCC 07")
+    //assert(functionFileLenDigits == enumFileLenDigits)
+    //logADCS(msg: "CCCCCC 08 00")
+    //logADCS(msg: "CCCCCC \(functionName)")
+    //logADCS(msg: "CCCCCC \(functionFileLenDigits)")
+    //logADCS(msg: "CCCCCC \(functionFileLen)")
+    //logADCS(msg: "CCCCCC \(enumName)")
+    //logADCS(msg: "CCCCCC \(enumFileLenDigits)")
+    //logADCS(msg: "CCCCCC \(enumFileLen)")
+    //logADCS(msg: "CCCCCC 08 01")
+    ////if functionName[String.Index(encodedOffset: functionFileLenDigits)..<String.Index(encodedOffset: functionFileLenDigits+functionFileLen)] != enumName[String.Index(encodedOffset: enumFileLenDigits)..<String.Index(encodedOffset: enumFileLenDigits+enumFileLen)] {
+    //if functionName.prefix(functionFileLenDigits+functionFileLen) != enumName.prefix(enumFileLenDigits+enumFileLen) {
+    //logADCS(msg: "CCCCCC 09")
+    //  return false
+    //}
+    //logADCS(msg: "CCCCCC 10")
+
+    ////let functionName2 = functionName[String.Index(encodedOffset: functionFileLenDigits+functionFileLen)..<functionName.endIndex]
+    ////let functionName2 = functionName.suffix(from: String.Index(encodedOffset: functionFileLenDigits+functionFileLen))
+    //let functionName2 = functionName.suffix(functionName.count - functionFileLenDigits - functionFileLen)
+    //logADCS(msg: "CCCCCC 11")
+    ////let enumName2 = enumName[String.Index(encodedOffset: enumFileLenDigits+enumFileLen)..<enumName.endIndex]
+    ////let enumName2 = enumName.suffix(from: String.Index(encodedOffset: enumFileLenDigits+enumFileLen))
+    //let enumName2 = enumName.suffix(enumName.count - enumFileLenDigits - enumFileLen)
+    //logADCS(msg: "CCCCCC 12")
+    //let (functionFileLen2, functionFileLenDigits2) = getNumberPrefix(s: String(functionName2))
+    //logADCS(msg: "CCCCCC 13")
+    //let (enumFileLen2, enumFileLenDigits2) = getNumberPrefix(s: String(enumName2))
+    //logADCS(msg: "CCCCCC 14")
+    //// MYTODO: closures support
+    //// $s4mainyycfU0_1SL_V1xxvMSLRzs13SignedNumericRz16_Differentiation14DifferentiableRzlTJrSpSSrSf_Tg5
+    //// $_AD__$s4mainyycfU0_1SL_V1xxvM_bb5__Pred__src_0_1_wrt_0_SLRzs13SignedNumericRz16_Differentiation14DifferentiableRzl<Float>
+    //if functionFileLenDigits2 == 0 || enumFileLenDigits2 == 0 {
+    //  return false
+    //}
+    //assert(functionFileLenDigits2 != 0 && enumFileLenDigits2 != 0)
+    //logADCS(msg: "CCCCCC 15")
+    //if functionFileLen2 != enumFileLen2 {
+    //logADCS(msg: "CCCCCC 16")
+    //  return false
+    //}
+    //logADCS(msg: "CCCCCC 17")
+    //assert(functionFileLenDigits2 == enumFileLenDigits2)
+    //logADCS(msg: "CCCCCC 18")
+    ////if functionName2[String.Index(encodedOffset: functionFileLenDigits2)..<String.Index(encodedOffset: functionFileLenDigits2+functionFileLen2)] != enumName2[String.Index(encodedOffset: enumFileLenDigits2)..<String.Index(encodedOffset: enumFileLenDigits2+enumFileLen2)] {
+    //if functionName2.prefix(functionFileLenDigits2+functionFileLen2) != enumName2.prefix(enumFileLenDigits2+enumFileLen2) {
+    //logADCS(msg: "CCCCCC 19")
+    //  return false
+    //}
+
+    //logADCS(msg: "CCCCCC 20")
+    //return true
   }
 }
 
@@ -200,7 +289,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
   }
   var branchTracingEnumArgCounter = 0
   for arg in paiOfPb.arguments {
-    if arg.type.isBranchTracingEnum {
+    if arg.type.isBranchTracingEnum(function: vjp) {
       branchTracingEnumArgCounter += 1
     }
   }
@@ -245,7 +334,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     )
     return false
   }
-  guard getEnumArgOfEntryPbBB(pb.entryBlock) != nil else {
+  guard getEnumArgOfEntryPbBB(pb.entryBlock, vjp: vjp) != nil else {
     logADCS(
       prefix: prefixFail,
       msg: "cannot get branch tracing enum argument of the pullback function " + pb.name.string)
@@ -281,7 +370,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
       break
     }
     for arg in vjpBB.arguments {
-      if arg.type.isBranchTracingEnum {
+      if arg.type.isBranchTracingEnum(function: vjp) {
         logADCS(
           prefix: prefixFail,
           msg: "several arguments of VJP " + vjp.name.string + " basic block "
@@ -336,7 +425,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
       }
       // TODO: do we need to check that results is not empty?
       if dti.operands[0].value.type.tupleElements.count != 0
-        && dti.results[0].type.isBranchTracingEnum && dti.results[0].uses.count > 1
+        && dti.results[0].type.isBranchTracingEnum(function: vjp) && dti.results[0].uses.count > 1
       {
         logADCS(
           prefix: prefixFail,
@@ -451,13 +540,13 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
         msg:
           "The VJP " + function.name.string
           + " has passed the preliminary check. Proceeding to running the pass")
-      if isMultiBBWithoutBranchTracingEnumPullbackArg {
+      //if isMultiBBWithoutBranchTracingEnumPullbackArg {
         logADCS(msg: "Dumping VJP and PB before pass run begin")
         dumpVJPAndPB(
           vjp: function,
           pb: getPartialApplyOfPullbackInExitVJPBB(vjp: function)!.referencedFunction!)
         logADCS(msg: "Dumping VJP and PB before pass run end")
-      }
+      //}
     }
   }
 
@@ -767,9 +856,10 @@ private func getOrCreateSpecializedFunctionCFG(
   var bbVisited = [BasicBlock: Bool]()
   var bbWorklist = [callSite.applyCallee.entryBlock]
   var enumTypesReverseQueue = [Type]()
-  let enumTypeOfEntryBBArg = getEnumArgOfEntryPbBB(pb.entryBlock)!.type
+  let enumTypeOfEntryBBArg = getEnumArgOfEntryPbBB(pb.entryBlock, vjp: vjp)!.type
   while bbWorklist.count != 0 {
     let block = bbWorklist.first!
+    logADCS(msg: "BBBBB 00 \(block.shortDescription)")
     bbVisited[block] = true
     bbWorklist.removeFirst()
     var currentEnumTypeOpt = Type?(nil)
@@ -777,21 +867,30 @@ private func getOrCreateSpecializedFunctionCFG(
       currentEnumTypeOpt = enumTypeOfEntryBBArg
     } else {
       let argOpt = getEnumPayloadArgOfPbBB(block)
+      logADCS(msg: "BBBBB 01 \(argOpt)")
       if argOpt != nil && argOpt!.uses.singleUse != nil {
+        logADCS(msg: "BBBBB 06 \(argOpt!)")
         let dti = argOpt!.uses.singleUse!.instruction as! DestructureTupleInst
-        if dti.results[0].type.isBranchTracingEnum {
+        if dti.results[0].type.isBranchTracingEnum(function: vjp) {
+          logADCS(msg: "BBBBB 07 \(dti.results[0].type)")
+          logADCS(msg: "BBBBB 09 \(dti.results[0].uses.count)")
           assert(dti.results[0].uses.count <= 1)
           if dti.results[0].uses.singleUse != nil {
+            logADCS(msg: "BBBBB 08 \(dti.results[0].type)")
             currentEnumTypeOpt = dti.results[0].type
           }
         }
       }
     }
+    logADCS(msg: "BBBBB 04 \(currentEnumTypeOpt)")
     if currentEnumTypeOpt != nil && !enumTypesReverseQueue.contains(currentEnumTypeOpt!) {
+      logADCS(msg: "BBBBB 05 \(currentEnumTypeOpt!)")
       enumTypesReverseQueue.append(currentEnumTypeOpt!)
     }
     for succ in block.successors {
+      logADCS(msg: "BBBBB 02 \(succ.shortDescription)")
       if bbVisited[succ] != true {
+        logADCS(msg: "BBBBB 03 \(succ.shortDescription)")
         bbWorklist.append(succ)
       }
     }
@@ -812,6 +911,7 @@ private func getOrCreateSpecializedFunctionCFG(
         closureInfoCFG.closure.bridged,
         closureInfoCFG.idxInEnumPayload)
     }
+    logADCS(msg: "AAAAA REWRITE \(enumType)")
     enumDict[enumType] =
       adcsHelper.rewriteBranchTracingEnum( /*enumType: */
         enumType.bridged,
@@ -846,7 +946,7 @@ private func findEnumsAndPayloadsInVjp(vjp: Function) -> [EnumInst:TupleInst] {
     guard let ei = inst as? EnumInst else {
       continue
     }
-    if !ei.type.isBranchTracingEnum {
+    if !ei.type.isBranchTracingEnum(function: vjp) {
       continue
     }
     let ti = ei.operands[0].value.definingInstruction as! TupleInst
@@ -1073,11 +1173,11 @@ private func updateCallSite(
     intermediateClosureArgDescriptorData: intermediateClosureArgDescriptorData, context)
 }
 
-private func getEnumArgOfEntryPbBB(_ bb: BasicBlock) -> Argument? {
+private func getEnumArgOfEntryPbBB(_ bb: BasicBlock, vjp: Function) -> Argument? {
   assert(bb.parentFunction.entryBlock == bb)
   var argOpt = Argument?(nil)
   for arg in bb.arguments {
-    if arg.type.isBranchTracingEnum {
+    if arg.type.isBranchTracingEnum(function: vjp) {//bb.parentFunction) {
       if argOpt != nil {
         return nil
       }
@@ -1090,7 +1190,7 @@ private func getEnumArgOfEntryPbBB(_ bb: BasicBlock) -> Argument? {
 private func getEnumArgOfVJPBB(_ bb: BasicBlock) -> Argument? {
   var argOpt = Argument?(nil)
   for arg in bb.arguments {
-    if arg.type.isBranchTracingEnum {
+    if arg.type.isBranchTracingEnum(function: bb.parentFunction) {
       if argOpt != nil {
         return nil
       }
@@ -1217,7 +1317,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
         if eiOpt == nil {
           continue
         }
-        if !eiOpt!.results[0].type.isBranchTracingEnum {
+        if !eiOpt!.results[0].type.isBranchTracingEnum(function: vjp) {
           eiOpt = nil
           continue
         }
@@ -1228,7 +1328,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
         return false
       }
       let enumType = eiOpt!.results[0].type
-      assert(enumType.isBranchTracingEnum)
+      assert(enumType.isBranchTracingEnum(function: vjp))
       var newPredBB = BasicBlock?(nil)
       for pbPredBB in pbBBArg.predecessors {
         guard let pbPredBBArg = getEnumPayloadArgOfPbBB(pbPredBB) else {
@@ -1357,7 +1457,7 @@ private func handleNonAppliesCFG(
         logADCS(msg: "handleNonAppliesCFG:   tiUse.instruction: " + tiUse.instruction.description)
         return []
       }
-      if !ei.type.isBranchTracingEnum {
+      if !ei.type.isBranchTracingEnum(function: rootClosure.parentFunction) {
         logADCS(msg: "handleNonAppliesCFG: unexpected enum type:" + ei.type.description)
         return []
       }
@@ -1778,11 +1878,11 @@ private func rewriteUsesOfPayloadItem(
         ai.replace(with: newAi, context)
         // MYTODO: maybe we can set insertion point earlier
         let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
-        for res in dtiOfCapturedArgsTuple.results {
-          if !res.type.isTrivial(in: res.parentFunction) {
-            newBuilder.createDestroyValue(operand: res)
-          }
-        }
+//        for res in dtiOfCapturedArgsTuple.results {
+//          if !res.type.isTrivial(in: res.parentFunction) {
+//            newBuilder.createDestroyValue(operand: res)
+//          }
+//        }
       } else {
         var newClosure = SingleValueInstruction?(nil)
         let maybePai = closureInfoOpt!.closure as? PartialApplyInst
@@ -2041,7 +2141,7 @@ extension SpecializationCloner {
     usingOrigCalleeAt callSite: CallSite, enumDict: EnumDict
   ) {
     let pb = callSite.applyCallee
-    let enumType = getEnumArgOfEntryPbBB(pb.entryBlock)!.type
+    let enumType = getEnumArgOfEntryPbBB(pb.entryBlock, vjp: callSite.applySite.parentFunction)!.type
 
     let originalEntryBlock = callSite.applyCallee.entryBlock
     let clonedFunction = self.cloned
@@ -2804,7 +2904,7 @@ private struct CallSite {
     let paiOfPbInExitVjpBB = getPartialApplyOfPullbackInExitVJPBB(vjp: vjp)!
     var argAndIdxInPbPAI = (arg: Value, idx: Int)?(nil)
     for (argIdx, arg) in paiOfPbInExitVjpBB.arguments.enumerated() {
-      if arg.type.isBranchTracingEnum {
+      if arg.type.isBranchTracingEnum(function: vjp) {
         assert(argAndIdxInPbPAI == nil)
         argAndIdxInPbPAI = (arg: arg, idx: argIdx)
       }

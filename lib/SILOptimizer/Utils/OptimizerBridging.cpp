@@ -706,6 +706,101 @@ bool BridgedFunction::isAutodiffVJP() const {
       getFunction(), swift::AutoDiffFunctionComponent::VJP);
 }
 
+// void BridgedFunction::getOriginalFunctionNameForVJP() const {
+//   assert(isAutodiffVJP());
+
+//   llvm::errs() << "DDDDDDD 00 " << getFunction()->getName() << "\n";
+//   Demangle::Context Ctx;
+//   if (auto *root = Ctx.demangleSymbolAsNode(getFunction()->getName())) {
+//     if (auto *node =
+//         root->findByKind(Demangle::Node::Kind::FunctionType, 5)) {
+//       //if (node->hasText()) {
+//       llvm::errs() << "DDDDDDD 01 " << mangleNode(node).result() <<
+//       "\n";//(int)(node->hasText()) << "\n";
+//     // llvm::errs() << "DDDDDDD 01 " << (int)(root->getKind()) << " " <<
+//     (int)(root->getNumChildren()) << "\n"; llvm::errs() << "DDDDDDD 02
+//     BEGIN\n"; root->dump(); llvm::errs() << "\nDDDDDDD 02 END\n";
+//      //}
+//    }
+//   }
+// }
+
+bool BridgedFunction::isAutodiffBranchTracingEnumValid(
+    BridgedType enumType) const {
+  assert(isAutodiffVJP());
+
+  llvm::errs() << "DDDDDDD 00 00 " << getFunction()->getName() << "\n";
+  llvm::errs()
+      << "DDDDDDD 00 01 "
+      << enumType.unbridged().getDebugDescription() /*getMangledName()*/
+      << "\n";
+
+  std::string enumTypeStr =
+      enumType.unbridged().getDebugDescription(); // getMangledName();
+  std::size_t idx = enumTypeStr.find("__Pred__");
+  if (idx == std::string::npos)
+    return false;
+
+  llvm::errs() << "DDDDDDD 06 " << idx << "\n";
+
+  for (; idx != 0; --idx) {
+    if (enumTypeStr[idx - 1] < '0' || enumTypeStr[idx - 1] > '9')
+      break;
+  }
+
+  llvm::errs() << "DDDDDDD 07\n";
+
+  assert(std::isdigit(enumTypeStr[idx]));
+  assert(!std::isdigit(enumTypeStr[idx - 1]));
+
+  assert(idx >= 3 + 6);
+
+  llvm::errs() << "DDDDDDD 08\n";
+
+  if (std::string_view(enumTypeStr.data() + idx - 3, 3) != "_bb")
+    return false;
+
+  assert(std::string_view(enumTypeStr.data(), 8) == "$_AD__$s");
+
+  llvm::StringRef enumOrigFuncName =
+      std::string_view(enumTypeStr.data() + 6 + 2, idx - 3 - 6 - 2);
+  // llvm::StringRef enumOrigFuncName = std::string_view(enumTypeStr.data() + 6,
+  // idx - 3 - 6 );
+  llvm::errs() << "DDDDDDD 09 " << enumOrigFuncName << "\n";
+
+  Demangle::Context Ctx;
+
+  // auto *enumFuncNode = Ctx.demangleSymbolAsNode(enumOrigFuncName);
+
+  // llvm::errs() << "DDDDDDD 10 " << enumFuncNode << "\n";
+
+  if (auto *root = Ctx.demangleSymbolAsNode(getFunction()->getName())) {
+    llvm::errs() << "DDDDDDD 04\n";
+    if (auto *node = root->findByKind(Demangle::Node::Kind::Function, 3)) {
+      // if (node->hasText()) {
+      llvm::errs() << "DDDDDDD 01 " << mangleNode(node).result()
+                   << "\n"; //(int)(node->hasText()) << "\n";
+      // llvm::errs() << "DDDDDDD 01 " << (int)(root->getKind()) << " " <<
+      // (int)(root->getNumChildren()) << "\n";
+      llvm::errs() << "DDDDDDD 02 BEGIN " << node << "\n";
+      node->dump();
+      llvm::errs() << "\nDDDDDDD 02 END\n";
+      // if (node == enumFuncNode) {
+      //   llvm::errs() << "DDDDDDD 03\n";
+      //   return true;
+      // }
+      if (mangleNode(node).result() == enumOrigFuncName) {
+        llvm::errs() << "DDDDDDD 03\n";
+        return true;
+      }
+      //}
+    }
+  }
+  llvm::errs() << "DDDDDDD 05\n";
+
+  return false;
+}
+
 SwiftInt BridgedFunction::specializationLevel() const {
   return swift::getSpecializationLevel(getFunction());
 }
