@@ -165,8 +165,12 @@ typealias ClosureInfoCFG = (
 )
 
 extension Type {
-  var isBranchTracingEnum: Bool {
-    self.isEnum && self.description.hasPrefix("$_AD__")
+  func isBranchTracingEnum(vjp: Function) -> Bool {
+    if !(self.isEnum && self.description.hasPrefix("$_AD__$s")) {
+      return false
+    }
+    assert(vjp.isAutodiffVJP)
+    return vjp.bridged.isAutodiffBranchTracingEnumValid(self.bridged)
   }
 }
 
@@ -200,7 +204,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
   }
   var branchTracingEnumArgCounter = 0
   for arg in paiOfPb.arguments {
-    if arg.type.isBranchTracingEnum {
+    if arg.type.isBranchTracingEnum(vjp: vjp) {
       branchTracingEnumArgCounter += 1
     }
   }
@@ -245,7 +249,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     )
     return false
   }
-  guard getEnumArgOfEntryPbBB(pb.entryBlock) != nil else {
+  guard getEnumArgOfEntryPbBB(pb.entryBlock, vjp: vjp) != nil else {
     logADCS(
       prefix: prefixFail,
       msg: "cannot get branch tracing enum argument of the pullback function " + pb.name.string)
@@ -281,7 +285,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
       break
     }
     for arg in vjpBB.arguments {
-      if arg.type.isBranchTracingEnum {
+      if arg.type.isBranchTracingEnum(vjp: vjp) {
         logADCS(
           prefix: prefixFail,
           msg: "several arguments of VJP " + vjp.name.string + " basic block "
@@ -336,7 +340,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
       }
       // TODO: do we need to check that results is not empty?
       if dti.operands[0].value.type.tupleElements.count != 0
-        && dti.results[0].type.isBranchTracingEnum && dti.results[0].uses.count > 1
+        && dti.results[0].type.isBranchTracingEnum(vjp: vjp) && dti.results[0].uses.count > 1
       {
         logADCS(
           prefix: prefixFail,
@@ -767,7 +771,7 @@ private func getOrCreateSpecializedFunctionCFG(
   var bbVisited = [BasicBlock: Bool]()
   var bbWorklist = [callSite.applyCallee.entryBlock]
   var enumTypesReverseQueue = [Type]()
-  let enumTypeOfEntryBBArg = getEnumArgOfEntryPbBB(pb.entryBlock)!.type
+  let enumTypeOfEntryBBArg = getEnumArgOfEntryPbBB(pb.entryBlock, vjp: vjp)!.type
   while bbWorklist.count != 0 {
     let block = bbWorklist.first!
     bbVisited[block] = true
@@ -779,7 +783,7 @@ private func getOrCreateSpecializedFunctionCFG(
       let argOpt = getEnumPayloadArgOfPbBB(block)
       if argOpt != nil && argOpt!.uses.singleUse != nil {
         let dti = argOpt!.uses.singleUse!.instruction as! DestructureTupleInst
-        if dti.results[0].type.isBranchTracingEnum {
+        if dti.results[0].type.isBranchTracingEnum(vjp: vjp) {
           assert(dti.results[0].uses.count <= 1)
           if dti.results[0].uses.singleUse != nil {
             currentEnumTypeOpt = dti.results[0].type
@@ -846,7 +850,7 @@ private func findEnumsAndPayloadsInVjp(vjp: Function) -> [EnumInst:TupleInst] {
     guard let ei = inst as? EnumInst else {
       continue
     }
-    if !ei.type.isBranchTracingEnum {
+    if !ei.type.isBranchTracingEnum(vjp: vjp) {
       continue
     }
     let ti = ei.operands[0].value.definingInstruction as! TupleInst
@@ -1073,11 +1077,11 @@ private func updateCallSite(
     intermediateClosureArgDescriptorData: intermediateClosureArgDescriptorData, context)
 }
 
-private func getEnumArgOfEntryPbBB(_ bb: BasicBlock) -> Argument? {
+private func getEnumArgOfEntryPbBB(_ bb: BasicBlock, vjp: Function) -> Argument? {
   assert(bb.parentFunction.entryBlock == bb)
   var argOpt = Argument?(nil)
   for arg in bb.arguments {
-    if arg.type.isBranchTracingEnum {
+    if arg.type.isBranchTracingEnum(vjp: vjp) {
       if argOpt != nil {
         return nil
       }
@@ -1090,7 +1094,7 @@ private func getEnumArgOfEntryPbBB(_ bb: BasicBlock) -> Argument? {
 private func getEnumArgOfVJPBB(_ bb: BasicBlock) -> Argument? {
   var argOpt = Argument?(nil)
   for arg in bb.arguments {
-    if arg.type.isBranchTracingEnum {
+    if arg.type.isBranchTracingEnum(vjp: bb.parentFunction) {
       if argOpt != nil {
         return nil
       }
@@ -1217,7 +1221,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
         if eiOpt == nil {
           continue
         }
-        if !eiOpt!.results[0].type.isBranchTracingEnum {
+        if !eiOpt!.results[0].type.isBranchTracingEnum(vjp: vjp) {
           eiOpt = nil
           continue
         }
@@ -1228,7 +1232,7 @@ private func getVjpBBToPbBBMap(vjp: Function, pb: Function) -> [BasicBlock: Basi
         return false
       }
       let enumType = eiOpt!.results[0].type
-      assert(enumType.isBranchTracingEnum)
+      assert(enumType.isBranchTracingEnum(vjp: vjp))
       var newPredBB = BasicBlock?(nil)
       for pbPredBB in pbBBArg.predecessors {
         guard let pbPredBBArg = getEnumPayloadArgOfPbBB(pbPredBB) else {
@@ -1357,7 +1361,7 @@ private func handleNonAppliesCFG(
         logADCS(msg: "handleNonAppliesCFG:   tiUse.instruction: " + tiUse.instruction.description)
         return []
       }
-      if !ei.type.isBranchTracingEnum {
+      if !ei.type.isBranchTracingEnum(vjp: rootClosure.parentFunction) {
         logADCS(msg: "handleNonAppliesCFG: unexpected enum type:" + ei.type.description)
         return []
       }
@@ -1776,13 +1780,6 @@ private func rewriteUsesOfPayloadItem(
         let newAi = builder.createApply(
           function: newFri, ai.substitutionMap, arguments: newArgs)
         ai.replace(with: newAi, context)
-        // MYTODO: maybe we can set insertion point earlier
-        let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
-        for res in dtiOfCapturedArgsTuple.results {
-          if !res.type.isTrivial(in: res.parentFunction) {
-            newBuilder.createDestroyValue(operand: res)
-          }
-        }
       } else {
         var newClosure = SingleValueInstruction?(nil)
         let maybePai = closureInfoOpt!.closure as? PartialApplyInst
@@ -1799,13 +1796,6 @@ private func rewriteUsesOfPayloadItem(
             hasUnknownResultIsolation: maybePai!.hasUnknownResultIsolation,
             isOnStack: maybePai!.isOnStack)
           newClosure = newPai
-          // MYTODO: maybe we can set insertion point earlier
-          let newBuilder = Builder(before: newPai.parentBlock.terminator, context)
-          for res in dtiOfCapturedArgsTuple.results {
-            if !res.type.isTrivial(in: res.parentFunction) {
-              newBuilder.createDestroyValue(operand: res)
-            }
-          }
         } else {
           let maybeTttfi = closureInfoOpt!.closure as? ThinToThickFunctionInst
           assert(maybeTttfi != nil)
@@ -2041,7 +2031,7 @@ extension SpecializationCloner {
     usingOrigCalleeAt callSite: CallSite, enumDict: EnumDict
   ) {
     let pb = callSite.applyCallee
-    let enumType = getEnumArgOfEntryPbBB(pb.entryBlock)!.type
+    let enumType = getEnumArgOfEntryPbBB(pb.entryBlock, vjp: callSite.applySite.parentFunction)!.type
 
     let originalEntryBlock = callSite.applyCallee.entryBlock
     let clonedFunction = self.cloned
@@ -2804,7 +2794,7 @@ private struct CallSite {
     let paiOfPbInExitVjpBB = getPartialApplyOfPullbackInExitVJPBB(vjp: vjp)!
     var argAndIdxInPbPAI = (arg: Value, idx: Int)?(nil)
     for (argIdx, arg) in paiOfPbInExitVjpBB.arguments.enumerated() {
-      if arg.type.isBranchTracingEnum {
+      if arg.type.isBranchTracingEnum(vjp: vjp) {
         assert(argAndIdxInPbPAI == nil)
         argAndIdxInPbPAI = (arg: arg, idx: argIdx)
       }
