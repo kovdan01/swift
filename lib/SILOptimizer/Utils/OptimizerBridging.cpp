@@ -706,6 +706,45 @@ bool BridgedFunction::isAutodiffVJP() const {
       getFunction(), swift::AutoDiffFunctionComponent::VJP);
 }
 
+bool BridgedFunction::isAutodiffBranchTracingEnumValid(
+    BridgedType enumType) const {
+  assert(isAutodiffVJP());
+
+  std::string enumTypeStr = enumType.unbridged().getDebugDescription();
+  std::size_t idx = enumTypeStr.find("__Pred__");
+  if (idx == std::string::npos)
+    return false;
+
+  for (; idx != 0; --idx) {
+    if (enumTypeStr[idx - 1] < '0' || enumTypeStr[idx - 1] > '9')
+      break;
+  }
+
+  // MYTODO: proper checks
+  assert(std::isdigit(enumTypeStr[idx]));
+  assert(!std::isdigit(enumTypeStr[idx - 1]));
+  assert(idx >= 3 + 6);
+
+  if (std::string_view(enumTypeStr.data() + idx - 3, 3) != "_bb")
+    return false;
+
+  assert(std::string_view(enumTypeStr.data(), 8) == "$_AD__$s");
+
+  llvm::StringRef enumOrigFuncName =
+      std::string_view(enumTypeStr.data() + 6 + 2, idx - 3 - 6 - 2);
+
+  Demangle::Context Ctx;
+  if (auto *root = Ctx.demangleSymbolAsNode(getFunction()->getName())) {
+    if (auto *node = root->findByKind(Demangle::Node::Kind::Function, 3)) {
+      if (mangleNode(node).result() == enumOrigFuncName) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 SwiftInt BridgedFunction::specializationLevel() const {
   return swift::getSpecializationLevel(getFunction());
 }
