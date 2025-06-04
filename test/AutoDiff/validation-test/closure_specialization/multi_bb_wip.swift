@@ -12,22 +12,26 @@
 
 /// Particular optimizations are checked in SILOptimizer tests, here we only check that optimizations occur
 // RUN: %target-swift-frontend -emit-sil -I%t %s -o - -O | %FileCheck %s
-// CHECK-NONE: {{^}}// pullback of myfoo8
-// CHECK-NONE: {{^}}// pullback of myfoo7
-// CHECK-NONE: {{^}}// pullback of myfoo6
-// CHECK-NONE: {{^}}// pullback of myfoo5
-// CHECK-NONE: {{^}}// pullback of myfoo4
-// CHECK-NONE: {{^}}// pullback of myfoo3
-// CHECK-NONE: {{^}}// pullback of myfoo2
-// CHECK-NONE: {{^}}// pullback of myfoo1
-// CHECK:      {{^}}// specialized pullback of myfoo8
-// CHECK:      {{^}}// specialized pullback of myfoo7
-// CHECK:      {{^}}// specialized pullback of myfoo6
-// CHECK:      {{^}}// specialized pullback of myfoo5
-// CHECK:      {{^}}// specialized pullback of myfoo4
-// CHECK:      {{^}}// specialized pullback of myfoo3
-// CHECK:      {{^}}// specialized pullback of myfoo2
-// CHECK:      {{^}}// specialized pullback of myfoo1
+// CHECK-NONE: {{^}}// pullback of myfoo08
+// CHECK-NONE: {{^}}// pullback of myfoo09
+// CHECK-NONE: {{^}}// pullback of myfoo10
+// CHECK-NONE: {{^}}// pullback of myfoo07
+// CHECK-NONE: {{^}}// pullback of myfoo06
+// CHECK-NONE: {{^}}// pullback of myfoo05
+// CHECK-NONE: {{^}}// pullback of myfoo04
+// CHECK-NONE: {{^}}// pullback of myfoo03
+// CHECK-NONE: {{^}}// pullback of myfoo02
+// CHECK-NONE: {{^}}// pullback of myfoo01
+// CHECK:      {{^}}// specialized pullback of myfoo08
+// CHECK:      {{^}}// specialized pullback of myfoo09
+// CHECK:      {{^}}// specialized pullback of myfoo10
+// CHECK:      {{^}}// specialized pullback of myfoo07
+// CHECK:      {{^}}// specialized pullback of myfoo06
+// CHECK:      {{^}}// specialized pullback of myfoo05
+// CHECK:      {{^}}// specialized pullback of myfoo04
+// CHECK:      {{^}}// specialized pullback of myfoo03
+// CHECK:      {{^}}// specialized pullback of myfoo02
+// CHECK:      {{^}}// specialized pullback of myfoo01
 
 import DifferentiationUnittest
 import StdlibUnittest
@@ -44,7 +48,7 @@ import closure_spec_module
 var AutoDiffClosureSpecializationTests = TestSuite("AutoDiffClosureSpecialization")
 
 AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
-  func myfoo1(_ x: Float) -> Float {
+  func myfoo01(_ x: Float) -> Float {
     if x > 0 {
       return mybar1(x) + mybar2(x)
     } else {
@@ -52,7 +56,7 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
     }
   }
 
-  func myfoo1_derivative(_ x: Float) -> Float {
+  func myfoo01_derivative(_ x: Float) -> Float {
     if x > 0 {
       return 2 * x + 1
     } else {
@@ -61,10 +65,10 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
   }
 
   for x in -100...100 {
-    expectEqual(myfoo1_derivative(Float(x)), gradient(at: Float(x), of: myfoo1))
+    expectEqual(myfoo01_derivative(Float(x)), gradient(at: Float(x), of: myfoo01))
   }
 
-  func myfoo2(_ x: Float) -> Float {
+  func myfoo02(_ x: Float) -> Float {
     let y = mybar1(x) + 37 * mybar2(x)
     var z: Float = 0
     if x > 0 {
@@ -75,7 +79,7 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
     return z * x + y * y
   }
 
-  func myfoo2_derivative(_ x: Float) -> Float {
+  func myfoo02_derivative(_ x: Float) -> Float {
     if x > 0 {
       return 7030 * x * x * x * x + 5776 * x * x * x + 225 * x * x + 2 * x
     } else {
@@ -84,10 +88,10 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
   }
 
   for x in -14...6 {
-    expectEqual(myfoo2_derivative(Float(x)), gradient(at: Float(x), of: myfoo2))
+    expectEqual(myfoo02_derivative(Float(x)), gradient(at: Float(x), of: myfoo02))
   }
 
-  func myfoo3(_ x: Float) -> Float {
+  func myfoo03(_ x: Float) -> Float {
     if x > 0 {
       return mybar2(x) * mybar2(x)
     } else {
@@ -100,7 +104,7 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
     }
   }
 
-  func myfoo3_derivative(_ x: Float) -> Float {
+  func myfoo03_derivative(_ x: Float) -> Float {
     if x > 0 {
       return 4 * x * x * x
     } else {
@@ -113,10 +117,10 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
   }
 
   for x in -100...100 {
-    expectEqual(myfoo3_derivative(Float(x)), gradient(at: Float(x), of: myfoo3))
+    expectEqual(myfoo03_derivative(Float(x)), gradient(at: Float(x), of: myfoo03))
   }
 
-  func myfoo4(_ x: Float) -> Float {
+  func myfoo04(_ x: Float) -> Float {
     if x > 0 {
       return mybar2(x) * mybar2(x)
     } else {
@@ -131,7 +135,7 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
     }
   }
 
-  func myfoo4_derivative(_ x: Float) -> Float {
+  func myfoo04_derivative(_ x: Float) -> Float {
     if x > 0 {
       return 4 * x * x * x
     } else if x > -7 {
@@ -143,10 +147,10 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
   }
 
   for x in -20...100 {
-    expectEqual(myfoo4_derivative(Float(x)), gradient(at: Float(x), of: myfoo4))
+    expectEqual(myfoo04_derivative(Float(x)), gradient(at: Float(x), of: myfoo04))
   }
 
-  func myfoo5(_ x: Float) -> Float {
+  func myfoo05(_ x: Float) -> Float {
     if x > 0 {
       return sin(x) * cos(x)
     } else {
@@ -154,7 +158,7 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
     }
   }
 
-  func myfoo5_derivative(_ x: Float) -> Float {
+  func myfoo05_derivative(_ x: Float) -> Float {
     if x > 0 {
       return cos(x) * cos(x) - sin(x) * sin(x)
     } else {
@@ -163,7 +167,7 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
   }
 
   for x in -100...100 {
-    expectEqual(myfoo5_derivative(Float(x)), gradient(at: Float(x), of: myfoo5))
+    expectEqual(myfoo05_derivative(Float(x)), gradient(at: Float(x), of: myfoo05))
   }
 
   func double(x: Float) -> Float {
@@ -174,7 +178,7 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
     return x * x
   }
 
-  func myfoo6(_ x: Float) -> Float {
+  func myfoo06(_ x: Float) -> Float {
     if x > 0 {
       if (x + 1) < 5 {
         if x * 2 > 4 {
@@ -196,7 +200,7 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
     return x * 3
   }
 
-  func myfoo6_derivative(_ x: Float) -> Float {
+  func myfoo06_derivative(_ x: Float) -> Float {
     if x > 2 && x < 4 {
       return 1 - 6 * x * x
     } else if x > 0 {
@@ -207,18 +211,18 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
   }
 
   for x in -100...100 {
-    expectEqual(myfoo6_derivative(Float(x)), gradient(at: Float(x), of: myfoo6))
+    expectEqual(myfoo06_derivative(Float(x)), gradient(at: Float(x), of: myfoo06))
   }
 
   var x : Float = -10
   while x < 10 {
-    let a = myfoo6_derivative(Float(x))
-    let b = gradient(at: Float(x), of: myfoo6)
+    let a = myfoo06_derivative(Float(x))
+    let b = gradient(at: Float(x), of: myfoo06)
     expectEqual((a * 10000).rounded(), (b * 10000).rounded())
     x += 1 / 1024
   }
 
-  func myfoo7(_ x: Float, _ bool: Bool) -> Float {
+  func myfoo07(_ x: Float, _ bool: Bool) -> Float {
     var result = x * x
     if bool {
       result = result + result
@@ -229,7 +233,7 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
     return result
   }
 
-  func myfoo7_derivative(_ x: Float, _ bool: Bool) -> Float {
+  func myfoo07_derivative(_ x: Float, _ bool: Bool) -> Float {
     if bool {
       return 4 * x - 1
     }
@@ -240,15 +244,15 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
     if x == 0 {
       continue
     }
-    expectEqual(gradient(at: Float(x), of: { myfoo7(Float($0), true)  }), myfoo7_derivative(Float(x), true))
-    expectEqual((100000 * gradient(at: Float(x), of: { myfoo7(Float($0), false) })).rounded(), (100000 * myfoo7_derivative(Float(x), false)).rounded())
+    expectEqual(gradient(at: Float(x), of: { myfoo07(Float($0), true)  }), myfoo07_derivative(Float(x), true))
+    expectEqual((100000 * gradient(at: Float(x), of: { myfoo07(Float($0), false) })).rounded(), (100000 * myfoo07_derivative(Float(x), false)).rounded())
   }
 
   // x0 > x1  && x1 < 0:  1 - x1 / x0
   // x0 > x1  && x1 >= 0: 1 + x1 / x0
   // x0 <= x1:            1
   @differentiable(reverse)
-  func myfoo8(_ x0: Float, _ x1: Float) -> Float {
+  func myfoo08(_ x0: Float, _ x1: Float) -> Float {
     let t1 = x1 + x0;
     let t2 = x0 - x1;
     let t4 = x0 > x1 ? t1 : x0;
@@ -258,7 +262,7 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
     return t7;
   }
 
-  func myfoo8_gradient(_ x0: Float, _ x1: Float) -> (Float, Float) {
+  func myfoo08_gradient(_ x0: Float, _ x1: Float) -> (Float, Float) {
     if x0 > x1 {
       if x1 < 0 {
         return (x1 / (x0 * x0), -1 / x0)
@@ -274,11 +278,47 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
       continue
     }
     for x1 in -10...10 {
-      let got = gradient(at: Float(x0), Float(x1), of: myfoo8)
-      let expected = myfoo8_gradient(Float(x0), Float(x1))
+      let got = gradient(at: Float(x0), Float(x1), of: myfoo08)
+      let expected = myfoo08_gradient(Float(x0), Float(x1))
       expectEqual((100000 * got.0).rounded(), (100000 * expected.0).rounded())
       expectEqual((100000 * got.1).rounded(), (100000 * expected.1).rounded())
     }
+  }
+
+  enum Enum {
+    case a(Float)
+    case b(Float)
+  }
+
+  @differentiable(reverse)
+  func myfoo09(_ e: Enum, _ x: Float) -> Float {
+    switch e {
+    case let .a(a): return x * a
+    case let .b(b): return x * b
+    }
+  }
+
+  indirect enum Indirect {
+    case e(Enum)
+    case indirect(Indirect)
+  }
+
+  @differentiable(reverse)
+  func myfoo10(_ indirect: Indirect, _ x: Float) -> Float {
+    switch indirect {
+    case let .e(e):
+      switch e {
+      case .a: return x * myfoo09(e, x)
+      case .b: return x * myfoo09(e, x)
+      }
+    case let .indirect(ind): return myfoo10(ind, x)
+    }
+  }
+
+  do {
+    let ind: Indirect = .e(.a(3))
+    expectEqual(12, gradient(at: 2, of: { x in myfoo10(ind, x) }))
+    expectEqual(12, gradient(at: 2, of: { x in myfoo10(.indirect(ind), x) }))
   }
 }
 
