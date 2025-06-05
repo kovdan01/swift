@@ -89,15 +89,15 @@ AutoDiffClosureSpecMultiBBBTETests.testWithLeakChecking("Test3") {
 
     // CHECK3-LABEL: {{^}}// reverse-mode derivative of method()
     // CHECK3-NEXT:  sil private @$s3outyycfU1_5ClassL_V6methodSfyFTJrSpSr : $@convention(method) (Class) -> (Float, @owned @callee_guaranteed (Float) -> Class.TangentVector) {
-    // CHECK3:         %[[#C44:]] = function_ref @$s3outyycfU1_5ClassL_V6methodSfyFTJpSpSr073$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktk1_l5FZSf_L6SfcfU_S2fAES2fTf1nncc_n : $@convention(thin) (Float, @owned _AD__$s3outyycfU1_5ClassL_V6methodSfyF_bb3__Pred__src_0_wrt_0, Float, Float, Float, Float) -> Class.TangentVector
-    // CHECK3:         %[[#C45:]] = partial_apply [callee_guaranteed] %[[#C44]](%[[#]], %[[#]], %[[#]], %[[#]], %[[#]]) : $@convention(thin) (Float, @owned _AD__$s3outyycfU1_5ClassL_V6methodSfyF_bb3__Pred__src_0_wrt_0, Float, Float, Float, Float) -> Class.TangentVector
+    // CHECK3:         %[[#C44:]] = function_ref @$s3outyycfU1_5ClassL_V6methodSfyFTJpSpSr073$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktk1_l5FZSf_L6SfcfU_S2fAES2fTf1nncc_n020$_AD__$s3outyycfU1_5B37L_V6methodSfyF_bb3__Pred__src_0_wrt_0Tf1bnnnnn_n : $@convention(thin) (Float, @owned _AD__$s3outyycfU1_5ClassL_V6methodSfyF_bb3__Pred__src_0_wrt_0_specialized, Float, Float, Float, Float) -> Class.TangentVector
+    // CHECK3:         %[[#C45:]] = partial_apply [callee_guaranteed] %[[#C44]](%[[#]], %[[#]], %[[#]], %[[#]], %[[#]]) : $@convention(thin) (Float, @owned _AD__$s3outyycfU1_5ClassL_V6methodSfyF_bb3__Pred__src_0_wrt_0_specialized, Float, Float, Float, Float) -> Class.TangentVector
     // CHECK3:         %[[#C48:]] = tuple (%[[#]], %[[#C45]])
     // CHECK3:         return %[[#C48]]
     // CHECK3:       } // end sil function '$s3outyycfU1_5ClassL_V6methodSfyFTJrSpSr'
 
     // CHECK3-NONE:  {{^}}// pullback of method
     // CHECK3:       {{^}}// specialized pullback of method()
-    // CHECK3:       sil private @$s3outyycfU1_5ClassL_V6methodSfyFTJpSpSr073$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktk1_l5FZSf_L6SfcfU_S2fAES2fTf1nncc_n : $@convention(thin) (Float, @owned _AD__$s3outyycfU1_5ClassL_V6methodSfyF_bb3__Pred__src_0_wrt_0, Float, Float, Float, Float) -> Class.TangentVector {
+    // CHECK3:       sil private @$s3outyycfU1_5ClassL_V6methodSfyFTJpSpSr073$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktk1_l5FZSf_L6SfcfU_S2fAES2fTf1nncc_n020$_AD__$s3outyycfU1_5B37L_V6methodSfyF_bb3__Pred__src_0_wrt_0Tf1bnnnnn_n : $@convention(thin) (Float, @owned _AD__$s3outyycfU1_5ClassL_V6methodSfyF_bb3__Pred__src_0_wrt_0_specialized, Float, Float, Float, Float) -> Class.TangentVector {
 
     @differentiable(reverse)
     func method() -> Float {

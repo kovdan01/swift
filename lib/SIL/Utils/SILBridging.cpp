@@ -709,7 +709,9 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
       unsigned idxInClosuresBuffer = -1;
       for (unsigned j = 0; j < closuresBuffer->size(); ++j) {
         if ((*closuresBuffer)[j].second == i) {
-          assert(idxInClosuresBuffer == unsigned(-1));
+          assert(idxInClosuresBuffer == unsigned(-1) ||
+                 (*closuresBuffer)[j].first.unbridged() ==
+                     (*closuresBuffer)[idxInClosuresBuffer].first.unbridged());
           idxInClosuresBuffer = j;
         }
       }
