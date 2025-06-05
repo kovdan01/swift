@@ -303,7 +303,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
   }
 
   for pbBB in pb.blocks {
-    guard let argOfPbBB = getEnumPayloadArgOfPbBB(pbBB) else {
+    guard let argOfPbBB = getEnumPayloadArgOfPbBB(pbBB, vjp: vjp) else {
       for arg in pbBB.arguments {
         if arg.type.isTuple {
           // MYTODO: what if we have tuple which is not payload but just tuple?
@@ -412,7 +412,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
           }
         }
       }
-    } else {
+    } /*else {
       for use in argOfPbBB.uses {
         let tei = use.instruction as! TupleExtractInst
         for teiUse in tei.uses {
@@ -438,7 +438,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
       }
       // MYTODO
       //return false
-    }
+    }*/
   }
 
   return true
@@ -848,7 +848,7 @@ private func getOrCreateSpecializedFunctionCFG(
     if block == block.parentFunction.entryBlock {
       currentEnumTypeOpt = enumTypeOfEntryBBArg
     } else {
-      let argOpt = getEnumPayloadArgOfPbBB(block)
+      let argOpt = getEnumPayloadArgOfPbBB(block, vjp: vjp)
       if argOpt != nil {
         for use in argOpt!.uses {
           let tei = use.instruction as? TupleExtractInst
@@ -1216,20 +1216,62 @@ private func getEnumArgOfVJPBB(_ bb: BasicBlock) -> Argument? {
   return argOpt
 }
 
-private func getEnumPayloadArgOfPbBB(_ bb: BasicBlock) -> Argument? {
+private func getEnumPayloadArgOfPbBB(_ bb: BasicBlock, vjp: Function) -> Argument? {
   // TODO: now we just assume that if we have exactly one tuple argument,
   //       this is what we need. This is not always true.
-  var argOpt = Argument?(nil)
-  for arg in bb.arguments {
-    if !arg.type.isTuple {
-      continue
-    }
-    if argOpt != nil {
-      return nil
-    }
-    argOpt = arg
+  var predBB = BasicBlock?(nil)
+  for pred in bb.predecessors {
+    predBB = pred
+    break
   }
-  return argOpt
+
+  if predBB == nil {
+    return nil
+  }
+
+  let bi = predBB!.terminator as? BranchInst
+  let sei = predBB!.terminator as? SwitchEnumInst
+  if bi == nil && sei == nil {
+    return nil
+  }
+
+  var idx = -1
+
+  if bi != nil {
+    for (opIdx, op) in bi!.operands.enumerated() {
+      let uedi = op.value.definingInstruction as? UncheckedEnumDataInst
+      if uedi == nil {
+        continue
+      }
+      if uedi!.type.isBranchTracingEnum(vjp: vjp) {
+        assert(idx == -1)
+        idx = opIdx
+      }
+    }
+  } else {
+    assert(sei != nil)
+    if sei!.enumOp.type.isBranchTracingEnum(vjp: vjp) {
+      idx = 0
+    }
+  }
+
+  if idx == -1 {
+    return nil
+  }
+
+  return bb.arguments[idx]
+
+//  var argOpt = Argument?(nil)
+//  for arg in bb.arguments {
+//    if !arg.type.isTuple {
+//      continue
+//    }
+//    if argOpt != nil {
+//      return nil
+//    }
+//    argOpt = arg
+//  }
+//  return argOpt
 }
 
 extension BasicBlockList {
@@ -1871,7 +1913,7 @@ extension SpecializationCloner {
         continue
       }
 
-      guard let arg = getEnumPayloadArgOfPbBB(bb) else {
+      guard let arg = getEnumPayloadArgOfPbBB(bb, vjp: callSite.applySite.parentFunction) else {
         continue
       }
 
@@ -1955,7 +1997,7 @@ extension SpecializationCloner {
       }
       let newArg = bb.bridged.recreateTupleBlockArgument(arg.bridged).argument
 
-      assert(newArg.uses.count <= 1)
+  //    assert(newArg.uses.count <= 1)
       if newArg.uses.singleUse == nil {
         continue
       }
@@ -1978,6 +2020,20 @@ extension SpecializationCloner {
           oldDti.parentBlock.eraseInstruction(oldDti)
         }
       }
+    }
+
+    for inst in self.cloned.instructions {
+      let uedi = inst as? UncheckedEnumDataInst
+      if uedi == nil {
+        continue
+      }
+      let builder = Builder(before: uedi!, self.context)
+      let newUedi = builder.createUncheckedEnumData(
+        enum: uedi!.`enum`, caseIndex: uedi!.caseIndex,
+        resultType: uedi!.`enum`.type.bridged.getEnumCasePayload(
+          uedi!.caseIndex, uedi!.parentFunction.bridged
+        ).type)
+      uedi!.replace(with: newUedi, self.context)//parentBlock.eraseInstruction(uedi!)
     }
   }
 
