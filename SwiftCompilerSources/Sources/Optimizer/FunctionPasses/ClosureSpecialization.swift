@@ -170,7 +170,11 @@ extension Type {
       return false
     }
     assert(vjp.isAutodiffVJP)
-    return vjp.bridged.isAutodiffBranchTracingEnumValid(self.bridged)
+    let res : Bool = vjp.bridged.isAutodiffBranchTracingEnumValid(self.bridged)
+    if !res {
+      logADCS(msg: "Foreign branch tracing enum encountered: vjp = \(vjp.name), enum type = \(self.description)")
+    }
+    return res
   }
 }
 
@@ -317,6 +321,10 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
         prefix: prefixFail,
         msg: "tuple argument of pullback " + pb.name.string + " basic block "
           + pbBB.shortDescription + " has more than 1 uses")
+      logADCS(msg: "  argOfPbBB: \(argOfPbBB)")
+      logADCS(msg: "  bb begin")
+      logADCS(msg: "  \(pbBB)")
+      logADCS(msg: "  bb end")
       return false
     }
     if argOfPbBB.uses.singleUse != nil {
@@ -340,6 +348,13 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
           prefix: prefixFail,
           msg: "predecessor element of the tuple being argument of pullback " + pb.name.string
             + " basic block " + pbBB.shortDescription + " has more than 1 use")
+        logADCS(msg: "  dti: \(dti)")
+        logADCS(msg: "  dti.results[0]: \(dti.results[0])")
+        logADCS(msg: "  uses begin count = \(dti.results[0].uses.count)")
+        for use in dti.results[0].uses {
+          logADCS(msg: "    use.instruction: \(use.instruction)")
+        }
+        logADCS(msg: "  uses end count = \(dti.results[0].uses.count)")
         return false
       }
       for result in dti.results {
@@ -358,6 +373,9 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
               prefix: prefixFail,
               msg: "unexpected use of an element of the tuple being argument of pullback "
                 + pb.name.string + " basic block " + pbBB.shortDescription)
+            logADCS(msg: "  dti: \(dti)")
+            logADCS(msg: "  result: \(result)")
+            logADCS(msg: "  use.instruction: \(use.instruction)")
             return false
           }
         }
@@ -449,13 +467,11 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
         msg:
           "The VJP " + function.name.string
           + " has passed the preliminary check. Proceeding to running the pass")
-      if isMultiBBWithoutBranchTracingEnumPullbackArg {
-        logADCS(msg: "Dumping VJP and PB before pass run begin")
-        dumpVJPAndPB(
-          vjp: function,
-          pb: getPartialApplyOfPullbackInExitVJPBB(vjp: function)!.referencedFunction!)
-        logADCS(msg: "Dumping VJP and PB before pass run end")
-      }
+      logADCS(msg: "Dumping VJP and PB before pass run begin")
+      dumpVJPAndPB(
+        vjp: function,
+        pb: getPartialApplyOfPullbackInExitVJPBB(vjp: function)!.referencedFunction!)
+      logADCS(msg: "Dumping VJP and PB before pass run end")
     }
   }
 
@@ -859,7 +875,6 @@ private func rewriteApplyInstructionCFG(
   context: FunctionPassContext
 ) {
   let vjp = callSite.applySite.parentFunction
-  let vjpExitBB = callSite.applySite.parentBlock
   let closureInfos = callSite.closureInfosCFG
 
   for inst in vjp.instructions {
@@ -896,7 +911,7 @@ private func rewriteApplyInstructionCFG(
   let paiSubstitutionMap = SubstitutionMap(bridged: pai.bridged.getSubstitutionMap())
   let paiIsOnStack = pai.isOnStack
 
-  // TODO assert that PAI is on index 1 in tuple
+  // MYTODO assert that PAI is on index 1 in tuple
 
   let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
   var newCapturedArgs = [Value]()
