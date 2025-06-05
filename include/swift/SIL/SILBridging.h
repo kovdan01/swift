@@ -1149,6 +1149,8 @@ struct BridgedAutoDiffClosureSpecializationHelper {
   SWIFT_IMPORT_UNSAFE void clearEnumDict();
   SWIFT_IMPORT_UNSAFE BridgedType
   rewriteBranchTracingEnum(BridgedType enumType, BridgedFunction topVjp) const;
+  SWIFT_IMPORT_UNSAFE void
+  addSelfToEnumDict(BridgedType enumType) const;
 };
 
 struct BridgedBuilder{

@@ -166,9 +166,11 @@ typealias ClosureInfoCFG = (
 
 extension Type {
   func isBranchTracingEnum(vjp: Function) -> Bool {
-    if !(self.isEnum && self.description.hasPrefix("$_AD__$s")) {
+    if !(self.isEnum && self.description.hasPrefix("$_AD__$s") && !self.hasTypeParameter) {
       return false
     }
+    logADCS(msg: "EEEEEE 00 \(self)")
+    logADCS(msg: "EEEEEE 01 \(self.hasTypeParameter)")
     assert(vjp.isAutodiffVJP)
     let res : Bool = vjp.bridged.isAutodiffBranchTracingEnumValid(self.bridged)
     if !res {
@@ -316,18 +318,48 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
       }
       continue
     }
-    if argOfPbBB.uses.count > 1 {
-      logADCS(
-        prefix: prefixFail,
-        msg: "tuple argument of pullback " + pb.name.string + " basic block "
-          + pbBB.shortDescription + " has more than 1 uses")
-      logADCS(msg: "  argOfPbBB: \(argOfPbBB)")
-      logADCS(msg: "  bb begin")
-      logADCS(msg: "  \(pbBB)")
-      logADCS(msg: "  bb end")
+    var cntTupleExtract = 0
+    var cntDestructureTuple = 0
+    for use in argOfPbBB.uses {
+      let teOpt = use.instruction as? TupleExtractInst
+      let dtOpt = use.instruction as? DestructureTupleInst
+      if teOpt != nil {
+        cntTupleExtract += 1
+      } else if dtOpt != nil {
+        cntDestructureTuple += 1
+      } else {
+        logADCS(msg: "AAAAAAA 00 \(use)")
+        return false
+      }
+    }
+    if cntTupleExtract != 0 && cntDestructureTuple != 0 {
+      logADCS(msg: "AAAAAAAA 01")
       return false
     }
-    if argOfPbBB.uses.singleUse != nil {
+    if cntTupleExtract == 0 && cntDestructureTuple == 0 {
+      continue
+//      logADCS(msg: "AAAAAAAA 02")
+//      return false
+    }
+    if cntTupleExtract == 0 && cntDestructureTuple != 1 {
+      logADCS(msg: "AAAAAAAA 03")
+      return false
+    }
+
+//    if argOfPbBB.uses.count > 1 {
+//      logADCS(
+//        prefix: prefixFail,
+//        msg: "tuple argument of pullback " + pb.name.string + " basic block "
+//          + pbBB.shortDescription + " has more than 1 uses")
+//      logADCS(msg: "  argOfPbBB: \(argOfPbBB)")
+//      logADCS(msg: "  bb begin")
+//      logADCS(msg: "  \(pbBB)")
+//      logADCS(msg: "  bb end")
+//      return false
+//    }
+
+//    if argOfPbBB.uses.singleUse != nil {
+    if cntTupleExtract == 0 {
       guard let dti = argOfPbBB.uses.singleUse!.instruction as? DestructureTupleInst else {
         logADCS(
           prefix: prefixFail,
@@ -380,6 +412,32 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
           }
         }
       }
+    } else {
+      for use in argOfPbBB.uses {
+        let tei = use.instruction as! TupleExtractInst
+        for teiUse in tei.uses {
+          switch teiUse.instruction {
+          case _ as ApplyInst:
+            ()
+          case _ as DestroyValueInst:
+            ()
+          case _ as UncheckedEnumDataInst:
+            ()
+          case _ as SwitchEnumInst:
+            ()
+          default:
+            logADCS(
+              prefix: prefixFail,
+              msg: "unexpected use of an element of the tuple being argument of pullback "
+                + pb.name.string + " basic block " + pbBB.shortDescription)
+            logADCS(msg: "  tei: \(tei)")
+            logADCS(msg: "  teiUse.instruction: \(teiUse.instruction)")
+            return false
+          }
+        }
+      }
+      // MYTODO
+      //return false
     }
   }
 
@@ -791,12 +849,31 @@ private func getOrCreateSpecializedFunctionCFG(
       currentEnumTypeOpt = enumTypeOfEntryBBArg
     } else {
       let argOpt = getEnumPayloadArgOfPbBB(block)
+      if argOpt != nil {
+        for use in argOpt!.uses {
+          let tei = use.instruction as? TupleExtractInst
+          if tei == nil {
+            break
+          }
+          if tei!.fieldIndex == 0 {
+            if tei!.type.isBranchTracingEnum(vjp: vjp) {
+              assert(tei!.uses.count <= 1)
+              if tei!.uses.singleUse != nil {
+                currentEnumTypeOpt = tei!.type
+              }
+            }
+          }
+        }
+      }
       if argOpt != nil && argOpt!.uses.singleUse != nil {
-        let dti = argOpt!.uses.singleUse!.instruction as! DestructureTupleInst
-        if dti.results[0].type.isBranchTracingEnum(vjp: vjp) {
-          assert(dti.results[0].uses.count <= 1)
-          if dti.results[0].uses.singleUse != nil {
-            currentEnumTypeOpt = dti.results[0].type
+        let dtiOpt = argOpt!.uses.singleUse!.instruction as? DestructureTupleInst
+        if dtiOpt != nil {
+          let dti = dtiOpt!
+          if dti.results[0].type.isBranchTracingEnum(vjp: vjp) {
+            assert(dti.results[0].uses.count <= 1)
+            if dti.results[0].uses.singleUse != nil {
+              currentEnumTypeOpt = dti.results[0].type
+            }
           }
         }
       }
@@ -816,21 +893,36 @@ private func getOrCreateSpecializedFunctionCFG(
     defer {
       adcsHelper.clearClosuresBuffer()
     }
+    var cnt = 0
     for closureInfoCFG in closureInfos {
       if enumType != closureInfoCFG.enumTypeAndCase.enumType {
         continue
       }
+
+      logADCS(msg: "BBBBBBB 00 BEGIN")
+      logADCS(msg: "\(closureInfoCFG.closure)")
+      logADCS(msg: "\(closureInfoCFG.enumTypeAndCase.enumType)")
+      logADCS(msg: "\(closureInfoCFG.enumTypeAndCase.caseIdx)")
+      logADCS(msg: "\(closureInfoCFG.idxInEnumPayload)")
+      logADCS(msg: "BBBBBBB 00 END")
+
       adcsHelper.appendToClosuresBuffer(
         closureInfoCFG.enumTypeAndCase.enumType.bridged,
         closureInfoCFG.enumTypeAndCase.caseIdx,
         closureInfoCFG.closure.bridged,
         closureInfoCFG.idxInEnumPayload)
+      cnt += 1
     }
+//    if cnt != 0 {
     enumDict[enumType] =
       adcsHelper.rewriteBranchTracingEnum( /*enumType: */
         enumType.bridged,
         /*topVjp: */callSite.applySite.parentFunction.bridged
       ).type
+ //   } else {
+ //     enumDict[enumType] = enumType
+ //     adcsHelper.addSelfToEnumDict(enumType.bridged)
+ //   }
   }
 
   let specializedParameters = getSpecializedParametersCFG(
@@ -1088,13 +1180,24 @@ private func updateCallSite(
 
 private func getEnumArgOfEntryPbBB(_ bb: BasicBlock, vjp: Function) -> Argument? {
   assert(bb.parentFunction.entryBlock == bb)
+  if bb.parentFunction.convention.parameters.count != bb.arguments.count {
+    return nil
+  }
   var argOpt = Argument?(nil)
-  for arg in bb.arguments {
+  var idx = -1
+  for (argIdx, arg) in bb.arguments.enumerated() {
     if arg.type.isBranchTracingEnum(vjp: vjp) {
       if argOpt != nil {
         return nil
       }
       argOpt = arg
+      idx = argIdx
+    }
+  }
+  if argOpt != nil {
+    assert(idx != -1)
+    if bb.parentFunction.convention.parameters[idx].type.rawType.bridged.type != argOpt!.type.canonicalType.rawType.bridged.type {
+      return nil
     }
   }
   return argOpt
@@ -1856,19 +1959,25 @@ extension SpecializationCloner {
       if newArg.uses.singleUse == nil {
         continue
       }
-      let oldDti = newArg.uses.singleUse!.instruction as! DestructureTupleInst
-      let builderBeforeOldDti = Builder(before: oldDti, self.context)
-      let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
+      if newArg.uses.singleUse != nil {
+        let oldDtiOpt = newArg.uses.singleUse!.instruction as? DestructureTupleInst
+        if oldDtiOpt != nil {
+          //let oldDti = newArg.uses.singleUse!.instruction as! DestructureTupleInst
+          let oldDti = oldDtiOpt!
+          let builderBeforeOldDti = Builder(before: oldDti, self.context)
+          let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
 
-      for (resultIdx, result) in oldDti.results.enumerated() {
-        for use in result.uses {
-          rewriteUsesOfPayloadItem(
-            use: use, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti,
-            context: self.context)
+          for (resultIdx, result) in oldDti.results.enumerated() {
+            for use in result.uses {
+              rewriteUsesOfPayloadItem(
+                use: use, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti,
+                context: self.context)
+            }
+          }
+
+          oldDti.parentBlock.eraseInstruction(oldDti)
         }
       }
-
-      oldDti.parentBlock.eraseInstruction(oldDti)
     }
   }
 
@@ -2293,6 +2402,14 @@ private func getSpecializedParametersCFG(
   // Start by adding all original parameters except for the closure parameters.
   for paramInfo in applySiteCallee.convention.parameters {
     // TODO: is this safe to perform such check?
+    logADCS(msg: "DDDDDD 02 \(paramInfo.type)")
+    logADCS(msg: "DDDDDD 03 \(paramInfo.type.rawType)")
+//    logADCS(msg: "DDDDDD 04 \(paramInfo.type.rawType.isBranchTracingEnum(vjp: callSite.applySite.parentFunction))")
+    logADCS(msg: "DDDDDD 05 \(enumType.rawType)")
+    logADCS(msg: "DDDDDD 06 \(enumType.canonicalType)")
+    logADCS(msg: "DDDDDD 07 \(enumType.hasTypeParameter)")
+    logADCS(msg: "DDDDDD 08 \(enumType.isBranchTracingEnum(vjp: callSite.applySite.parentFunction))")
+    logADCS(msg: "DDDDDD 09 \(enumType.canonicalType.hasTypeParameter)")
     if paramInfo.type.rawType.bridged.type != enumType.canonicalType.rawType.bridged.type {
       specializedParamInfoList.append(paramInfo)
       continue
@@ -2304,6 +2421,8 @@ private func getSpecializedParametersCFG(
       options: paramInfo.options, hasLoweredAddresses: paramInfo.hasLoweredAddresses)
     specializedParamInfoList.append(newParamInfo)
   }
+  logADCS(msg: "DDDDDD 00 \(applySiteCallee)")
+  logADCS(msg: "DDDDDD 01 \(enumType)")
   assert(foundBranchTracingEnumParam)
   return specializedParamInfoList
 }

@@ -667,6 +667,11 @@ void BridgedAutoDiffClosureSpecializationHelper::clearEnumDict() {
   enumDict.clear();
 }
 
+void
+BridgedAutoDiffClosureSpecializationHelper::addSelfToEnumDict(BridgedType enumType) const {
+  enumDict[enumType.unbridged()] = enumType.unbridged();
+}
+
 BridgedType
 BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
     BridgedType enumType, BridgedFunction topVjp) const {
@@ -762,8 +767,20 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
   file.addTopLevelDecl(ed);
   file.getParentModule()->clearLookupCache();
 
+  ed->setGenericSignature(oldED->getGenericSignature());
+
   auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
   Lowering::AbstractionPattern pattern(traceDeclType);
+
+  llvm::errs() << "\nXXXXXXX 00 BEGIN\n";
+  ed->dump(llvm::errs());
+  llvm::errs() << "\nXXXXXXX 00 MIDDLE 00\n";
+  ed->getGenericSignature().getCanonicalSignature().dump();
+  llvm::errs() << "\nXXXXXXX 00 MIDDLE 01\n";
+  ed->getGenericSignature().dump();
+  llvm::errs() << "XXXXXXX 00 END\n";
+
+
 
   SILType newEnumType = topVjp.getFunction()->getModule().Types.getLoweredType(
       pattern, traceDeclType, TypeExpansionContext::minimal());
