@@ -15,6 +15,7 @@
 // CHECK-NONE: {{^}}// pullback of myfoo08
 // CHECK-NONE: {{^}}// pullback of myfoo09
 // CHECK-NONE: {{^}}// pullback of myfoo10
+// CHECK-NONE: {{^}}// pullback of myfoo11
 // CHECK-NONE: {{^}}// pullback of myfoo07
 // CHECK-NONE: {{^}}// pullback of myfoo06
 // CHECK-NONE: {{^}}// pullback of myfoo05
@@ -25,6 +26,7 @@
 // CHECK:      {{^}}// specialized pullback of myfoo08
 // CHECK:      {{^}}// specialized pullback of myfoo09
 // CHECK:      {{^}}// specialized pullback of myfoo10
+// CHECK:      {{^}}// specialized pullback of myfoo11
 // CHECK:      {{^}}// specialized pullback of myfoo07
 // CHECK:      {{^}}// specialized pullback of myfoo06
 // CHECK:      {{^}}// specialized pullback of myfoo05
@@ -320,6 +322,28 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
     expectEqual(12, gradient(at: 2, of: { x in myfoo10(ind, x) }))
     expectEqual(12, gradient(at: 2, of: { x in myfoo10(.indirect(ind), x) }))
   }
+
+  @differentiable(reverse)
+  func myfoo11(_ x: Float, _ y: Float) -> Float {
+    if x > 0 {
+      if y > 10 {
+        let z = x * y
+        if z > 100 {
+          return x + z
+        } else if y == 20 {
+          return z + z
+        }
+      } else {
+        return x + y
+      }
+    }
+    return -y
+  }
+
+  expectEqual((40, 8), gradient(at: 4, 20, of: myfoo11))
+  expectEqual((0, -1), gradient(at: 4, 21, of: myfoo11))
+  expectEqual((1, 1), gradient(at: 4, 5, of: myfoo11))
+  expectEqual((0, -1), gradient(at: -3, -2, of: myfoo11))
 }
 
 runAllTests()
