@@ -304,18 +304,18 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
 
   for pbBB in pb.blocks {
     guard let argOfPbBB = getEnumPayloadArgOfPbBB(pbBB, vjp: vjp) else {
-      for arg in pbBB.arguments {
-        if arg.type.isTuple {
-          // MYTODO: what if we have tuple which is not payload but just tuple?
-          logADCS(
-            prefix: prefixFail,
-            msg: "several arguments of pullback " + pb.name.string + " basic block "
-              + pbBB.shortDescription
-              + " are tuples (assuming as payload tuples of branch tracing enums), but not more than 1 is supported"
-          )
-          return false
-        }
-      }
+//      for arg in pbBB.arguments {
+//        if arg.type.isTuple {
+//          // MYTODO: what if we have tuple which is not payload but just tuple?
+//          logADCS(
+//            prefix: prefixFail,
+//            msg: "several arguments of pullback " + pb.name.string + " basic block "
+//              + pbBB.shortDescription
+//              + " are tuples (assuming as payload tuples of branch tracing enums), but not more than 1 is supported"
+//          )
+//          return false
+//        }
+//      }
       continue
     }
     var cntTupleExtract = 0
