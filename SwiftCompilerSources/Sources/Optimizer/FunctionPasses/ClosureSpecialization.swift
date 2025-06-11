@@ -316,18 +316,37 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
       }
       continue
     }
-    if argOfPbBB.uses.count > 1 {
-      logADCS(
-        prefix: prefixFail,
-        msg: "tuple argument of pullback " + pb.name.string + " basic block "
-          + pbBB.shortDescription + " has more than 1 uses")
-      logADCS(msg: "  argOfPbBB: \(argOfPbBB)")
-      logADCS(msg: "  bb begin")
-      logADCS(msg: "  \(pbBB)")
-      logADCS(msg: "  bb end")
+
+    var cntTupleExtract = 0
+    var cntDestructureTuple = 0
+    for use in argOfPbBB.uses {
+      let teOpt = use.instruction as? TupleExtractInst
+      let dtOpt = use.instruction as? DestructureTupleInst
+      if teOpt != nil {
+        cntTupleExtract += 1
+      } else if dtOpt != nil {
+        cntDestructureTuple += 1
+      } else {
+        logADCS(msg: "AAAAAAA 00 \(use)")
+        return false
+      }
+    }
+
+    if cntTupleExtract != 0 && cntDestructureTuple != 0 {
+      logADCS(msg: "AAAAAAAA 01")
       return false
     }
-    if argOfPbBB.uses.singleUse != nil {
+
+    if cntTupleExtract == 0 && cntDestructureTuple == 0 {
+      continue
+    }
+
+    if cntTupleExtract == 0 && cntDestructureTuple != 1 {
+      logADCS(msg: "AAAAAAAA 03")
+      return false
+    }
+
+    if cntTupleExtract == 0 {
       guard let dti = argOfPbBB.uses.singleUse!.instruction as? DestructureTupleInst else {
         logADCS(
           prefix: prefixFail,
@@ -376,6 +395,32 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
             logADCS(msg: "  dti: \(dti)")
             logADCS(msg: "  result: \(result)")
             logADCS(msg: "  use.instruction: \(use.instruction)")
+            return false
+          }
+        }
+      }
+    } else {
+      for use in argOfPbBB.uses {
+        let tei = use.instruction as! TupleExtractInst
+        for teiUse in tei.uses {
+          switch teiUse.instruction {
+          case _ as ApplyInst:
+            ()
+          case _ as DestroyValueInst:
+            ()
+          case _ as UncheckedEnumDataInst:
+            ()
+          case _ as SwitchEnumInst:
+            ()
+          case _ as StrongReleaseInst:
+            ()
+          default:
+            logADCS(
+              prefix: prefixFail,
+              msg: "unexpected use of an element of the tuple being argument of pullback "
+                + pb.name.string + " basic block " + pbBB.shortDescription)
+            logADCS(msg: "  tei: \(tei)")
+            logADCS(msg: "  teiUse.instruction: \(teiUse.instruction)")
             return false
           }
         }
@@ -1852,23 +1897,24 @@ extension SpecializationCloner {
       }
       let newArg = bb.bridged.recreateTupleBlockArgument(arg.bridged).argument
 
-      assert(newArg.uses.count <= 1)
-      if newArg.uses.singleUse == nil {
-        continue
-      }
-      let oldDti = newArg.uses.singleUse!.instruction as! DestructureTupleInst
-      let builderBeforeOldDti = Builder(before: oldDti, self.context)
-      let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
+      if newArg.uses.count == 1 {
+        let oldDtiOpt = newArg.uses.singleUse!.instruction as? DestructureTupleInst
+        if oldDtiOpt != nil {
+          let oldDti = oldDtiOpt!
+          let builderBeforeOldDti = Builder(before: oldDti, self.context)
+          let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
 
-      for (resultIdx, result) in oldDti.results.enumerated() {
-        for use in result.uses {
-          rewriteUsesOfPayloadItem(
-            use: use, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti,
-            context: self.context)
+          for (resultIdx, result) in oldDti.results.enumerated() {
+            for use in result.uses {
+              rewriteUsesOfPayloadItem(
+                use: use, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti,
+                context: self.context)
+            }
+          }
+
+          oldDti.parentBlock.eraseInstruction(oldDti)
         }
       }
-
-      oldDti.parentBlock.eraseInstruction(oldDti)
     }
   }
 
