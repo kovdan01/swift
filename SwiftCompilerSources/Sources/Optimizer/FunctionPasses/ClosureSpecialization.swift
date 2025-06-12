@@ -173,6 +173,10 @@ extension Type {
     let res : Bool = vjp.bridged.isAutodiffBranchTracingEnumValid(self.bridged)
     if !res {
       logADCS(msg: "Foreign branch tracing enum encountered: vjp = \(vjp.name), enum type = \(self.description)")
+    } else {
+      logADCS(msg: "FFFFFFF 00: \(self.rawType.hasTypeParameter)")
+      logADCS(msg: "\(self.rawType)")
+      logADCS(msg: "FFFFFFF 01")
     }
     return res
   }
@@ -1668,11 +1672,11 @@ private func markConvertedAndReabstractedClosuresAsUsed(
   }
 }
 
-private func rewriteUsesOfPayloadItem(
-  use: Operand, resultIdx: Int, closureInfoArray: [ClosureInfoCFG],
-  newDti: DestructureTupleInst, context: FunctionPassContext
+private func rewriteUsesOfPayloadItemImpl(
+  instr: Instruction, resultIdx: Int, val: Value, closureInfoArray: [ClosureInfoCFG],
+  context: FunctionPassContext
 ) {
-  switch use.instruction {
+  switch instr {
   case let ai as ApplyInst:
     let builder = Builder(before: ai, context)
     var closureInfoOpt = ClosureInfoCFG?(nil)
@@ -1688,7 +1692,7 @@ private func rewriteUsesOfPayloadItem(
     }
     if closureInfoOpt != nil {
       let dtiOfCapturedArgsTuple = builder.createDestructureTuple(
-        tuple: newDti.results[resultIdx])
+        tuple: val)
       if closureInfoOpt!.subsetThunk == nil {
         var newArgs = [Value]()
         for op in ai.argumentOperands {
@@ -1739,10 +1743,10 @@ private func rewriteUsesOfPayloadItem(
         let newAi = builder.createApply(
           function: newFri, ai.substitutionMap, arguments: newArgs)
         ai.replace(with: newAi, context)
-        let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
-        if !newClosure!.type.isTrivial(in: newAi.parentFunction) {
-          newBuilder.createDestroyValue(operand: newClosure!)
-        }
+//        let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
+//        if !newClosure!.type.isTrivial(in: newAi.parentFunction) {
+//          newBuilder.createDestroyValue(operand: newClosure!)
+//        }
       }
     } else {
       var newArgs = [Value]()
@@ -1750,7 +1754,7 @@ private func rewriteUsesOfPayloadItem(
         newArgs.append(op.value)
       }
       let newAi = builder.createApply(
-        function: newDti.results[resultIdx], ai.substitutionMap, arguments: newArgs)
+        function: val, ai.substitutionMap, arguments: newArgs)
       ai.replace(with: newAi, context)
     }
 
@@ -1763,15 +1767,15 @@ private func rewriteUsesOfPayloadItem(
     }
     if needDestroyValue {
       let builder = Builder(before: dvi, context)
-      builder.createDestroyValue(operand: newDti.results[resultIdx])
+      builder.createDestroyValue(operand: val)
     }
     dvi.parentBlock.eraseInstruction(dvi)
 
   case let uedi as UncheckedEnumDataInst:
     let builder = Builder(before: uedi, context)
     let newUedi = builder.createUncheckedEnumData(
-      enum: newDti.results[resultIdx], caseIndex: uedi.caseIndex,
-      resultType: newDti.results[resultIdx].type.bridged.getEnumCasePayload(
+      enum: val, caseIndex: uedi.caseIndex,
+      resultType: val.type.bridged.getEnumCasePayload(
         uedi.caseIndex, uedi.parentFunction.bridged
       ).type)
     uedi.replace(with: newUedi, context)
@@ -1779,12 +1783,137 @@ private func rewriteUsesOfPayloadItem(
   case let sei as SwitchEnumInst:
     let builder = Builder(before: sei, context)
     let newSEI = builder.createSwitchEnum(
-      enum: newDti.results[resultIdx], cases: getEnumCasesForSwitchEnumInst(sei))
+      enum: val, cases: getEnumCasesForSwitchEnumInst(sei))
     newSEI.parentBlock.eraseInstruction(sei)
+
+  case let _ as StrongReleaseInst:
+    ()
 
   default:
     assert(false)
   }
+}
+
+
+
+private func rewriteUsesOfPayloadItem(
+  use: Operand, resultIdx: Int, closureInfoArray: [ClosureInfoCFG],
+  newDti: DestructureTupleInst, context: FunctionPassContext
+) {
+  rewriteUsesOfPayloadItemImpl(instr: use.instruction, resultIdx: resultIdx, val: newDti.results[resultIdx], closureInfoArray: closureInfoArray, context: context)
+//  switch use.instruction {
+//  case let ai as ApplyInst:
+//    let builder = Builder(before: ai, context)
+//    var closureInfoOpt = ClosureInfoCFG?(nil)
+//    for closureInfo in closureInfoArray {
+//      if closureInfo.idxInEnumPayload == resultIdx {
+//        if closureInfoOpt != nil {
+//          assert(closureInfoOpt!.closure == closureInfo.closure)
+//          assert(closureInfoOpt!.payloadTuple == closureInfo.payloadTuple)
+//        } else {
+//          closureInfoOpt = closureInfo
+//        }
+//      }
+//    }
+//    if closureInfoOpt != nil {
+//      let dtiOfCapturedArgsTuple = builder.createDestructureTuple(
+//        tuple: newDti.results[resultIdx])
+//      if closureInfoOpt!.subsetThunk == nil {
+//        var newArgs = [Value]()
+//        for op in ai.argumentOperands {
+//          newArgs.append(op.value)
+//        }
+//        for res in dtiOfCapturedArgsTuple.results {
+//          newArgs.append(res)
+//        }
+//        let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
+//        let newFri = builder.createFunctionRef(vjpFn)
+//        let newAi = builder.createApply(
+//          function: newFri, ai.substitutionMap, arguments: newArgs)
+//        ai.replace(with: newAi, context)
+//      } else {
+//        var newClosure = SingleValueInstruction?(nil)
+//        let maybePai = closureInfoOpt!.closure as? PartialApplyInst
+//        if maybePai != nil {
+//          var newArgs = [Value]()
+//          for res in dtiOfCapturedArgsTuple.results {
+//            newArgs.append(res)
+//          }
+//          let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
+//          let newFri = builder.createFunctionRef(vjpFn)
+//          let newPai = builder.createPartialApply(
+//            function: newFri, substitutionMap: maybePai!.substitutionMap,
+//            capturedArguments: newArgs, calleeConvention: maybePai!.calleeConvention,
+//            hasUnknownResultIsolation: maybePai!.hasUnknownResultIsolation,
+//            isOnStack: maybePai!.isOnStack)
+//          newClosure = newPai
+//        } else {
+//          let maybeTttfi = closureInfoOpt!.closure as? ThinToThickFunctionInst
+//          assert(maybeTttfi != nil)
+//          let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
+//          let newFri = builder.createFunctionRef(vjpFn)
+//          let newTttfi = builder.createThinToThickFunction(
+//            thinFunction: newFri, resultType: maybeTttfi!.type)
+//          newClosure = newTttfi
+//        }
+//        assert(newClosure != nil)
+//        let subsetThunkFn = closureInfoOpt!.subsetThunk!.referencedFunction!
+//        let newFri = builder.createFunctionRef(subsetThunkFn)
+//
+//        var newArgs = [Value]()
+//        for op in ai.argumentOperands {
+//          newArgs.append(op.value)
+//        }
+//        newArgs.append(newClosure!)
+//        let newAi = builder.createApply(
+//          function: newFri, ai.substitutionMap, arguments: newArgs)
+//        ai.replace(with: newAi, context)
+//        let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
+//        if !newClosure!.type.isTrivial(in: newAi.parentFunction) {
+//          newBuilder.createDestroyValue(operand: newClosure!)
+//        }
+//      }
+//    } else {
+//      var newArgs = [Value]()
+//      for op in ai.argumentOperands {
+//        newArgs.append(op.value)
+//      }
+//      let newAi = builder.createApply(
+//        function: newDti.results[resultIdx], ai.substitutionMap, arguments: newArgs)
+//      ai.replace(with: newAi, context)
+//    }
+//
+//  case let dvi as DestroyValueInst:
+//    var needDestroyValue = true
+//    for closureInfo in closureInfoArray {
+//      if closureInfo.idxInEnumPayload == resultIdx {
+//        needDestroyValue = false
+//      }
+//    }
+//    if needDestroyValue {
+//      let builder = Builder(before: dvi, context)
+//      builder.createDestroyValue(operand: newDti.results[resultIdx])
+//    }
+//    dvi.parentBlock.eraseInstruction(dvi)
+//
+//  case let uedi as UncheckedEnumDataInst:
+//    let builder = Builder(before: uedi, context)
+//    let newUedi = builder.createUncheckedEnumData(
+//      enum: newDti.results[resultIdx], caseIndex: uedi.caseIndex,
+//      resultType: newDti.results[resultIdx].type.bridged.getEnumCasePayload(
+//        uedi.caseIndex, uedi.parentFunction.bridged
+//      ).type)
+//    uedi.replace(with: newUedi, context)
+//
+//  case let sei as SwitchEnumInst:
+//    let builder = Builder(before: sei, context)
+//    let newSEI = builder.createSwitchEnum(
+//      enum: newDti.results[resultIdx], cases: getEnumCasesForSwitchEnumInst(sei))
+//    newSEI.parentBlock.eraseInstruction(sei)
+//
+//  default:
+//    assert(false)
+//  }
 }
 
 private func getEnumCasesForSwitchEnumInst(_ sei: SwitchEnumInst) -> [(Int, BasicBlock)] {
@@ -1966,112 +2095,116 @@ extension SpecializationCloner {
       logADCS(msg: "CCCCCCC 09")
 
           for use in newTei.uses {
-      logADCS(msg: "CCCCCCC 10")
-          switch use.instruction {
-          case let ai as ApplyInst:
-            logADCS(msg: "BBBBBB 00")
-            let builder = Builder(before: ai, context)
-            var closureInfoOpt = ClosureInfoCFG?(nil)
-            for closureInfo in closureInfoArray {
-              if closureInfo.idxInEnumPayload == newTei.fieldIndex {
-                if closureInfoOpt != nil {
-                  assert(closureInfoOpt!.closure == closureInfo.closure)
-                  assert(closureInfoOpt!.payloadTuple == closureInfo.payloadTuple)
-                } else {
-                  closureInfoOpt = closureInfo
-                }
-              }
-            }
-            logADCS(msg: "BBBBBB 01")
-            if closureInfoOpt != nil {
-            logADCS(msg: "BBBBBB 02")
-              let dtiOfCapturedArgsTuple = builder.createDestructureTuple(
-                tuple: newTei)
-              if closureInfoOpt!.subsetThunk == nil {
-                var newArgs = [Value]()
-                for op in ai.argumentOperands {
-                  newArgs.append(op.value)
-                }
-                for res in dtiOfCapturedArgsTuple.results {
-                  newArgs.append(res)
-                }
-                let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
-                let newFri = builder.createFunctionRef(vjpFn)
-                let newAi = builder.createApply(
-                  function: newFri, ai.substitutionMap, arguments: newArgs)
-                ai.replace(with: newAi, context)
-              } else {
-            logADCS(msg: "BBBBBB 03")
-                var newClosure = SingleValueInstruction?(nil)
-                let maybePai = closureInfoOpt!.closure as? PartialApplyInst
-                if maybePai != nil {
-            logADCS(msg: "BBBBBB 04")
-                  var newArgs = [Value]()
-                  for res in dtiOfCapturedArgsTuple.results {
-                    newArgs.append(res)
-                  }
-                  let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
-                  let newFri = builder.createFunctionRef(vjpFn)
-                  let newPai = builder.createPartialApply(
-                    function: newFri, substitutionMap: maybePai!.substitutionMap,
-                    capturedArguments: newArgs, calleeConvention: maybePai!.calleeConvention,
-                    hasUnknownResultIsolation: maybePai!.hasUnknownResultIsolation,
-                    isOnStack: maybePai!.isOnStack)
-                  newClosure = newPai
-                } else {
-            logADCS(msg: "BBBBBB 05")
-                  let maybeTttfi = closureInfoOpt!.closure as? ThinToThickFunctionInst
-                  assert(maybeTttfi != nil)
-                  let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
-                  let newFri = builder.createFunctionRef(vjpFn)
-                  let newTttfi = builder.createThinToThickFunction(
-                    thinFunction: newFri, resultType: maybeTttfi!.type)
-                  newClosure = newTttfi
-                }
-            logADCS(msg: "BBBBBB 06")
-                assert(newClosure != nil)
-                let subsetThunkFn = closureInfoOpt!.subsetThunk!.referencedFunction!
-                let newFri = builder.createFunctionRef(subsetThunkFn)
-        
-                var newArgs = [Value]()
-                for op in ai.argumentOperands {
-                  newArgs.append(op.value)
-                }
-                newArgs.append(newClosure!)
-                let newAi = builder.createApply(
-                  function: newFri, ai.substitutionMap, arguments: newArgs)
-                ai.replace(with: newAi, context)
-//                let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
-//                if !newClosure!.type.isTrivial(in: newAi.parentFunction) {
-//                  newBuilder.createDestroyValue(operand: newClosure!)
+
+  rewriteUsesOfPayloadItemImpl(instr: use.instruction, resultIdx: newTei.fieldIndex, val: newTei, closureInfoArray: closureInfoArray, context: context)
+
+
+//      logADCS(msg: "CCCCCCC 10")
+//          switch use.instruction {
+//          case let ai as ApplyInst:
+//            logADCS(msg: "BBBBBB 00")
+//            let builder = Builder(before: ai, context)
+//            var closureInfoOpt = ClosureInfoCFG?(nil)
+//            for closureInfo in closureInfoArray {
+//              if closureInfo.idxInEnumPayload == newTei.fieldIndex {
+//                if closureInfoOpt != nil {
+//                  assert(closureInfoOpt!.closure == closureInfo.closure)
+//                  assert(closureInfoOpt!.payloadTuple == closureInfo.payloadTuple)
+//                } else {
+//                  closureInfoOpt = closureInfo
 //                }
-              }
-            logADCS(msg: "BBBBBB 07")
-            } else {
-            logADCS(msg: "BBBBBB 08")
-              var newArgs = [Value]()
-              for op in ai.argumentOperands {
-                newArgs.append(op.value)
-              }
-              let newAi = builder.createApply(
-                function: newTei, ai.substitutionMap, arguments: newArgs)
-              ai.replace(with: newAi, context)
-            }
-
-  case let uedi as UncheckedEnumDataInst:
-    let builder = Builder(before: uedi, context)
-    let newUedi = builder.createUncheckedEnumData(
-      enum: newTei, caseIndex: uedi.caseIndex,
-      resultType: newTei.type.bridged.getEnumCasePayload(
-        uedi.caseIndex, uedi.parentFunction.bridged
-      ).type)
-    uedi.replace(with: newUedi, context)
-
-
-
-            default:
-            ()
-          }
+//              }
+//            }
+//            logADCS(msg: "BBBBBB 01")
+//            if closureInfoOpt != nil {
+//            logADCS(msg: "BBBBBB 02")
+//              let dtiOfCapturedArgsTuple = builder.createDestructureTuple(
+//                tuple: newTei)
+//              if closureInfoOpt!.subsetThunk == nil {
+//                var newArgs = [Value]()
+//                for op in ai.argumentOperands {
+//                  newArgs.append(op.value)
+//                }
+//                for res in dtiOfCapturedArgsTuple.results {
+//                  newArgs.append(res)
+//                }
+//                let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
+//                let newFri = builder.createFunctionRef(vjpFn)
+//                let newAi = builder.createApply(
+//                  function: newFri, ai.substitutionMap, arguments: newArgs)
+//                ai.replace(with: newAi, context)
+//              } else {
+//            logADCS(msg: "BBBBBB 03")
+//                var newClosure = SingleValueInstruction?(nil)
+//                let maybePai = closureInfoOpt!.closure as? PartialApplyInst
+//                if maybePai != nil {
+//            logADCS(msg: "BBBBBB 04")
+//                  var newArgs = [Value]()
+//                  for res in dtiOfCapturedArgsTuple.results {
+//                    newArgs.append(res)
+//                  }
+//                  let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
+//                  let newFri = builder.createFunctionRef(vjpFn)
+//                  let newPai = builder.createPartialApply(
+//                    function: newFri, substitutionMap: maybePai!.substitutionMap,
+//                    capturedArguments: newArgs, calleeConvention: maybePai!.calleeConvention,
+//                    hasUnknownResultIsolation: maybePai!.hasUnknownResultIsolation,
+//                    isOnStack: maybePai!.isOnStack)
+//                  newClosure = newPai
+//                } else {
+//            logADCS(msg: "BBBBBB 05")
+//                  let maybeTttfi = closureInfoOpt!.closure as? ThinToThickFunctionInst
+//                  assert(maybeTttfi != nil)
+//                  let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
+//                  let newFri = builder.createFunctionRef(vjpFn)
+//                  let newTttfi = builder.createThinToThickFunction(
+//                    thinFunction: newFri, resultType: maybeTttfi!.type)
+//                  newClosure = newTttfi
+//                }
+//            logADCS(msg: "BBBBBB 06")
+//                assert(newClosure != nil)
+//                let subsetThunkFn = closureInfoOpt!.subsetThunk!.referencedFunction!
+//                let newFri = builder.createFunctionRef(subsetThunkFn)
+//        
+//                var newArgs = [Value]()
+//                for op in ai.argumentOperands {
+//                  newArgs.append(op.value)
+//                }
+//                newArgs.append(newClosure!)
+//                let newAi = builder.createApply(
+//                  function: newFri, ai.substitutionMap, arguments: newArgs)
+//                ai.replace(with: newAi, context)
+////                let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
+////                if !newClosure!.type.isTrivial(in: newAi.parentFunction) {
+////                  newBuilder.createDestroyValue(operand: newClosure!)
+////                }
+//              }
+//            logADCS(msg: "BBBBBB 07")
+//            } else {
+//            logADCS(msg: "BBBBBB 08")
+//              var newArgs = [Value]()
+//              for op in ai.argumentOperands {
+//                newArgs.append(op.value)
+//              }
+//              let newAi = builder.createApply(
+//                function: newTei, ai.substitutionMap, arguments: newArgs)
+//              ai.replace(with: newAi, context)
+//            }
+//
+//  case let uedi as UncheckedEnumDataInst:
+//    let builder = Builder(before: uedi, context)
+//    let newUedi = builder.createUncheckedEnumData(
+//      enum: newTei, caseIndex: uedi.caseIndex,
+//      resultType: newTei.type.bridged.getEnumCasePayload(
+//        uedi.caseIndex, uedi.parentFunction.bridged
+//      ).type)
+//    uedi.replace(with: newUedi, context)
+//
+//
+//
+//            default:
+//            ()
+//          }
           }
 
 
@@ -2499,9 +2632,28 @@ private func getSpecializedParametersCFG(
   var specializedParamInfoList: [ParameterInfo] = []
   var foundBranchTracingEnumParam = false
   // Start by adding all original parameters except for the closure parameters.
-  for paramInfo in applySiteCallee.convention.parameters {
+  var argIdx = -1
+  for (idx, arg) in pb.arguments.enumerated() {
+    if arg.type == enumType {
+      assert(argIdx == -1)
+      argIdx = idx
+    }
+  }
+  assert(argIdx != -1)
+  for (idx, paramInfo) in applySiteCallee.convention.parameters.enumerated() {
     // TODO: is this safe to perform such check?
-    if paramInfo.type.rawType.bridged.type != enumType.canonicalType.rawType.bridged.type {
+    // MYTODO: for some reason this does not work for types with type param
+    //if paramInfo.type.rawType.bridged.type != enumType.canonicalType.rawType.bridged.type {
+    logADCS(msg: "EEEEEEE 01 BEGIN")
+    logADCS(msg: "\(paramInfo.type.rawType.description)")
+    logADCS(msg: "EEEEEEE 01 END")
+//    if !paramInfo.type.description.hasPrefix("$_AD__") {
+    if idx != argIdx {
+    //  logADCS(msg: "EEEEEEE 00 BEGIN")
+    //  logADCS(msg: "\(paramInfo.type)")
+    //  logADCS(msg: "EEEEEEE 00 MIDDLE")
+    //  logADCS(msg: "\(enumType.canonicalType)")
+    //  logADCS(msg: "EEEEEEE 00 END")
       specializedParamInfoList.append(paramInfo)
       continue
     }
