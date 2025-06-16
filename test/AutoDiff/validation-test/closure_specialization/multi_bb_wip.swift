@@ -16,6 +16,7 @@
 // CHECK-NONE: {{^}}// pullback of myfoo09
 // CHECK-NONE: {{^}}// pullback of myfoo10
 // CHECK-NONE: {{^}}// pullback of myfoo11
+// CHECK-NONE: {{^}}// pullback of myfoo12
 // CHECK-NONE: {{^}}// pullback of myfoo07
 // CHECK-NONE: {{^}}// pullback of myfoo06
 // CHECK-NONE: {{^}}// pullback of myfoo05
@@ -27,6 +28,7 @@
 // CHECK:      {{^}}// specialized pullback of myfoo09
 // CHECK:      {{^}}// specialized pullback of myfoo10
 // CHECK:      {{^}}// specialized pullback of myfoo11
+// CHECK:      {{^}}// specialized pullback of myfoo12
 // CHECK:      {{^}}// specialized pullback of myfoo07
 // CHECK:      {{^}}// specialized pullback of myfoo06
 // CHECK:      {{^}}// specialized pullback of myfoo05
@@ -344,6 +346,36 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
   expectEqual((0, -1), gradient(at: 4, 21, of: myfoo11))
   expectEqual((1, 1), gradient(at: 4, 5, of: myfoo11))
   expectEqual((0, -1), gradient(at: -3, -2, of: myfoo11))
+
+
+  @differentiable(reverse)
+  func myfoo12(x0: Double, x1: Double, x2: Optional<Double>, x3: Optional<Double>) -> Double {
+    let a : Double = x1 * 42
+    let b : Double = a + x0
+    var c : Double = 0
+    if let x2NonNil = x2 {
+      if x2NonNil < b {
+        c = x2NonNil
+      } else {
+        c = b
+      }
+    } else {
+      c = b
+    }
+
+    var d : Double = 0
+    if let x3NonNil = x3 {
+      if x3NonNil < c {
+        d = x3NonNil
+      } else {
+        d = c
+      }
+    } else {
+      d = c
+    }
+
+    return d
+  }
 }
 
 runAllTests()
