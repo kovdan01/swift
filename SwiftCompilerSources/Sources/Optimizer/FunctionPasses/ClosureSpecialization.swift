@@ -778,40 +778,60 @@ private func getOrCreateSpecializedFunctionCFG(
   }
 
   let closureInfos = callSite.closureInfosCFG
-  var bbVisited = [BasicBlock: Bool]()
-  var bbWorklist = [callSite.applyCallee.entryBlock]
-  var enumTypesReverseQueue = [Type]()
+  var enumTypesQueue = [Type]()
   let enumTypeOfEntryBBArg = getEnumArgOfEntryPbBB(pb.entryBlock, vjp: vjp)!.type
-  while bbWorklist.count != 0 {
-    let block = bbWorklist.first!
-    bbVisited[block] = true
-    bbWorklist.removeFirst()
-    var currentEnumTypeOpt = Type?(nil)
-    if block == block.parentFunction.entryBlock {
-      currentEnumTypeOpt = enumTypeOfEntryBBArg
-    } else {
-      let argOpt = getEnumPayloadArgOfPbBB(block)
-      if argOpt != nil && argOpt!.uses.singleUse != nil {
-        let dti = argOpt!.uses.singleUse!.instruction as! DestructureTupleInst
-        if dti.results[0].type.isBranchTracingEnum(vjp: vjp) {
-          assert(dti.results[0].uses.count <= 1)
-          if dti.results[0].uses.singleUse != nil {
-            currentEnumTypeOpt = dti.results[0].type
-          }
-        }
-      }
-    }
-    if currentEnumTypeOpt != nil && !enumTypesReverseQueue.contains(currentEnumTypeOpt!) {
-      enumTypesReverseQueue.append(currentEnumTypeOpt!)
-    }
-    for succ in block.successors {
-      if bbVisited[succ] != true {
-        bbWorklist.append(succ)
+  var exitBlock = BasicBlock?(nil)
+  for bb in callSite.applyCallee.blocks {
+    if bb.isReachableExitBlock {
+      if let ri = bb.terminator as? ReturnInst {
+        assert(exitBlock == nil)
+        exitBlock = bb
       }
     }
   }
+  assert(exitBlock != nil)
 
-  for enumType in enumTypesReverseQueue.reversed() {
+  var bbVisited = [BasicBlock: Bool]()
+  var bbQueue = [BasicBlock]()
+  while bbVisited.count != callSite.applyCallee.blocks.count {
+    for bb in callSite.applyCallee.blocks {
+      if bbVisited[bb] == true {
+        continue
+      }
+      var allSuccVisited = true
+      for succBB in bb.successors {
+        if bbVisited[succBB] != true {
+          allSuccVisited = false
+          break
+        }
+      }
+      if !allSuccVisited {
+        continue
+      }
+      var currentEnumTypeOpt = Type?(nil)
+      if bb == bb.parentFunction.entryBlock {
+        currentEnumTypeOpt = enumTypeOfEntryBBArg
+      } else {
+        let argOpt = getEnumPayloadArgOfPbBB(bb)
+        if argOpt != nil && argOpt!.uses.singleUse != nil {
+          let dti = argOpt!.uses.singleUse!.instruction as! DestructureTupleInst
+          if dti.results[0].type.isBranchTracingEnum(vjp: vjp) {
+            assert(dti.results[0].uses.count <= 1)
+            if dti.results[0].uses.singleUse != nil {
+              currentEnumTypeOpt = dti.results[0].type
+            }
+          }
+        }
+      }
+      if currentEnumTypeOpt != nil && !enumTypesQueue.contains(currentEnumTypeOpt!) {
+        enumTypesQueue.append(currentEnumTypeOpt!)
+      }
+      bbQueue.append(bb)
+      bbVisited[bb] = true
+    }
+  }
+
+  for enumType in enumTypesQueue {
     var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
     defer {
       adcsHelper.clearClosuresBuffer()
@@ -848,7 +868,7 @@ private func getOrCreateSpecializedFunctionCFG(
       let closureSpecCloner = SpecializationCloner(
         emptySpecializedFunction: emptySpecializedFunction, functionPassContext)
       closureSpecCloner.cloneAndSpecializeFunctionBodyCFG(
-        using: callSite, enumDict: enumDict)
+        using: callSite, enumDict: enumDict, enumTypesQueue: enumTypesQueue)
     })
 
   return (specializedPb, false)
@@ -1743,7 +1763,7 @@ extension BasicBlock {
 
 extension SpecializationCloner {
   fileprivate func cloneAndSpecializeFunctionBodyCFG(
-    using callSite: CallSite, enumDict: EnumDict
+    using callSite: CallSite, enumDict: EnumDict, enumTypesQueue: [Type]
   ) {
     let closureInfos = callSite.closureInfosCFG
     self.cloneEntryBlockArgsWithoutOrigClosuresCFG(
@@ -1756,7 +1776,30 @@ extension SpecializationCloner {
 
     self.cloneFunctionBody(from: callSite.applyCallee, entryBlockArguments: args)
 
-    for bb in self.cloned.blocks {
+    var bbVisited = [BasicBlock: Bool]()
+    bbVisited[self.cloned.entryBlock] = true
+    var bbQueue = [BasicBlock]()
+    bbQueue.append(self.cloned.entryBlock)
+    while bbVisited.count != self.cloned.blocks.count {//bbWorklist.count != 0 {
+      for bb in self.cloned.blocks {
+        if bbVisited[bb] == true {
+          continue
+        }
+        var allPredsVisited = true
+        for predBB in bb.predecessors {
+          if bbVisited[predBB] != true {
+            allPredsVisited = false
+            break
+          }
+        }
+        if allPredsVisited {
+          bbQueue.append(bb)
+          bbVisited[bb] = true
+        }
+      }
+    }
+
+    for bb in bbQueue {
       if bb == self.cloned.entryBlock {
         let sei = bb.terminator as! SwitchEnumInst
         let builderEntry = Builder(before: sei, self.context)
