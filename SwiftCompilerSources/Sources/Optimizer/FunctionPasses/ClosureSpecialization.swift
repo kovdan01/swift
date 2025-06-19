@@ -1658,6 +1658,24 @@ private func rewriteUsesOfPayloadItem(
         let newAi = builder.createApply(
           function: newFri, ai.substitutionMap, arguments: newArgs)
         ai.replace(with: newAi, context)
+
+        // MYTODO: maybe we can set insertion point earlier
+        let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
+        for res in dtiOfCapturedArgsTuple.results {
+          if res.type.isTrivial(in: res.parentFunction) {
+            continue
+          }
+          var needDestroy = true
+          for resUse in res.uses {
+            if resUse.endsLifetime {
+              needDestroy = false
+              break
+            }
+          }
+          if needDestroy {
+            newBuilder.createDestroyValue(operand: res)
+          }
+        }
       } else {
         var newClosure = SingleValueInstruction?(nil)
         let maybePai = closureInfoOpt!.closure as? PartialApplyInst
@@ -1674,6 +1692,24 @@ private func rewriteUsesOfPayloadItem(
             hasUnknownResultIsolation: maybePai!.hasUnknownResultIsolation,
             isOnStack: maybePai!.isOnStack)
           newClosure = newPai
+
+          // MYTODO: maybe we can set insertion point earlier
+          let newBuilder = Builder(before: newPai.parentBlock.terminator, context)
+          for res in dtiOfCapturedArgsTuple.results {
+            if res.type.isTrivial(in: res.parentFunction) {
+              continue
+            }
+            var needDestroy = true
+            for resUse in res.uses {
+              if resUse.endsLifetime {
+                needDestroy = false
+                break
+              }
+            }
+            if needDestroy {
+              newBuilder.createDestroyValue(operand: res)
+            }
+          }
         } else {
           let maybeTttfi = closureInfoOpt!.closure as? ThinToThickFunctionInst
           assert(maybeTttfi != nil)
@@ -1696,7 +1732,8 @@ private func rewriteUsesOfPayloadItem(
           function: newFri, ai.substitutionMap, arguments: newArgs)
         ai.replace(with: newAi, context)
         let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
-        if !newClosure!.type.isTrivial(in: newAi.parentFunction) {
+        assert(newClosure!.uses.singleUse != nil)
+        if !newClosure!.type.isTrivial(in: newAi.parentFunction) && !newClosure!.uses.singleUse!.endsLifetime {
           newBuilder.createDestroyValue(operand: newClosure!)
         }
       }
