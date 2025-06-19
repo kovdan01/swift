@@ -376,6 +376,26 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
 
     return d
   }
+
+
+  struct X: Differentiable {
+    var a: Float
+    var b: Double
+  }
+
+  @differentiable(reverse)
+  func myfoo13Callee(x: X) -> (Float, Double) {
+    (x.a, x.b)
+  }
+
+  @differentiable(reverse)
+  func myfoo13(x: X, y: Int) -> Float {
+    if y < 0 {
+      return myfoo13Callee(x: x).0
+    } else {
+      return 37
+    }
+  }
 }
 
 runAllTests()
