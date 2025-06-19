@@ -830,6 +830,12 @@ private func getOrCreateSpecializedFunctionCFG(
     }
   }
 
+  logADCS(msg: "enumTypesQueue.count = \(enumTypesQueue.count) BEGIN")
+  for (idx, enumType) in enumTypesQueue.enumerated() {
+    logADCS(msg: "\(idx): \(enumType)")
+  }
+  logADCS(msg: "enumTypesQueue.count = \(enumTypesQueue.count) END")
+
   for enumType in enumTypesQueue {
     var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
     defer {
@@ -1835,6 +1841,12 @@ extension SpecializationCloner {
       }
     }
 
+    logADCS(msg: "bbQueue.count = \(enumTypesQueue.count) BEGIN")
+    for (idx, bb) in bbQueue.enumerated() {
+      logADCS(msg: "\(idx): \(bb.shortDescription)")
+    }
+    logADCS(msg: "bbQueue.count = \(bbQueue.count) END")
+
     for bb in bbQueue {
       if bb == self.cloned.entryBlock {
         let sei = bb.terminator as! SwitchEnumInst
@@ -1929,6 +1941,7 @@ extension SpecializationCloner {
           }
         }
       }
+      logADCS(msg: "recreateTupleBlockArgument: \(bb.shortDescription)")
       let newArg = bb.bridged.recreateTupleBlockArgument(arg.bridged).argument
 
       assert(newArg.uses.count <= 1)
