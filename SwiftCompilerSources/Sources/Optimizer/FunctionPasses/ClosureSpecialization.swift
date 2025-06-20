@@ -173,6 +173,10 @@ extension Type {
     let res : Bool = vjp.bridged.isAutodiffBranchTracingEnumValid(self.bridged)
     if !res {
       logADCS(msg: "Foreign branch tracing enum encountered: vjp = \(vjp.name), enum type = \(self.description)")
+    } else {
+      logADCS(msg: "FFFFFFF 00: \(self.rawType.hasTypeParameter)")
+      logADCS(msg: "\(self.rawType)")
+      logADCS(msg: "FFFFFFF 01")
     }
     return res
   }
@@ -476,6 +480,10 @@ private func multiBBHelper(
   msg += "(rate " + String(Float(specializedClosures) / Float(totalSupportedClosures)) + "). "
   msg += "Total number of closures is " + String(totalClosures)
   logADCS(msg: msg)
+
+  logADCS(msg: "Dumping VJP and PB at round")
+  dumpVJPAndPB(vjp: function, pb: specializedFunction)
+  logADCS(msg: "Dumping VJP and PB at round")
 }
 
 let autodiffClosureSpecialization1 = FunctionPass(name: "autodiff-closure-specialization1") {
@@ -858,12 +866,25 @@ private func getOrCreateSpecializedFunctionCFG(
         currentEnumTypeOpt = enumTypeOfEntryBBArg
       } else {
         let argOpt = getEnumPayloadArgOfPbBB(bb)
+        var isUseDti = false
         if argOpt != nil && argOpt!.uses.singleUse != nil {
-          let dti = argOpt!.uses.singleUse!.instruction as! DestructureTupleInst
-          if dti.results[0].type.isBranchTracingEnum(vjp: vjp) {
-            assert(dti.results[0].uses.count <= 1)
-            if dti.results[0].uses.singleUse != nil {
-              currentEnumTypeOpt = dti.results[0].type
+          let dtiOpt = argOpt!.uses.singleUse!.instruction as? DestructureTupleInst
+          if dtiOpt != nil {
+            isUseDti = true
+            let dti = dtiOpt!
+            if dti.results[0].type.isBranchTracingEnum(vjp: vjp) {
+              assert(dti.results[0].uses.count <= 1)
+              if dti.results[0].uses.singleUse != nil {
+                currentEnumTypeOpt = dti.results[0].type
+              }
+            }
+          }
+        }
+        if argOpt != nil && !isUseDti {
+          for use in argOpt!.uses {
+            let tei = use.instruction as! TupleExtractInst
+            if tei.fieldIndex == 0 && tei.uses.singleUse != nil && tei.type.isBranchTracingEnum(vjp: vjp) {
+              currentEnumTypeOpt = tei.type
             }
           }
         }
@@ -1676,11 +1697,11 @@ private func markConvertedAndReabstractedClosuresAsUsed(
   }
 }
 
-private func rewriteUsesOfPayloadItem(
-  use: Operand, resultIdx: Int, closureInfoArray: [ClosureInfoCFG],
-  newDti: DestructureTupleInst, context: FunctionPassContext
+private func rewriteUsesOfPayloadItemImpl(
+  instr: Instruction, resultIdx: Int, val: Value, closureInfoArray: [ClosureInfoCFG],
+  context: FunctionPassContext
 ) {
-  switch use.instruction {
+  switch instr {
   case let ai as ApplyInst:
     let builder = Builder(before: ai, context)
     var closureInfoOpt = ClosureInfoCFG?(nil)
@@ -1696,7 +1717,7 @@ private func rewriteUsesOfPayloadItem(
     }
     if closureInfoOpt != nil {
       let dtiOfCapturedArgsTuple = builder.createDestructureTuple(
-        tuple: newDti.results[resultIdx])
+        tuple: val)
       if closureInfoOpt!.subsetThunk == nil {
         var newArgs = [Value]()
         for op in ai.argumentOperands {
@@ -1795,7 +1816,7 @@ private func rewriteUsesOfPayloadItem(
         newArgs.append(op.value)
       }
       let newAi = builder.createApply(
-        function: newDti.results[resultIdx], ai.substitutionMap, arguments: newArgs)
+        function: val, ai.substitutionMap, arguments: newArgs)
       ai.replace(with: newAi, context)
     }
 
@@ -1808,15 +1829,15 @@ private func rewriteUsesOfPayloadItem(
     }
     if needDestroyValue {
       let builder = Builder(before: dvi, context)
-      builder.createDestroyValue(operand: newDti.results[resultIdx])
+      builder.createDestroyValue(operand: val)
     }
     dvi.parentBlock.eraseInstruction(dvi)
 
   case let uedi as UncheckedEnumDataInst:
     let builder = Builder(before: uedi, context)
     let newUedi = builder.createUncheckedEnumData(
-      enum: newDti.results[resultIdx], caseIndex: uedi.caseIndex,
-      resultType: newDti.results[resultIdx].type.bridged.getEnumCasePayload(
+      enum: val, caseIndex: uedi.caseIndex,
+      resultType: val.type.bridged.getEnumCasePayload(
         uedi.caseIndex, uedi.parentFunction.bridged
       ).type)
     uedi.replace(with: newUedi, context)
@@ -1824,12 +1845,24 @@ private func rewriteUsesOfPayloadItem(
   case let sei as SwitchEnumInst:
     let builder = Builder(before: sei, context)
     let newSEI = builder.createSwitchEnum(
-      enum: newDti.results[resultIdx], cases: getEnumCasesForSwitchEnumInst(sei))
+      enum: val, cases: getEnumCasesForSwitchEnumInst(sei))
     newSEI.parentBlock.eraseInstruction(sei)
+
+  case let _ as StrongReleaseInst:
+    ()
 
   default:
     assert(false)
   }
+}
+
+
+
+private func rewriteUsesOfPayloadItem(
+  use: Operand, resultIdx: Int, closureInfoArray: [ClosureInfoCFG],
+  newDti: DestructureTupleInst, context: FunctionPassContext
+) {
+  rewriteUsesOfPayloadItemImpl(instr: use.instruction, resultIdx: resultIdx, val: newDti.results[resultIdx], closureInfoArray: closureInfoArray, context: context)
 }
 
 private func getEnumCasesForSwitchEnumInst(_ sei: SwitchEnumInst) -> [(Int, BasicBlock)] {
@@ -1905,6 +1938,7 @@ extension SpecializationCloner {
         continue
       }
 
+      // MYTODO: proper check, not just tuple
       guard let arg = getEnumPayloadArgOfPbBB(bb) else {
         continue
       }
@@ -1937,6 +1971,13 @@ extension SpecializationCloner {
           if to == enumType {
             enumTypeNotSpec = from
           }
+        }
+        if enumTypeNotSpec == nil {
+          logADCS(msg: "DDDDDD 00 BEGIN")
+          logADCS(msg: "\(enumType)")
+          logADCS(msg: "DDDDDD 00 MIDDLE")
+          logADCS(msg: "\(enumDict)")
+          logADCS(msg: "DDDDDD 00 END")
         }
         assert(enumTypeNotSpec != nil)
         let caseIdx = uedi!.caseIndex
@@ -1990,9 +2031,14 @@ extension SpecializationCloner {
       logADCS(msg: "recreateTupleBlockArgument: \(bb.shortDescription)")
       let newArg = bb.bridged.recreateTupleBlockArgument(arg.bridged).argument
 
+      logADCS(msg: "CCCCCCC 00")
+      var isUseTei = true
       if newArg.uses.count == 1 {
+        logADCS(msg: "CCCCCCC 01")
         let oldDtiOpt = newArg.uses.singleUse!.instruction as? DestructureTupleInst
         if oldDtiOpt != nil {
+          logADCS(msg: "CCCCCCC 02")
+          isUseTei = false
           let oldDti = oldDtiOpt!
           let builderBeforeOldDti = Builder(before: oldDti, self.context)
           let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
@@ -2006,6 +2052,30 @@ extension SpecializationCloner {
           }
 
           oldDti.parentBlock.eraseInstruction(oldDti)
+        //} else {
+        //  // MYTODO
+        //  assert(false)
+        }
+      }
+
+      logADCS(msg: "CCCCCCC 03")
+      //} else {
+      if isUseTei {
+      logADCS(msg: "CCCCCCC 04")
+        for useOfArg in newArg.uses {
+          logADCS(msg: "CCCCCCC 05")
+          let oldTei = useOfArg.instruction as! TupleExtractInst
+          logADCS(msg: "CCCCCCC 06")
+          let builderBeforeOldTei = Builder(before: oldTei, self.context)
+          logADCS(msg: "CCCCCCC 07")
+          let newTei = builderBeforeOldTei.createTupleExtract(tuple: newArg, elementIndex: oldTei.fieldIndex)
+          logADCS(msg: "CCCCCCC 08")
+          oldTei.replace(with: newTei, self.context)
+          logADCS(msg: "CCCCCCC 09")
+
+          for use in newTei.uses {
+            rewriteUsesOfPayloadItemImpl(instr: use.instruction, resultIdx: newTei.fieldIndex, val: newTei, closureInfoArray: closureInfoArray, context: context)
+          }
         }
       }
     }
@@ -2430,9 +2500,22 @@ private func getSpecializedParametersCFG(
   var specializedParamInfoList: [ParameterInfo] = []
   var foundBranchTracingEnumParam = false
   // Start by adding all original parameters except for the closure parameters.
-  for paramInfo in applySiteCallee.convention.parameters {
+  var argIdx = -1
+  for (idx, arg) in pb.arguments.enumerated() {
+    if arg.type == enumType {
+      assert(argIdx == -1)
+      argIdx = idx
+    }
+  }
+  assert(argIdx != -1)
+  for (idx, paramInfo) in applySiteCallee.convention.parameters.enumerated() {
     // TODO: is this safe to perform such check?
-    if paramInfo.type.rawType.bridged.type != enumType.canonicalType.rawType.bridged.type {
+    // MYTODO: for some reason this does not work for types with type param
+    //if paramInfo.type.rawType.bridged.type != enumType.canonicalType.rawType.bridged.type {
+    logADCS(msg: "EEEEEEE 01 BEGIN")
+    logADCS(msg: "\(paramInfo.type.rawType.description)")
+    logADCS(msg: "EEEEEEE 01 END")
+    if idx != argIdx {
       specializedParamInfoList.append(paramInfo)
       continue
     }

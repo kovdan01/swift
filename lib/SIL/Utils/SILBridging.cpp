@@ -667,6 +667,20 @@ void BridgedAutoDiffClosureSpecializationHelper::clearEnumDict() {
   enumDict.clear();
 }
 
+static GenericParamList *cloneGenericParameters(ASTContext &ctx,
+                                                DeclContext *dc,
+                                                CanGenericSignature sig) {
+  SmallVector<GenericTypeParamDecl *, 2> clonedParams;
+  for (auto paramType : sig.getGenericParams()) {
+    auto *clonedParam = GenericTypeParamDecl::createImplicit(
+        dc, paramType->getName(), paramType->getDepth(), paramType->getIndex(),
+        paramType->getParamKind());
+    clonedParam->setDeclContext(dc);
+    clonedParams.push_back(clonedParam);
+  }
+  return GenericParamList::create(ctx, SourceLoc(), clonedParams, SourceLoc());
+}
+
 BridgedType
 BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
     BridgedType enumType, BridgedFunction topVjp) const {
@@ -677,13 +691,18 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
   SILModule &module = topVjp.getFunction()->getModule();
   ASTContext &astContext = oldED->getASTContext();
 
-  // TODO: use better naming
+  // MYTODO: use better naming
   Twine edNameStr = oldED->getNameStr() + "_specialized";
   Identifier edName = astContext.getIdentifier(edNameStr.str());
 
+  GenericParamList *genericParams = nullptr;
+  if (oldED->getGenericSignature()) {
+    genericParams = cloneGenericParameters(astContext, oldED->getDeclContext(), oldED->getGenericSignature().getCanonicalSignature());
+  }
+
   auto *ed = new (astContext) EnumDecl(
       /*EnumLoc*/ SourceLoc(), /*Name*/ edName, /*NameLoc*/ SourceLoc(),
-      /*Inherited*/ {}, /*GenericParams*/ nullptr,
+      /*Inherited*/ {}, /*GenericParams*/ genericParams,
       /*DC*/
       oldED->getDeclContext());
   ed->setImplicit();
@@ -740,7 +759,7 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
 
     Type newTupleType = TupleType::get(newElements, astContext);
 
-    auto *newParamDecl = ParamDecl::cloneWithoutType(astContext, &oldParamDecl);
+    auto *newParamDecl = ParamDecl::clone(astContext, &oldParamDecl);//ParamDecl::cloneWithoutType(astContext, &oldParamDecl);
     newParamDecl->setInterfaceType(newTupleType);
 
     auto *newPL = ParameterList::create(astContext, {newParamDecl});
@@ -762,8 +781,23 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
   file.addTopLevelDecl(ed);
   file.getParentModule()->clearLookupCache();
 
+  ed->setGenericSignature(oldED->getGenericSignature());
+  //ed->setInterfaceType(oldED->getInterfaceType());
+
+  llvm::errs() << "\nXXXXXX 00 BEGIN\n";
+  oldED->dump();
+  llvm::errs() << "\nXXXXXX 00 MIDDLE\n";
+  ed->dump();
+  llvm::errs() << "\nXXXXXX 00 END\n";
+
   auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
   Lowering::AbstractionPattern pattern(traceDeclType);
+
+  llvm::errs() << "\nXXXXXX 01 BEGIN\n";
+  oldED->dump();
+  llvm::errs() << "\nXXXXXX 01 MIDDLE\n";
+  ed->dump();
+  llvm::errs() << "\nXXXXXX 01 END\n";
 
   SILType newEnumType = topVjp.getFunction()->getModule().Types.getLoweredType(
       pattern, traceDeclType, TypeExpansionContext::minimal());
