@@ -476,6 +476,10 @@ private func multiBBHelper(
   msg += "(rate " + String(Float(specializedClosures) / Float(totalSupportedClosures)) + "). "
   msg += "Total number of closures is " + String(totalClosures)
   logADCS(msg: msg)
+
+  logADCS(msg: "Dumping VJP and PB at round")
+  dumpVJPAndPB(vjp: function, pb: specializedFunction)
+  logADCS(msg: "Dumping VJP and PB at round")
 }
 
 let autodiffClosureSpecialization1 = FunctionPass(name: "autodiff-closure-specialization1") {
@@ -858,12 +862,25 @@ private func getOrCreateSpecializedFunctionCFG(
         currentEnumTypeOpt = enumTypeOfEntryBBArg
       } else {
         let argOpt = getEnumPayloadArgOfPbBB(bb)
+        var isUseDti = false
         if argOpt != nil && argOpt!.uses.singleUse != nil {
-          let dti = argOpt!.uses.singleUse!.instruction as! DestructureTupleInst
-          if dti.results[0].type.isBranchTracingEnum(vjp: vjp) {
-            assert(dti.results[0].uses.count <= 1)
-            if dti.results[0].uses.singleUse != nil {
-              currentEnumTypeOpt = dti.results[0].type
+          let dtiOpt = argOpt!.uses.singleUse!.instruction as? DestructureTupleInst
+          if dtiOpt != nil {
+            isUseDti = true
+            let dti = dtiOpt!
+            if dti.results[0].type.isBranchTracingEnum(vjp: vjp) {
+              assert(dti.results[0].uses.count <= 1)
+              if dti.results[0].uses.singleUse != nil {
+                currentEnumTypeOpt = dti.results[0].type
+              }
+            }
+          }
+        }
+        if argOpt != nil && !isUseDti {
+          for use in argOpt!.uses {
+            let tei = use.instruction as! TupleExtractInst
+            if tei.fieldIndex == 0 && tei.uses.singleUse != nil && tei.type.isBranchTracingEnum(vjp: vjp) {
+              currentEnumTypeOpt = tei.type
             }
           }
         }
@@ -1905,6 +1922,7 @@ extension SpecializationCloner {
         continue
       }
 
+      // MYTODO: proper check, not just tuple
       guard let arg = getEnumPayloadArgOfPbBB(bb) else {
         continue
       }
@@ -1937,6 +1955,13 @@ extension SpecializationCloner {
           if to == enumType {
             enumTypeNotSpec = from
           }
+        }
+        if enumTypeNotSpec == nil {
+          logADCS(msg: "DDDDDD 00 BEGIN")
+          logADCS(msg: "\(enumType)")
+          logADCS(msg: "DDDDDD 00 MIDDLE")
+          logADCS(msg: "\(enumDict)")
+          logADCS(msg: "DDDDDD 00 END")
         }
         assert(enumTypeNotSpec != nil)
         let caseIdx = uedi!.caseIndex
@@ -1990,9 +2015,14 @@ extension SpecializationCloner {
       logADCS(msg: "recreateTupleBlockArgument: \(bb.shortDescription)")
       let newArg = bb.bridged.recreateTupleBlockArgument(arg.bridged).argument
 
+      logADCS(msg: "CCCCCCC 00")
+      var isUseTei = true
       if newArg.uses.count == 1 {
+      logADCS(msg: "CCCCCCC 01")
         let oldDtiOpt = newArg.uses.singleUse!.instruction as? DestructureTupleInst
         if oldDtiOpt != nil {
+      logADCS(msg: "CCCCCCC 02")
+          isUseTei = false
           let oldDti = oldDtiOpt!
           let builderBeforeOldDti = Builder(before: oldDti, self.context)
           let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
@@ -2006,6 +2036,137 @@ extension SpecializationCloner {
           }
 
           oldDti.parentBlock.eraseInstruction(oldDti)
+        //} else {
+        //  // MYTODO
+        //  assert(false)
+        }
+      }
+      
+      logADCS(msg: "CCCCCCC 03")
+      //} else {
+      if isUseTei {
+      logADCS(msg: "CCCCCCC 04")
+        for useOfArg in newArg.uses {
+      logADCS(msg: "CCCCCCC 05")
+          let oldTei = useOfArg.instruction as! TupleExtractInst
+      logADCS(msg: "CCCCCCC 06")
+          let builderBeforeOldTei = Builder(before: oldTei, self.context)
+      logADCS(msg: "CCCCCCC 07")
+          let newTei = builderBeforeOldTei.createTupleExtract(tuple: newArg, elementIndex: oldTei.fieldIndex)
+      logADCS(msg: "CCCCCCC 08")
+          oldTei.replace(with: newTei, self.context)
+      logADCS(msg: "CCCCCCC 09")
+
+          for use in newTei.uses {
+      logADCS(msg: "CCCCCCC 10")
+          switch use.instruction {
+          case let ai as ApplyInst:
+            logADCS(msg: "BBBBBB 00")
+            let builder = Builder(before: ai, context)
+            var closureInfoOpt = ClosureInfoCFG?(nil)
+            for closureInfo in closureInfoArray {
+              if closureInfo.idxInEnumPayload == newTei.fieldIndex {
+                if closureInfoOpt != nil {
+                  assert(closureInfoOpt!.closure == closureInfo.closure)
+                  assert(closureInfoOpt!.payloadTuple == closureInfo.payloadTuple)
+                } else {
+                  closureInfoOpt = closureInfo
+                }
+              }
+            }
+            logADCS(msg: "BBBBBB 01")
+            if closureInfoOpt != nil {
+            logADCS(msg: "BBBBBB 02")
+              let dtiOfCapturedArgsTuple = builder.createDestructureTuple(
+                tuple: newTei)
+              if closureInfoOpt!.subsetThunk == nil {
+                var newArgs = [Value]()
+                for op in ai.argumentOperands {
+                  newArgs.append(op.value)
+                }
+                for res in dtiOfCapturedArgsTuple.results {
+                  newArgs.append(res)
+                }
+                let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
+                let newFri = builder.createFunctionRef(vjpFn)
+                let newAi = builder.createApply(
+                  function: newFri, ai.substitutionMap, arguments: newArgs)
+                ai.replace(with: newAi, context)
+              } else {
+            logADCS(msg: "BBBBBB 03")
+                var newClosure = SingleValueInstruction?(nil)
+                let maybePai = closureInfoOpt!.closure as? PartialApplyInst
+                if maybePai != nil {
+            logADCS(msg: "BBBBBB 04")
+                  var newArgs = [Value]()
+                  for res in dtiOfCapturedArgsTuple.results {
+                    newArgs.append(res)
+                  }
+                  let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
+                  let newFri = builder.createFunctionRef(vjpFn)
+                  let newPai = builder.createPartialApply(
+                    function: newFri, substitutionMap: maybePai!.substitutionMap,
+                    capturedArguments: newArgs, calleeConvention: maybePai!.calleeConvention,
+                    hasUnknownResultIsolation: maybePai!.hasUnknownResultIsolation,
+                    isOnStack: maybePai!.isOnStack)
+                  newClosure = newPai
+                } else {
+            logADCS(msg: "BBBBBB 05")
+                  let maybeTttfi = closureInfoOpt!.closure as? ThinToThickFunctionInst
+                  assert(maybeTttfi != nil)
+                  let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
+                  let newFri = builder.createFunctionRef(vjpFn)
+                  let newTttfi = builder.createThinToThickFunction(
+                    thinFunction: newFri, resultType: maybeTttfi!.type)
+                  newClosure = newTttfi
+                }
+            logADCS(msg: "BBBBBB 06")
+                assert(newClosure != nil)
+                let subsetThunkFn = closureInfoOpt!.subsetThunk!.referencedFunction!
+                let newFri = builder.createFunctionRef(subsetThunkFn)
+        
+                var newArgs = [Value]()
+                for op in ai.argumentOperands {
+                  newArgs.append(op.value)
+                }
+                newArgs.append(newClosure!)
+                let newAi = builder.createApply(
+                  function: newFri, ai.substitutionMap, arguments: newArgs)
+                ai.replace(with: newAi, context)
+//                let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
+//                if !newClosure!.type.isTrivial(in: newAi.parentFunction) {
+//                  newBuilder.createDestroyValue(operand: newClosure!)
+//                }
+              }
+            logADCS(msg: "BBBBBB 07")
+            } else {
+            logADCS(msg: "BBBBBB 08")
+              var newArgs = [Value]()
+              for op in ai.argumentOperands {
+                newArgs.append(op.value)
+              }
+              let newAi = builder.createApply(
+                function: newTei, ai.substitutionMap, arguments: newArgs)
+              ai.replace(with: newAi, context)
+            }
+
+  case let uedi as UncheckedEnumDataInst:
+    let builder = Builder(before: uedi, context)
+    let newUedi = builder.createUncheckedEnumData(
+      enum: newTei, caseIndex: uedi.caseIndex,
+      resultType: newTei.type.bridged.getEnumCasePayload(
+        uedi.caseIndex, uedi.parentFunction.bridged
+      ).type)
+    uedi.replace(with: newUedi, context)
+
+
+
+            default:
+            ()
+          }
+          }
+
+
         }
       }
     }
