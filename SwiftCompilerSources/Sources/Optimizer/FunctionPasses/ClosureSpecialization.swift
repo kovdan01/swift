@@ -364,8 +364,38 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
             ()
           case _ as DestroyValueInst:
             ()
-          case _ as UncheckedEnumDataInst:
-            ()
+          case let uedi as UncheckedEnumDataInst:
+            if uedi.uses.count > 1 {
+              logADCS(
+                prefix: prefixFail,
+                msg: "unchecked_enum_data instr has \(uedi.uses.count) uses, but no more than 1 is allowed")
+              logADCS(msg: "  uedi: \(uedi)")
+              logADCS(msg: "  uedi uses begin")
+              for uediUse in uedi.uses {
+                logADCS(msg: "  uediUse.instruction: \(uediUse.instruction)")
+              }
+              logADCS(msg: "  uedi uses end")
+              return false
+            }
+            if uedi.uses.singleUse != nil {
+              if let bri = uedi.uses.singleUse!.instruction as? BranchInst {
+                // All OK
+              } else {
+                logADCS(
+                  prefix: prefixFail,
+                  msg: "unchecked_enum_data instr has unexpected single use")
+                logADCS(msg: "  uedi: \(uedi)")
+                logADCS(msg: "  uedi use: \(uedi.uses.singleUse!.instruction)")
+                for (idx, uediUseResult) in uedi.uses.singleUse!.instruction.results.enumerated() {
+                  logADCS(msg: "  uedi use result \(idx) uses begin")
+                  for useOfResult in uediUseResult.uses {
+                    logADCS(msg: "    uedi use use: \(useOfResult.instruction)")
+                  }
+                  logADCS(msg: "  uedi use result \(idx) uses end")
+                }
+                return false
+              }
+            }
           case _ as SwitchEnumInst:
             ()
           default:
