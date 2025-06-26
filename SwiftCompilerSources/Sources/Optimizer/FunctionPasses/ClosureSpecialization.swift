@@ -650,7 +650,7 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
     return handleConvertFunctionOrPartialApply(inst: ri.returnedValue.definingInstruction!)
   }
   let ti = tiOpt!
-  if ti.operands.count != 2 {
+  if ti.operands.count < 2 {
     logADCS(prefix: prefix, msg: "5")
     logADCS(msg: "  ti: " + ti.description)
     logADCS(msg: "  parent block begin")
@@ -658,16 +658,16 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
     logADCS(msg: "  parent block end")
     return nil
   }
-  if ti.operands[1].value.definingInstruction == nil {
+  if ti.operands[ti.operands.count - 1].value.definingInstruction == nil {
     logADCS(prefix: prefix, msg: "6")
     logADCS(msg: "  ti: " + ti.description)
-    logADCS(msg: "  value: " + ti.operands[1].value.description)
+    logADCS(msg: "  value: " + ti.operands[ti.operands.count - 1].value.description)
     logADCS(msg: "  parent block begin")
     logADCS(msg: "  " + ti.parentBlock.description)
     logADCS(msg: "  parent block end")
     return nil
   }
-  return handleConvertFunctionOrPartialApply(inst: ti.operands[1].value.definingInstruction!)
+  return handleConvertFunctionOrPartialApply(inst: ti.operands[ti.operands.count - 1].value.definingInstruction!)
 }
 
 private func gatherCallSiteCFG(in caller: Function, _ context: FunctionPassContext) -> CallSite? {
