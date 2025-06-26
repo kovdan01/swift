@@ -892,10 +892,9 @@ private func getOrCreateSpecializedFunctionCFG(
     basedOn: callSite, pb: pb, enumType: enumTypeOfEntryBBArg, enumDict: enumDict, context)
 
   let specializedPb =
-    context.createFunctionForClosureSpecialization(
-      from: pb, withName: specializedPbName,
-      withParams: specializedParameters,
-      withSerialization: pb.isSerialized)
+    context.createSpecializedFunctionDeclaration(from: pb, withName: specializedPbName,
+                                                 withParams: specializedParameters,
+                                                 makeThin: true, makeBare: true)
 
   context.buildSpecializedFunction(
     specializedFunction: specializedPb,
@@ -2014,7 +2013,7 @@ extension SpecializationCloner {
       }
       let clonedEntryBlockArg = clonedEntryBlock.addFunctionArgument(
         type: clonedEntryBlockArgType, self.context)
-      clonedEntryBlockArg.copyFlags(from: arg as! FunctionArgument)
+      clonedEntryBlockArg.copyFlags(from: arg as! FunctionArgument, self.context)
     }
   }
 
