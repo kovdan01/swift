@@ -17,6 +17,7 @@
 // CHECK-NONE: {{^}}// pullback of myfoo10
 // CHECK-NONE: {{^}}// pullback of myfoo11
 // CHECK-NONE: {{^}}// pullback of myfoo12
+// CHECK-NONE: {{^}}// pullback of myfoo14
 // CHECK-NONE: {{^}}// pullback of myfoo07
 // CHECK-NONE: {{^}}// pullback of myfoo06
 // CHECK-NONE: {{^}}// pullback of myfoo05
@@ -29,6 +30,7 @@
 // CHECK:      {{^}}// specialized pullback of myfoo10
 // CHECK:      {{^}}// specialized pullback of myfoo11
 // CHECK:      {{^}}// specialized pullback of myfoo12
+// CHECK:      {{^}}// specialized pullback of myfoo14
 // CHECK:      {{^}}// specialized pullback of myfoo07
 // CHECK:      {{^}}// specialized pullback of myfoo06
 // CHECK:      {{^}}// specialized pullback of myfoo05
@@ -395,6 +397,18 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
     } else {
       return 37
     }
+  }
+
+  @differentiable(reverse)
+  func myfoo14(_ x : Float, _ y : Float) -> (Float, Float) {
+    if x > 0 {
+      if y > 2 {
+        return (y - 37, x + 5)
+      } else {
+        return (y * 42, x - 3)
+      }
+    }
+    return (7 * x, 8 - y)
   }
 }
 
