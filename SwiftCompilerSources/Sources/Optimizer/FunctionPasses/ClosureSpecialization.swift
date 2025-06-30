@@ -396,6 +396,8 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
                 return false
               }
             }
+          case _ as BeginBorrowInst:
+            ()
           case _ as SwitchEnumInst:
             ()
           default:
@@ -406,6 +408,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
             logADCS(msg: "  dti: \(dti)")
             logADCS(msg: "  result: \(result)")
             logADCS(msg: "  use.instruction: \(use.instruction)")
+            dumpVJPAndPB(vjp: vjp, pb: pbBB.parentFunction)
             return false
           }
         }
@@ -1664,6 +1667,49 @@ private func rewriteUsesOfPayloadItem(
   newDti: DestructureTupleInst, context: FunctionPassContext
 ) {
   switch use.instruction {
+  case let bbi as BeginBorrowInst:
+    let builder = Builder(before: bbi, context)
+    var closureInfoOpt = ClosureInfoCFG?(nil)
+    for closureInfo in closureInfoArray {
+      if closureInfo.idxInEnumPayload == resultIdx {
+        if closureInfoOpt != nil {
+          assert(closureInfoOpt!.closure == closureInfo.closure)
+          assert(closureInfoOpt!.payloadTuple == closureInfo.payloadTuple)
+        } else {
+          closureInfoOpt = closureInfo
+        }
+      }
+    }
+    if closureInfoOpt != nil {
+      assert(bbi.uses.count == 2)
+      var aiUse = Operand?(nil)
+      var ebUse = Operand?(nil)
+      for bbiUse in bbi.uses {
+        switch bbiUse.instruction {
+          case let eb as EndBorrowInst:
+            assert(ebUse == nil)
+            ebUse = bbiUse
+          case let ai as ApplyInst:
+            assert(aiUse == nil)
+            aiUse = bbiUse
+          default:
+            assert(false)
+        }
+      }
+      assert(ebUse != nil)
+      assert(aiUse != nil)
+      ebUse!.instruction.parentBlock.eraseInstruction(ebUse!.instruction)
+      rewriteUsesOfPayloadItem(use: aiUse!, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti, context: context)
+      bbi.parentBlock.eraseInstruction(bbi)
+    } else {
+      let newBBI = builder.createBeginBorrow(
+        of: newDti.results[resultIdx],
+        isLexical: bbi.isLexical,
+        hasPointerEscape: bbi.hasPointerEscape,
+        isFromVarDecl: bbi.isFromVarDecl)
+      bbi.replace(with: newBBI, context)
+    }
+
   case let ai as ApplyInst:
     let builder = Builder(before: ai, context)
     var closureInfoOpt = ClosureInfoCFG?(nil)

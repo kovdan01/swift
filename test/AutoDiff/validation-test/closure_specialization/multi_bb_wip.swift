@@ -18,6 +18,7 @@
 // CHECK-NONE: {{^}}// pullback of myfoo11
 // CHECK-NONE: {{^}}// pullback of myfoo12
 // CHECK-NONE: {{^}}// pullback of myfoo14
+// CHECK-NONE: {{^}}// pullback of myfoo15
 // CHECK-NONE: {{^}}// pullback of myfoo07
 // CHECK-NONE: {{^}}// pullback of myfoo06
 // CHECK-NONE: {{^}}// pullback of myfoo05
@@ -31,6 +32,7 @@
 // CHECK:      {{^}}// specialized pullback of myfoo11
 // CHECK:      {{^}}// specialized pullback of myfoo12
 // CHECK:      {{^}}// specialized pullback of myfoo14
+// CHECK:      {{^}}// specialized pullback of myfoo15
 // CHECK:      {{^}}// specialized pullback of myfoo07
 // CHECK:      {{^}}// specialized pullback of myfoo06
 // CHECK:      {{^}}// specialized pullback of myfoo05
@@ -410,6 +412,44 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
     }
     return (7 * x, 8 - y)
   }
+
+  struct FloatPair : Differentiable {
+    var first, second: Float
+    init(_ first: Float, _ second: Float) {
+      self.first = first
+      self.second = second
+    }
+  }
+
+  struct Pair<T : Differentiable, U : Differentiable> : Differentiable {
+    var first: T
+    var second: U
+    init(_ first: T, _ second: U) {
+      self.first = first
+      self.second = second
+    }
+  }
+
+  @differentiable(reverse)
+  func myfoo15(_ x: Float) -> Float {
+    // Convoluted function returning `x + x`.
+    var y = FloatPair(x + x, x - x)
+    var z = Pair(y, x)
+    if x > 0 {
+      var w = FloatPair(x, x)
+      y.first = w.second
+      y.second = w.first
+      z.first.first = z.first.first - y.first
+      z.first.second = z.first.second + y.first
+    } else {
+      z = Pair(FloatPair(y.first - x, y.second + x), x)
+    }
+    return y.first + y.second - z.first.first + z.first.second
+  }
+
+  expectEqual((8, 2), valueWithGradient(at: 4, of: myfoo15))
+  expectEqual((-20, 2), valueWithGradient(at: -10, of: myfoo15))
+  expectEqual((-2674, 2), valueWithGradient(at: -1337, of: myfoo15))
 }
 
 runAllTests()
