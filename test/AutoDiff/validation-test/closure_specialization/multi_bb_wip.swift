@@ -19,6 +19,8 @@
 // CHECK-NONE: {{^}}// pullback of myfoo12
 // CHECK-NONE: {{^}}// pullback of myfoo14
 // CHECK-NONE: {{^}}// pullback of myfoo15
+// CHECK-NONE: {{^}}// pullback of myfoo17
+// CHECK-NONE: {{^}}// pullback of myfoo16
 // CHECK-NONE: {{^}}// pullback of myfoo07
 // CHECK-NONE: {{^}}// pullback of myfoo06
 // CHECK-NONE: {{^}}// pullback of myfoo05
@@ -33,6 +35,8 @@
 // CHECK:      {{^}}// specialized pullback of myfoo12
 // CHECK:      {{^}}// specialized pullback of myfoo14
 // CHECK:      {{^}}// specialized pullback of myfoo15
+// CHECK:      {{^}}// specialized pullback of myfoo17
+// CHECK:      {{^}}// specialized pullback of myfoo16
 // CHECK:      {{^}}// specialized pullback of myfoo07
 // CHECK:      {{^}}// specialized pullback of myfoo06
 // CHECK:      {{^}}// specialized pullback of myfoo05
@@ -534,7 +538,7 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
   expectEqual((-20, 2), valueWithGradient(at: -10, of: myfoo15))
   expectEqual((-2674, 2), valueWithGradient(at: -1337, of: myfoo15))
 
-  func getD(from newValues: [String: Double], at key: String) -> Double? {
+  func myfoo16_getD(from newValues: [String: Double], at key: String) -> Double? {
     if newValues.keys.contains(key) {
       return newValues[key]
     }
@@ -543,10 +547,25 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
 
   @differentiable(reverse)
   func testFunctionD(newValues: [String: Double]) -> Double {
-    return getD(from: newValues, at: "s1")!
+    return myfoo16_getD(from: newValues, at: "s1")!
   }
 
   expectEqual(pullback(at: ["s1": 1.0], of: testFunctionD)(2), ["s1" : 2.0])
+
+  func myfoo17_getG<DataType>(from newValues: [String: DataType], at key: String) -> DataType?
+  where DataType: Differentiable {
+    if newValues.keys.contains(key) {
+      return newValues[key]
+    }
+    return nil
+  }
+
+  @differentiable(reverse)
+  func testFunctionG(newValues: [String: Double]) -> Double {
+    return myfoo17_getG(from: newValues, at: "s1")!
+  }
+
+  expectEqual(pullback(at: ["s1": 1.0], of: testFunctionG)(2), ["s1" : 2.0])
 }
 
 runAllTests()

@@ -384,6 +384,8 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
                 return false
               }
             }
+          case _ as ConvertFunctionInst:
+            ()
           case _ as BeginBorrowInst:
             ()
           case _ as SwitchEnumInst:
@@ -1684,6 +1686,50 @@ private func rewriteUsesOfPayloadItem(
   newDti: DestructureTupleInst, context: FunctionPassContext
 ) {
   switch use.instruction {
+  case let cfi as ConvertFunctionInst:
+    let builder = Builder(before: cfi, context)
+    var closureInfoOpt = ClosureInfoCFG?(nil)
+    for closureInfo in closureInfoArray {
+      if closureInfo.idxInEnumPayload == resultIdx {
+        if closureInfoOpt != nil {
+          assert(closureInfoOpt!.closure == closureInfo.closure)
+          assert(closureInfoOpt!.payloadTuple == closureInfo.payloadTuple)
+        } else {
+          closureInfoOpt = closureInfo
+        }
+      }
+    }
+    if closureInfoOpt != nil {
+      // MYTODO: preliminary check
+      assert(cfi.uses.count == 2)
+      var bbiUse = Operand?(nil)
+      var dviUse = Operand?(nil)
+      for cfiUse in cfi.uses {
+        switch cfiUse.instruction {
+          case let bbi as BeginBorrowInst:
+            assert(bbiUse == nil)
+            bbiUse = cfiUse
+          case let dvi as DestroyValueInst:
+            assert(dviUse == nil)
+            dviUse = cfiUse
+          default:
+            // MYTODO: preliminary check
+            assert(false)
+        }
+      }
+      assert(dviUse != nil)
+      assert(bbiUse != nil)
+      dviUse!.instruction.parentBlock.eraseInstruction(dviUse!.instruction)
+      rewriteUsesOfPayloadItem(use: bbiUse!, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti, context: context)
+      cfi.parentBlock.eraseInstruction(cfi)
+    } else {
+      let newCFI = builder.createConvertFunction(
+        originalFunction: newDti.results[resultIdx],
+        resultType: cfi.type,
+        withoutActuallyEscaping: cfi.withoutActuallyEscaping)
+      cfi.replace(with: newCFI, context)
+    }
+
   case let bbi as BeginBorrowInst:
     let builder = Builder(before: bbi, context)
     var closureInfoOpt = ClosureInfoCFG?(nil)
