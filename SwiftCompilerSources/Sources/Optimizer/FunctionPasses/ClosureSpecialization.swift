@@ -301,19 +301,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
   }
 
   for pbBB in pb.blocks {
-    guard let argOfPbBB = getEnumPayloadArgOfPbBB(pbBB) else {
-      for arg in pbBB.arguments {
-        if arg.type.isTuple {
-          // MYTODO: what if we have tuple which is not payload but just tuple?
-          logADCS(
-            prefix: prefixFail,
-            msg: "several arguments of pullback " + pb.name.string + " basic block "
-              + pbBB.shortDescription
-              + " are tuples (assuming as payload tuples of branch tracing enums), but not more than 1 is supported"
-          )
-          return false
-        }
-      }
+    guard let argOfPbBB = getEnumPayloadArgOfPbBB(pbBB, vjp: vjp) else {
       continue
     }
     if argOfPbBB.uses.count > 1 {
@@ -844,7 +832,7 @@ private func getOrCreateSpecializedFunctionCFG(
       if bb == bb.parentFunction.entryBlock {
         currentEnumTypeOpt = enumTypeOfEntryBBArg
       } else {
-        let argOpt = getEnumPayloadArgOfPbBB(bb)
+        let argOpt = getEnumPayloadArgOfPbBB(bb, vjp: vjp)
         if argOpt != nil && argOpt!.uses.singleUse != nil {
           let dti = argOpt!.uses.singleUse!.instruction as! DestructureTupleInst
           if dti.results[0].type.isBranchTracingEnum(vjp: vjp) {
@@ -1170,14 +1158,43 @@ private func getEnumArgOfVJPBB(_ bb: BasicBlock) -> Argument? {
   return argOpt
 }
 
-private func getEnumPayloadArgOfPbBB(_ bb: BasicBlock) -> Argument? {
-  // TODO: now we just assume that if we have exactly one tuple argument,
-  //       this is what we need. This is not always true.
+private func getEnumPayloadArgOfPbBB(_ bb: BasicBlock, vjp: Function) -> Argument? {
   var argOpt = Argument?(nil)
-  for arg in bb.arguments {
+  for (argIdx, arg) in bb.arguments.enumerated() {
     if !arg.type.isTuple {
       continue
     }
+
+    let predBBOpt = bb.predecessors.first
+    if predBBOpt == nil {
+      continue
+    }
+    let predBB = predBBOpt!
+
+    let brInstOpt = predBB.terminator as? BranchInst
+    let seInstOpt = predBB.terminator as? SwitchEnumInst
+    if brInstOpt == nil && seInstOpt == nil {
+      continue
+    }
+    if brInstOpt != nil {
+      let brInst = brInstOpt!
+      let possibleUEDI = brInst.operands[argIdx].value.definingInstruction
+      let uedi = possibleUEDI as? UncheckedEnumDataInst
+      if uedi == nil {
+        continue
+      }
+      let enumType = uedi!.`enum`.type
+      if !enumType.isBranchTracingEnum(vjp: vjp) {
+        continue
+      }
+    } else {
+      assert(seInstOpt != nil)
+      let enumType = seInstOpt!.enumOp.type
+      if !enumType.isBranchTracingEnum(vjp: vjp) {
+        continue
+      }
+    }
+
     if argOpt != nil {
       return nil
     }
@@ -1934,7 +1951,7 @@ extension SpecializationCloner {
         continue
       }
 
-      guard let arg = getEnumPayloadArgOfPbBB(bb) else {
+      guard let arg = getEnumPayloadArgOfPbBB(bb, vjp: callSite.applySite.parentFunction) else {
         continue
       }
 
