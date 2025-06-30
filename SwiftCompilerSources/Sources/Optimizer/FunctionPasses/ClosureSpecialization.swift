@@ -253,24 +253,73 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     )
     return false
   }
-  guard getEnumArgOfEntryPbBB(pb.entryBlock, vjp: vjp) != nil else {
+  guard let bteArgOfPb = getEnumArgOfEntryPbBB(pb.entryBlock, vjp: vjp) else {
     logADCS(
       prefix: prefixFail,
       msg: "cannot get branch tracing enum argument of the pullback function " + pb.name.string)
     return false
   }
 
-  guard pb.entryBlock.terminator as? SwitchEnumInst != nil else {
-    logADCS(
-      prefix: prefixFail,
-      msg: "unexpected terminator instruction in the entry block of the pullback " + pb.name.string
-        + " (only switch_enum_inst is supported)")
-    logADCS(msg: "  terminator: " + pb.entryBlock.terminator.description)
-    logADCS(msg: "  parent block begin")
-    logADCS(msg: "  " + pb.entryBlock.description)
-    logADCS(msg: "  parent block end")
-    return false
+  if pb.blocks.singleElement != nil {
+    guard let riTerm = pb.entryBlock.terminator as? ReturnInst else {
+      logADCS(
+        prefix: prefixFail,
+        msg: "unexpected terminator instruction in the entry block of the pullback " + pb.name.string
+          + " (expected return inst for single-bb pullback)")
+      logADCS(msg: "  terminator: " + pb.entryBlock.terminator.description)
+      logADCS(msg: "  parent block begin")
+      logADCS(msg: "  " + pb.entryBlock.description)
+      logADCS(msg: "  parent block end")
+      return false
+    }
+    logADCS(msg: "Pullback: single-bb; \(bteArgOfPb.uses.count) uses of branch tracing enum pullback argument found.")
+    if bteArgOfPb.uses.count != 0 {
+      logADCS(
+        prefix: prefixFail,
+        msg: "single-bb pullback has uses of BTE arg")
+      if bteArgOfPb.uses.count == 1 {
+        let useInst = bteArgOfPb.uses.singleUse!.instruction
+        let aiOpt = useInst as? ApplyInst
+        let dviOpt = useInst as? DestroyValueInst
+        if aiOpt != nil {
+          logADCS(msg: "Single use of BTE arg is apply inst")
+        }
+        if dviOpt != nil {
+          logADCS(msg: "Single use of BTE arg is destroy_value inst")
+        }
+      }
+      dumpVJPAndPB(vjp: vjp, pb: pb)
+      return false
+    }
+  } else {
+    guard pb.entryBlock.terminator as? SwitchEnumInst != nil else {
+      logADCS(
+        prefix: prefixFail,
+        msg: "unexpected terminator instruction in the entry block of the pullback " + pb.name.string
+          + " (only switch_enum_inst is supported)")
+      logADCS(msg: "  terminator: " + pb.entryBlock.terminator.description)
+      logADCS(msg: "  parent block begin")
+      logADCS(msg: "  " + pb.entryBlock.description)
+      logADCS(msg: "  parent block end")
+      return false
+    }
+    if bteArgOfPb.uses.count == 0 {
+      logADCS(prefix: prefixFail, msg: "no uses of pullback bte arg found")
+      return false
+    }
+    if bteArgOfPb.uses.count != 1 {
+      logADCS(prefix: prefixFail, msg: "multiple uses of pullback bte arg found")
+      for (idx, use) in bteArgOfPb.uses.enumerated() {
+        logADCS(msg: "use \(idx): \(use)")
+      }
+      return false
+    }
+    if bteArgOfPb.uses.singleUse!.instruction != pb.entryBlock.terminator {
+      logADCS(prefix: prefixFail, msg: "single use of pullback bte arg is not switch_enum of entry block: \(bteArgOfPb.uses.singleUse!)")
+      return false
+    }
   }
+
   for pbBB in pb.blocks {
     guard let sei = pbBB.terminator as? SwitchEnumInst else {
       continue
@@ -278,7 +327,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     if sei.bridged.SwitchEnumInst_getSuccessorForDefault().block != nil {
       logADCS(
         prefix: prefixFail,
-        msg: "switch_enum_inst from the entry block of the pullback " + pb.name.string
+        msg: "switch_enum_inst from the \(pbBB.shortDescription) of the pullback " + pb.name.string
           + " has default destination set, which is not supported")
       return false
     }
@@ -301,19 +350,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
   }
 
   for pbBB in pb.blocks {
-    guard let argOfPbBB = getEnumPayloadArgOfPbBB(pbBB) else {
-      for arg in pbBB.arguments {
-        if arg.type.isTuple {
-          // MYTODO: what if we have tuple which is not payload but just tuple?
-          logADCS(
-            prefix: prefixFail,
-            msg: "several arguments of pullback " + pb.name.string + " basic block "
-              + pbBB.shortDescription
-              + " are tuples (assuming as payload tuples of branch tracing enums), but not more than 1 is supported"
-          )
-          return false
-        }
-      }
+    guard let argOfPbBB = getEnumPayloadArgOfPbBB(pbBB, vjp: vjp) else {
       continue
     }
     if argOfPbBB.uses.count > 1 {
@@ -396,6 +433,86 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
                 return false
               }
             }
+          case let cfi as ConvertFunctionInst:
+            if cfi.uses.count != 2 {
+              logADCS(
+                prefix: prefixFail,
+                msg: "expected exactly 2 uses of convert_function use of payload tuple element, found \(cfi.uses.count)")
+              for (idx, cfiUse) in cfi.uses.enumerated() {
+                logADCS(msg: "use \(idx): \(cfiUse)")
+              }
+              return false
+            }
+            var bbiUse = Operand?(nil)
+            var dviUse = Operand?(nil)
+            for cfiUse in cfi.uses {
+              switch cfiUse.instruction {
+                case let bbi as BeginBorrowInst:
+                  if bbiUse != nil {
+                    logADCS(
+                      prefix: prefixFail,
+                      msg: "multiple begin_borrow uses of convert_function result found, but exactly 1 expected")
+                    return false
+                  }
+                  bbiUse = cfiUse
+                case let dvi as DestroyValueInst:
+                  if dviUse != nil {
+                    logADCS(
+                      prefix: prefixFail,
+                      msg: "multiple destroy_value uses of convert_function result found, but exactly 1 expected")
+                    return false
+                  }
+                  dviUse = cfiUse
+                default:
+                  logADCS(
+                    prefix: prefixFail,
+                    msg: "unexpected use of convert_function result found: \(cfiUse)")
+                  return false
+              }
+            }
+            assert(dviUse != nil)
+            assert(bbiUse != nil)
+
+          case let bbi as BeginBorrowInst:
+            if bbi.uses.count != 2 {
+              logADCS(
+                prefix: prefixFail,
+                msg: "expected exactly 2 uses of begin_borrow use of payload tuple element, found \(bbi.uses.count)")
+              for (idx, bbiUse) in bbi.uses.enumerated() {
+                logADCS(msg: "use \(idx): \(bbiUse)")
+              }
+              return false
+            }
+            var aiUse = Operand?(nil)
+            var ebUse = Operand?(nil)
+            for bbiUse in bbi.uses {
+              switch bbiUse.instruction {
+                case let eb as EndBorrowInst:
+                  if ebUse != nil {
+                    logADCS(
+                      prefix: prefixFail,
+                      msg: "multiple end_borrow uses of begin_borrow result found, but exactly 1 expected")
+                    return false
+                  }
+                  ebUse = bbiUse
+                case let ai as ApplyInst:
+                  if aiUse != nil {
+                    logADCS(
+                      prefix: prefixFail,
+                      msg: "multiple apply uses of begin_borrow result found, but exactly 1 expected")
+                    return false
+                  }
+                  aiUse = bbiUse
+                default:
+                  logADCS(
+                    prefix: prefixFail,
+                    msg: "unexpected use of begin_borrow result found: \(bbiUse)")
+                  return false
+              }
+            }
+            assert(ebUse != nil)
+            assert(aiUse != nil)
+
           case _ as SwitchEnumInst:
             ()
           default:
@@ -601,6 +718,9 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
   for block in vjp.blocks {
     if block.isReachableExitBlock {
       guard block.terminator as? ReturnInst != nil else {
+        logADCS(msg: "getPartialApplyOfPullbackInExitVJPBB: reachable exit block begin")
+        logADCS(msg: "\(block)")
+        logADCS(msg: "getPartialApplyOfPullbackInExitVJPBB: reachable exit block end")
         continue
       }
       if exitBBOpt != nil {
@@ -617,6 +737,7 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
   let ri = exitBBOpt!.terminator as! ReturnInst
   if ri.returnedValue.definingInstruction == nil {
     logADCS(prefix: prefix, msg: "2")
+    dumpVJP(vjp: vjp)
     return nil
   }
 
@@ -628,10 +749,15 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
     }
     if cfOpt == nil {
       logADCS(prefix: prefix, msg: "3")
-      logADCS(msg: "  instruction: " + inst.description)
-      logADCS(msg: "  parent block begin")
-      logADCS(msg: "  " + inst.parentBlock.description)
-      logADCS(msg: "  parent block end")
+      let tttfOpt = inst as? ThinToThickFunctionInst
+      if tttfOpt != nil {
+        logADCS(msg: "  instruction: " + inst.description)
+        logADCS(msg: "  parent block begin")
+        logADCS(msg: "  " + inst.parentBlock.description)
+        logADCS(msg: "  parent block end")
+      } else {
+        dumpVJP(vjp: vjp)
+      }
       return nil
     }
     let pai = cfOpt!.operands[0].value as? PartialApplyInst
@@ -841,7 +967,7 @@ private func getOrCreateSpecializedFunctionCFG(
       if bb == bb.parentFunction.entryBlock {
         currentEnumTypeOpt = enumTypeOfEntryBBArg
       } else {
-        let argOpt = getEnumPayloadArgOfPbBB(bb)
+        let argOpt = getEnumPayloadArgOfPbBB(bb, vjp: vjp)
         if argOpt != nil && argOpt!.uses.singleUse != nil {
           let dti = argOpt!.uses.singleUse!.instruction as! DestructureTupleInst
           if dti.results[0].type.isBranchTracingEnum(vjp: vjp) {
@@ -1167,14 +1293,43 @@ private func getEnumArgOfVJPBB(_ bb: BasicBlock) -> Argument? {
   return argOpt
 }
 
-private func getEnumPayloadArgOfPbBB(_ bb: BasicBlock) -> Argument? {
-  // TODO: now we just assume that if we have exactly one tuple argument,
-  //       this is what we need. This is not always true.
+private func getEnumPayloadArgOfPbBB(_ bb: BasicBlock, vjp: Function) -> Argument? {
   var argOpt = Argument?(nil)
-  for arg in bb.arguments {
+  for (argIdx, arg) in bb.arguments.enumerated() {
     if !arg.type.isTuple {
       continue
     }
+
+    let predBBOpt = bb.predecessors.first
+    if predBBOpt == nil {
+      continue
+    }
+    let predBB = predBBOpt!
+
+    let brInstOpt = predBB.terminator as? BranchInst
+    let seInstOpt = predBB.terminator as? SwitchEnumInst
+    if brInstOpt == nil && seInstOpt == nil {
+      continue
+    }
+    if brInstOpt != nil {
+      let brInst = brInstOpt!
+      let possibleUEDI = brInst.operands[argIdx].value.definingInstruction
+      let uedi = possibleUEDI as? UncheckedEnumDataInst
+      if uedi == nil {
+        continue
+      }
+      let enumType = uedi!.`enum`.type
+      if !enumType.isBranchTracingEnum(vjp: vjp) {
+        continue
+      }
+    } else {
+      assert(seInstOpt != nil)
+      let enumType = seInstOpt!.enumOp.type
+      if !enumType.isBranchTracingEnum(vjp: vjp) {
+        continue
+      }
+    }
+
     if argOpt != nil {
       return nil
     }
@@ -1664,6 +1819,91 @@ private func rewriteUsesOfPayloadItem(
   newDti: DestructureTupleInst, context: FunctionPassContext
 ) {
   switch use.instruction {
+  case let cfi as ConvertFunctionInst:
+    let builder = Builder(before: cfi, context)
+    var closureInfoOpt = ClosureInfoCFG?(nil)
+    for closureInfo in closureInfoArray {
+      if closureInfo.idxInEnumPayload == resultIdx {
+        if closureInfoOpt != nil {
+          assert(closureInfoOpt!.closure == closureInfo.closure)
+          assert(closureInfoOpt!.payloadTuple == closureInfo.payloadTuple)
+        } else {
+          closureInfoOpt = closureInfo
+        }
+      }
+    }
+    if closureInfoOpt != nil {
+      assert(cfi.uses.count == 2)
+      var bbiUse = Operand?(nil)
+      var dviUse = Operand?(nil)
+      for cfiUse in cfi.uses {
+        switch cfiUse.instruction {
+          case let bbi as BeginBorrowInst:
+            assert(bbiUse == nil)
+            bbiUse = cfiUse
+          case let dvi as DestroyValueInst:
+            assert(dviUse == nil)
+            dviUse = cfiUse
+          default:
+            assert(false)
+        }
+      }
+      assert(dviUse != nil)
+      assert(bbiUse != nil)
+      dviUse!.instruction.parentBlock.eraseInstruction(dviUse!.instruction)
+      rewriteUsesOfPayloadItem(use: bbiUse!, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti, context: context)
+      cfi.parentBlock.eraseInstruction(cfi)
+    } else {
+      let newCFI = builder.createConvertFunction(
+        originalFunction: newDti.results[resultIdx],
+        resultType: cfi.type,
+        withoutActuallyEscaping: cfi.withoutActuallyEscaping)
+      cfi.replace(with: newCFI, context)
+    }
+
+  case let bbi as BeginBorrowInst:
+    let builder = Builder(before: bbi, context)
+    var closureInfoOpt = ClosureInfoCFG?(nil)
+    for closureInfo in closureInfoArray {
+      if closureInfo.idxInEnumPayload == resultIdx {
+        if closureInfoOpt != nil {
+          assert(closureInfoOpt!.closure == closureInfo.closure)
+          assert(closureInfoOpt!.payloadTuple == closureInfo.payloadTuple)
+        } else {
+          closureInfoOpt = closureInfo
+        }
+      }
+    }
+    if closureInfoOpt != nil {
+      assert(bbi.uses.count == 2)
+      var aiUse = Operand?(nil)
+      var ebUse = Operand?(nil)
+      for bbiUse in bbi.uses {
+        switch bbiUse.instruction {
+          case let eb as EndBorrowInst:
+            assert(ebUse == nil)
+            ebUse = bbiUse
+          case let ai as ApplyInst:
+            assert(aiUse == nil)
+            aiUse = bbiUse
+          default:
+            assert(false)
+        }
+      }
+      assert(ebUse != nil)
+      assert(aiUse != nil)
+      ebUse!.instruction.parentBlock.eraseInstruction(ebUse!.instruction)
+      rewriteUsesOfPayloadItem(use: aiUse!, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti, context: context)
+      bbi.parentBlock.eraseInstruction(bbi)
+    } else {
+      let newBBI = builder.createBeginBorrow(
+        of: newDti.results[resultIdx],
+        isLexical: bbi.isLexical,
+        hasPointerEscape: bbi.hasPointerEscape,
+        isFromVarDecl: bbi.isFromVarDecl)
+      bbi.replace(with: newBBI, context)
+    }
+
   case let ai as ApplyInst:
     let builder = Builder(before: ai, context)
     var closureInfoOpt = ClosureInfoCFG?(nil)
@@ -1877,7 +2117,8 @@ extension SpecializationCloner {
     logADCS(msg: "bbQueue.count = \(bbQueue.count) END")
 
     for bb in bbQueue {
-      if bb == self.cloned.entryBlock {
+      // With single-bb, we've ensured that there are no uses of BTE arg, so no manipulation required
+      if bb == self.cloned.entryBlock && self.cloned.blocks.singleElement == nil {
         let sei = bb.terminator as! SwitchEnumInst
         let builderEntry = Builder(before: sei, self.context)
 
@@ -1888,7 +2129,7 @@ extension SpecializationCloner {
         continue
       }
 
-      guard let arg = getEnumPayloadArgOfPbBB(bb) else {
+      guard let arg = getEnumPayloadArgOfPbBB(bb, vjp: callSite.applySite.parentFunction) else {
         continue
       }
 
