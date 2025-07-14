@@ -292,17 +292,6 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
       return false
     }
   } else {
-    guard pb.entryBlock.terminator as? SwitchEnumInst != nil else {
-      logADCS(
-        prefix: prefixFail,
-        msg: "unexpected terminator instruction in the entry block of the pullback " + pb.name.string
-          + " (only switch_enum_inst is supported)")
-      logADCS(msg: "  terminator: " + pb.entryBlock.terminator.description)
-      logADCS(msg: "  parent block begin")
-      logADCS(msg: "  " + pb.entryBlock.description)
-      logADCS(msg: "  parent block end")
-      return false
-    }
     if bteArgOfPb.uses.count == 0 {
       logADCS(prefix: prefixFail, msg: "no uses of pullback bte arg found")
       return false
@@ -314,8 +303,16 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
       }
       return false
     }
-    if bteArgOfPb.uses.singleUse!.instruction != pb.entryBlock.terminator {
-      logADCS(prefix: prefixFail, msg: "single use of pullback bte arg is not switch_enum of entry block: \(bteArgOfPb.uses.singleUse!)")
+
+    guard bteArgOfPb.uses.singleUse!.instruction as? SwitchEnumInst != nil else {
+      logADCS(
+        prefix: prefixFail,
+        msg: "unexpected use of BTE argument of pullback " + pb.name.string
+          + " (only switch_enum_inst is supported)")
+      logADCS(msg: "  use: \(bteArgOfPb.uses.singleUse!.instruction)")
+      logADCS(msg: "  parent block begin")
+      logADCS(msg: "  \(bteArgOfPb.uses.singleUse!.instruction.parentBlock)")
+      logADCS(msg: "  parent block end")
       return false
     }
   }
@@ -2111,12 +2108,14 @@ extension SpecializationCloner {
     for bb in bbQueue {
       // With single-bb, we've ensured that there are no uses of BTE arg, so no manipulation required
       if bb == self.cloned.entryBlock && self.cloned.blocks.singleElement == nil {
-        let sei = bb.terminator as! SwitchEnumInst
+        let bteArg = getEnumArgOfEntryPbBB(bb, vjp: pullbackClosureInfo.paiOfPullback.parentFunction)!
+        let sei = bteArg.uses.singleUse!.instruction as! SwitchEnumInst
+        let parentBB = sei.parentBlock
         let builderEntry = Builder(before: sei, self.context)
 
         builderEntry.createSwitchEnum(
           enum: sei.enumOp, cases: getEnumCasesForSwitchEnumInst(sei))
-        bb.eraseInstruction(sei)
+        parentBB.eraseInstruction(sei)
 
         continue
       }
@@ -2181,25 +2180,26 @@ extension SpecializationCloner {
           }
         }
       }
-      assert(tiInVjp != nil)
 
       var closureInfoArray = [ClosureInfoCFG]()
       var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
       defer {
         adcsHelper.clearClosuresBufferForPb()
       }
-      for (opIdx, op) in tiInVjp!.operands.enumerated() {
-        let val = op.value
-        for closureInfo in closureInfos {
-          if ((closureInfo.subsetThunk == nil && closureInfo.closure == val)
-            || (closureInfo.subsetThunk != nil && closureInfo.subsetThunk! == val))
-            && closureInfo.payloadTuple == tiInVjp! // MYTODO: is this correct?
-          {
-            assert(closureInfo.idxInEnumPayload == opIdx)
-            closureInfoArray.append(closureInfo)
-            adcsHelper.appendToClosuresBufferForPb(
-              closureInfo.closure.bridged,
-              closureInfo.idxInEnumPayload)
+      if tiInVjp != nil {
+        for (opIdx, op) in tiInVjp!.operands.enumerated() {
+          let val = op.value
+          for closureInfo in closureInfos {
+            if ((closureInfo.subsetThunk == nil && closureInfo.closure == val)
+              || (closureInfo.subsetThunk != nil && closureInfo.subsetThunk! == val))
+              && closureInfo.payloadTuple == tiInVjp! // MYTODO: is this correct?
+            {
+              assert(closureInfo.idxInEnumPayload == opIdx)
+              closureInfoArray.append(closureInfo)
+              adcsHelper.appendToClosuresBufferForPb(
+                closureInfo.closure.bridged,
+                closureInfo.idxInEnumPayload)
+            }
           }
         }
       }
