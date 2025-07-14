@@ -277,6 +277,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
       logADCS(
         prefix: prefixFail,
         msg: "single-bb pullback has uses of BTE arg")
+      var needBreak = true
       if bteArgOfPb.uses.count == 1 {
         let useInst = bteArgOfPb.uses.singleUse!.instruction
         let aiOpt = useInst as? ApplyInst
@@ -286,10 +287,13 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
         }
         if dviOpt != nil {
           logADCS(msg: "Single use of BTE arg is destroy_value inst")
+          needBreak = false
         }
       }
       dumpVJPAndPB(vjp: vjp, pb: pb)
-      return false
+      if needBreak {
+        return false
+      }
     }
   } else {
     if bteArgOfPb.uses.count == 0 {
@@ -937,41 +941,129 @@ private func getOrCreateSpecializedFunctionCFG(
 
   var bbVisited = [BasicBlock: Bool]()
   var bbQueue = [BasicBlock]()
-  while bbVisited.count != pullbackClosureInfo.pullbackFn.blocks.count {
-    for bb in pullbackClosureInfo.pullbackFn.blocks {
-      if bbVisited[bb] == true {
+
+  if pb.blocks.singleElement != nil {
+    var btesBefore = [Type:[Type]]()
+    var btesBeforeForBB = [BasicBlock:[Type]]()
+    var btes = [Type]()
+    for inst in vjp.instructions {
+      guard let ei = inst as? EnumInst else {
         continue
       }
-      var allSuccVisited = true
-      for succBB in bb.successors {
-        if bbVisited[succBB] != true {
-          allSuccVisited = false
-          break
+      if !ei.type.isBranchTracingEnum(vjp: vjp) {
+        continue
+      }
+      if !btes.contains(ei.type) {
+        btes.append(ei.type)
+        btesBefore[ei.type] = []
+      }
+    }
+    for bb in vjp.blocks {
+      btesBeforeForBB[bb] = [Type]()
+    }
+
+    while bbVisited.count != vjp.blocks.count {
+      for bb in vjp.blocks {
+        if bbVisited[bb] == true {
+          continue
         }
-      }
-      if !allSuccVisited {
-        continue
-      }
-      var currentEnumTypeOpt = Type?(nil)
-      if bb == bb.parentFunction.entryBlock {
-        currentEnumTypeOpt = enumTypeOfEntryBBArg
-      } else {
-        let argOpt = getEnumPayloadArgOfPbBB(bb, vjp: vjp)
-        if argOpt != nil && argOpt!.uses.singleUse != nil {
-          let dti = argOpt!.uses.singleUse!.instruction as! DestructureTupleInst
-          if dti.results[0].type.isBranchTracingEnum(vjp: vjp) {
-            assert(dti.results[0].uses.count <= 1)
-            if dti.results[0].uses.singleUse != nil {
-              currentEnumTypeOpt = dti.results[0].type
+        var allPredsVisited = true
+        var btesBeforeCurrent = [Type]()
+        for predBB in bb.predecessors {
+          if bbVisited[predBB] != true {
+            allPredsVisited = false
+            break
+          }
+          for bte in btesBeforeForBB[predBB]! {
+            if !btesBeforeCurrent.contains(bte) {
+              btesBeforeCurrent.append(bte)
             }
           }
         }
+        if !allPredsVisited {
+          continue
+        }
+        for inst in bb.instructions {
+          guard let ei = inst as? EnumInst else {
+            continue
+          }
+          if !ei.type.isBranchTracingEnum(vjp: vjp) {
+            continue
+          }
+          for bte in btesBeforeCurrent {
+            if !btesBefore[ei.type]!.contains(bte) {
+              btesBefore[ei.type]!.append(bte)
+            }
+          }
+          if !btesBeforeCurrent.contains(ei.type) {
+            btesBeforeCurrent.append(ei.type)
+          }
+        }
+        bbQueue.append(bb)
+        bbVisited[bb] = true
+        btesBeforeForBB[bb] = btesBeforeCurrent
       }
-      if currentEnumTypeOpt != nil && !enumTypesQueue.contains(currentEnumTypeOpt!) {
-        enumTypesQueue.append(currentEnumTypeOpt!)
+    }
+
+    while enumTypesQueue.count != btes.count {
+      for bte in btes {
+        if btesBefore[bte] == nil {
+          continue
+        }
+        if btesBefore[bte]!.count != 0 {
+          continue
+        }
+        for bteInner in btes {
+          if btesBefore[bteInner] == nil {
+            continue
+          }
+          guard let idx = btesBefore[bteInner]!.firstIndex(of: bte) else {
+            continue
+          }
+          btesBefore[bteInner]!.remove(at: idx)
+        }
+        enumTypesQueue.append(bte)
+        btesBefore[bte] = nil
+        break
       }
-      bbQueue.append(bb)
-      bbVisited[bb] = true
+    }
+  } else {
+    while bbVisited.count != pullbackClosureInfo.pullbackFn.blocks.count {
+      for bb in pullbackClosureInfo.pullbackFn.blocks {
+        if bbVisited[bb] == true {
+          continue
+        }
+        var allSuccVisited = true
+        for succBB in bb.successors {
+          if bbVisited[succBB] != true {
+            allSuccVisited = false
+            break
+          }
+        }
+        if !allSuccVisited {
+          continue
+        }
+        var currentEnumTypeOpt = Type?(nil)
+        if bb == bb.parentFunction.entryBlock {
+          currentEnumTypeOpt = enumTypeOfEntryBBArg
+        } else {
+          let argOpt = getEnumPayloadArgOfPbBB(bb, vjp: vjp)
+          if argOpt != nil && argOpt!.uses.singleUse != nil {
+            let dti = argOpt!.uses.singleUse!.instruction as! DestructureTupleInst
+            if dti.results[0].type.isBranchTracingEnum(vjp: vjp) {
+              assert(dti.results[0].uses.count <= 1)
+              if dti.results[0].uses.singleUse != nil {
+                currentEnumTypeOpt = dti.results[0].type
+              }
+            }
+          }
+        }
+        if currentEnumTypeOpt != nil && !enumTypesQueue.contains(currentEnumTypeOpt!) {
+          enumTypesQueue.append(currentEnumTypeOpt!)
+        }
+        bbQueue.append(bb)
+        bbVisited[bb] = true
+      }
     }
   }
 
