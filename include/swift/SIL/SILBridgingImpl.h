@@ -256,6 +256,11 @@ BridgedParameterInfoArray SILFunctionType_getParameters(BridgedCanType funcTy) {
   return {funcTy.unbridged()->castTo<swift::SILFunctionType>()->getParameters()};
 }
 
+bool SILType_equalEnums(BridgedCanType lhs, BridgedCanType rhs) {
+  return lhs.unbridged().getEnumOrBoundGenericEnum() ==
+         rhs.unbridged().getEnumOrBoundGenericEnum();
+}
+
 bool SILFunctionType_hasSelfParam(BridgedCanType funcTy) {
   return funcTy.unbridged()->castTo<swift::SILFunctionType>()->hasSelfParam();
 }
