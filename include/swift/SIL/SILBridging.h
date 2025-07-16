@@ -229,6 +229,7 @@ BridgedYieldInfoArray SILFunctionType_getYields(BridgedCanType);
 SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedLifetimeDependenceInfoArray
 SILFunctionType_getLifetimeDependencies(BridgedCanType);
 
+BRIDGED_INLINE bool SILType_equalEnums(BridgedCanType, BridgedCanType);
 
 struct BridgedType {
   void * _Nullable opaqueValue;
@@ -1160,6 +1161,9 @@ struct BridgedTypeHasher {
 
 using BranchTracingEnumDict =
     std::unordered_map<BridgedType, BridgedType, BridgedTypeHasher>;
+
+BridgedType SILBridging_enumDictGetByKey(const BranchTracingEnumDict &dict,
+                                         BridgedType key);
 
 struct BridgedAutoDiffClosureSpecializationHelper {
   SWIFT_IMPORT_UNSAFE void appendToClosuresBuffer(BridgedType enumType,
