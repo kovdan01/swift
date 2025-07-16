@@ -746,15 +746,20 @@ std::vector<Type> getEnumQueue(BridgedType topEnum) {
 BranchTracingEnumDict
 BridgedAutoDiffClosureSpecializationHelper::rewriteAllEnums(
     BridgedFunction topVjp, BridgedType topEnum) const {
+  SILModule &module = topVjp.getFunction()->getModule();
+
   std::vector<Type> enumQueue = getEnumQueue(topEnum);
   BranchTracingEnumDict dict;
 
   for (const Type &t : enumQueue) {
     EnumDecl *ed = t->getEnumOrBoundGenericEnum();
     auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
-    Lowering::AbstractionPattern pattern(traceDeclType);
+    Lowering::AbstractionPattern pattern(topVjp.getFunction()
+                                             ->getLoweredFunctionType()
+                                             ->getSubstGenericSignature(),
+                                         traceDeclType);
 
-    SILType silType = topVjp.getFunction()->getModule().Types.getLoweredType(
+    SILType silType = module.Types.getLoweredType(
         pattern, traceDeclType, TypeExpansionContext::minimal());
 
     dict[BridgedType(silType)] =
@@ -762,6 +767,35 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteAllEnums(
   }
 
   return dict;
+}
+
+// MYTODO: do we need that or we can just use subscript?
+BridgedType SILBridging_enumDictGetByKey(const BranchTracingEnumDict &dict,
+                                         BridgedType key) {
+  for (const auto &[from, to] : dict) {
+    if (from.unbridged().getEnumOrBoundGenericEnum() ==
+        key.unbridged().getEnumOrBoundGenericEnum()) {
+      return to;
+    }
+  }
+  return BridgedType();
+}
+
+// MYTODO: copied from LinearMapInfo.cpp. Is this needed?
+/// Clone the generic parameters of the given generic signature and return a new
+/// `GenericParamList`.
+static GenericParamList *cloneGenericParameters(ASTContext &ctx,
+                                                DeclContext *dc,
+                                                CanGenericSignature sig) {
+  SmallVector<GenericTypeParamDecl *, 2> clonedParams;
+  for (auto paramType : sig.getGenericParams()) {
+    auto *clonedParam = GenericTypeParamDecl::createImplicit(
+        dc, paramType->getName(), paramType->getDepth(), paramType->getIndex(),
+        paramType->getParamKind());
+    clonedParam->setDeclContext(dc);
+    clonedParams.push_back(clonedParam);
+  }
+  return GenericParamList::create(ctx, SourceLoc(), clonedParams, SourceLoc());
 }
 
 BridgedType
@@ -775,16 +809,27 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
   SILModule &module = topVjp.getFunction()->getModule();
   ASTContext &astContext = oldED->getASTContext();
 
+  CanGenericSignature genericSig = nullptr;
+  if (auto *derivativeFnGenEnv = topVjp.getFunction()->getGenericEnvironment())
+    genericSig =
+        derivativeFnGenEnv->getGenericSignature().getCanonicalSignature();
+  GenericParamList *genericParams = nullptr;
+  if (genericSig)
+    genericParams =
+        cloneGenericParameters(astContext, oldED->getDeclContext(), genericSig);
+
   // TODO: use better naming
   Twine edNameStr = oldED->getNameStr() + "_specialized";
   Identifier edName = astContext.getIdentifier(edNameStr.str());
 
   auto *ed = new (astContext) EnumDecl(
       /*EnumLoc*/ SourceLoc(), /*Name*/ edName, /*NameLoc*/ SourceLoc(),
-      /*Inherited*/ {}, /*GenericParams*/ nullptr,
+      /*Inherited*/ {}, /*GenericParams*/ genericParams,
       /*DC*/
       oldED->getDeclContext());
   ed->setImplicit();
+  if (genericSig)
+    ed->setGenericSignature(genericSig);
 
   for (EnumCaseDecl *oldECD : oldED->getAllCases()) {
     assert(oldECD->getElements().size() == 1);
@@ -861,7 +906,10 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
   file.getParentModule()->clearLookupCache();
 
   auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
-  Lowering::AbstractionPattern pattern(traceDeclType);
+  Lowering::AbstractionPattern pattern(topVjp.getFunction()
+                                           ->getLoweredFunctionType()
+                                           ->getSubstGenericSignature(),
+                                       traceDeclType);
 
   SILType newEnumType = topVjp.getFunction()->getModule().Types.getLoweredType(
       pattern, traceDeclType, TypeExpansionContext::minimal());

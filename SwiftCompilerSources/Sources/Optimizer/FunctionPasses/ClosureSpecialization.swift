@@ -205,6 +205,203 @@ private func dumpVJPAndPB(vjp: Function, pb: Function) {
 
 var isMultiBBWithoutBranchTracingEnumPullbackArg: Bool = false
 
+enum PayloadValues {
+  case DestructureTuple([Value])
+  case TupleExtract([Value])
+  case ZeroUses
+  case Unsupported
+}
+
+func getPayloadValues(payload : Argument, vjp : Function) -> PayloadValues {
+  if payload.uses.count == 0 {
+    return PayloadValues.ZeroUses
+  }
+
+  var results = [Value]()
+
+  if payload.uses.singleUse != nil && payload.uses.singleUse!.instruction as? DestructureTupleInst != nil {
+    let dti = payload.uses.singleUse!.instruction as! DestructureTupleInst
+    // TODO: do we need to check that results is not empty?
+    if dti.operands[0].value.type.tupleElements.count != 0
+      && dti.results[0].type.isBranchTracingEnum(vjp: vjp) && dti.results[0].uses.count > 1 {
+      return PayloadValues.Unsupported
+    }
+    for result in dti.results {
+      results.append(result)
+    }
+    return PayloadValues.DestructureTuple(results)
+  }
+
+  var idxs = [Int]()
+  for use in payload.uses {
+    guard let tei = use.instruction as? TupleExtractInst else {
+      return PayloadValues.Unsupported
+    }
+    if idxs.contains(tei.fieldIndex) {
+      return PayloadValues.Unsupported
+    }
+    if tei.fieldIndex == 0 &&
+      tei.type.isBranchTracingEnum(vjp: vjp) && tei.results[0].uses.count > 1 {
+      return PayloadValues.Unsupported
+    }
+    idxs.append(tei.fieldIndex)
+    results.append(tei)
+  }
+  return PayloadValues.TupleExtract(results)
+
+  return PayloadValues.Unsupported
+}
+
+func checkIfCanRunForPayloadValues(results : [Value], prefixFail: String, pb: Function, pbBB: BasicBlock) -> Bool {
+  for result in results {
+    for use in result.uses {
+      switch use.instruction {
+      case _ as ApplyInst:
+        ()
+      case _ as DestroyValueInst:
+        ()
+      case _ as StrongReleaseInst:
+        ()
+      case let uedi as UncheckedEnumDataInst:
+        if uedi.uses.count > 1 {
+          logADCS(
+            prefix: prefixFail,
+            msg: "unchecked_enum_data instr has \(uedi.uses.count) uses, but no more than 1 is allowed")
+          logADCS(msg: "  uedi: \(uedi)")
+          logADCS(msg: "  uedi uses begin")
+          for uediUse in uedi.uses {
+            logADCS(msg: "  uediUse.instruction: \(uediUse.instruction)")
+          }
+          logADCS(msg: "  uedi uses end")
+          return false
+        }
+        if uedi.uses.singleUse != nil {
+          if let bri = uedi.uses.singleUse!.instruction as? BranchInst {
+            // All OK
+          } else {
+            logADCS(
+              prefix: prefixFail,
+              msg: "unchecked_enum_data instr has unexpected single use")
+            logADCS(msg: "  uedi: \(uedi)")
+            logADCS(msg: "  uedi use: \(uedi.uses.singleUse!.instruction)")
+            for (idx, uediUseResult) in uedi.uses.singleUse!.instruction.results.enumerated() {
+              logADCS(msg: "  uedi use result \(idx) uses begin")
+              for useOfResult in uediUseResult.uses {
+                logADCS(msg: "    uedi use use: \(useOfResult.instruction)")
+              }
+              logADCS(msg: "  uedi use result \(idx) uses end")
+            }
+            return false
+          }
+        }
+      case let cfi as ConvertFunctionInst:
+        if cfi.uses.count != 2 {
+          logADCS(
+            prefix: prefixFail,
+            msg: "expected exactly 2 uses of convert_function use of payload tuple element, found \(cfi.uses.count)")
+          for (idx, cfiUse) in cfi.uses.enumerated() {
+            logADCS(msg: "use \(idx): \(cfiUse)")
+          }
+          return false
+        }
+        var bbiUse = Operand?(nil)
+        var dviUse = Operand?(nil)
+        var sriUse = Operand?(nil)
+        for cfiUse in cfi.uses {
+          switch cfiUse.instruction {
+            case let bbi as BeginBorrowInst:
+              if bbiUse != nil {
+                logADCS(
+                  prefix: prefixFail,
+                  msg: "multiple begin_borrow uses of convert_function result found, but exactly 1 expected")
+                return false
+              }
+              bbiUse = cfiUse
+            case let dvi as DestroyValueInst:
+              if dviUse != nil {
+                logADCS(
+                  prefix: prefixFail,
+                  msg: "multiple destroy_value uses of convert_function result found, but exactly 1 expected")
+                return false
+              }
+              dviUse = cfiUse
+            case let sri as StrongReleaseInst:
+              if sriUse != nil {
+                logADCS(
+                  prefix: prefixFail,
+                  msg: "multiple strong_release uses of convert_function result found, but exactly 1 expected")
+                return false
+              }
+              sriUse = cfiUse
+            default:
+              logADCS(
+                prefix: prefixFail,
+                msg: "unexpected use of convert_function result found: \(cfiUse)")
+              return false
+          }
+        }
+        assert((dviUse != nil) != (sriUse != nil))
+        assert(bbiUse != nil)
+
+      case let bbi as BeginBorrowInst:
+        if bbi.uses.count != 2 {
+          logADCS(
+            prefix: prefixFail,
+            msg: "expected exactly 2 uses of begin_borrow use of payload tuple element, found \(bbi.uses.count)")
+          for (idx, bbiUse) in bbi.uses.enumerated() {
+            logADCS(msg: "use \(idx): \(bbiUse)")
+          }
+          return false
+        }
+        var aiUse = Operand?(nil)
+        var ebUse = Operand?(nil)
+        for bbiUse in bbi.uses {
+          switch bbiUse.instruction {
+            case let eb as EndBorrowInst:
+              if ebUse != nil {
+                logADCS(
+                  prefix: prefixFail,
+                  msg: "multiple end_borrow uses of begin_borrow result found, but exactly 1 expected")
+                return false
+              }
+              ebUse = bbiUse
+            case let ai as ApplyInst:
+              if aiUse != nil {
+                logADCS(
+                  prefix: prefixFail,
+                  msg: "multiple apply uses of begin_borrow result found, but exactly 1 expected")
+                return false
+              }
+              aiUse = bbiUse
+            default:
+              logADCS(
+                prefix: prefixFail,
+                msg: "unexpected use of begin_borrow result found: \(bbiUse)")
+              return false
+          }
+        }
+        assert(ebUse != nil)
+        assert(aiUse != nil)
+
+      case _ as SwitchEnumInst:
+        ()
+      case _ as TupleExtractInst:
+        ()
+
+      default:
+        logADCS(
+          prefix: prefixFail,
+          msg: "unexpected use of an element of the tuple being argument of pullback "
+            + pb.name.string + " basic block " + pbBB.shortDescription)
+        logADCS(msg: "  result: \(result)")
+        logADCS(msg: "  use.instruction: \(use.instruction)")
+        return false
+      }
+    }
+  }
+  return true
+}
+
 private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
   assert(vjp.blocks.singleElement == nil)
 
@@ -362,181 +559,36 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     guard let argOfPbBB = getEnumPayloadArgOfPbBB(pbBB, vjp: vjp) else {
       continue
     }
-    if argOfPbBB.uses.count > 1 {
-      logADCS(
-        prefix: prefixFail,
-        msg: "tuple argument of pullback " + pb.name.string + " basic block "
-          + pbBB.shortDescription + " has more than 1 uses")
-      logADCS(msg: "  argOfPbBB: \(argOfPbBB)")
-      logADCS(msg: "  bb begin")
-      logADCS(msg: "  \(pbBB)")
-      logADCS(msg: "  bb end")
+    let payloadValues = getPayloadValues(payload: argOfPbBB, vjp: vjp)
+    switch payloadValues {
+    case .ZeroUses:
+      ()
+    case .Unsupported:
       return false
-    }
-    if argOfPbBB.uses.singleUse != nil {
-      guard let dti = argOfPbBB.uses.singleUse!.instruction as? DestructureTupleInst else {
-        logADCS(
-          prefix: prefixFail,
-          msg: "tuple argument of pullback " + pb.name.string + " basic block "
-            + pbBB.shortDescription + " single use is not a destructure_tuple_inst")
-        logADCS(msg: "  use: " + argOfPbBB.uses.singleUse!.description)
-        logADCS(msg: "  instruction: " + argOfPbBB.uses.singleUse!.instruction.description)
-        logADCS(msg: "  parent block begin")
-        logADCS(msg: "  " + argOfPbBB.uses.singleUse!.instruction.parentBlock.description)
-        logADCS(msg: "  parent block end")
+    case .DestructureTuple(let results):
+      if !checkIfCanRunForPayloadValues(results: results, prefixFail: prefixFail, pb: pb, pbBB: pbBB) {
         return false
       }
-      // TODO: do we need to check that results is not empty?
-      if dti.operands[0].value.type.tupleElements.count != 0
-        && dti.results[0].type.isBranchTracingEnum(vjp: vjp) && dti.results[0].uses.count > 1
-      {
-        logADCS(
-          prefix: prefixFail,
-          msg: "predecessor element of the tuple being argument of pullback " + pb.name.string
-            + " basic block " + pbBB.shortDescription + " has more than 1 use")
-        logADCS(msg: "  dti: \(dti)")
-        logADCS(msg: "  dti.results[0]: \(dti.results[0])")
-        logADCS(msg: "  uses begin count = \(dti.results[0].uses.count)")
-        for use in dti.results[0].uses {
-          logADCS(msg: "    use.instruction: \(use.instruction)")
-        }
-        logADCS(msg: "  uses end count = \(dti.results[0].uses.count)")
+    case .TupleExtract(let results):
+      if !checkIfCanRunForPayloadValues(results: results, prefixFail: prefixFail, pb: pb, pbBB: pbBB) {
         return false
       }
-      for result in dti.results {
-        for use in result.uses {
-          switch use.instruction {
-          case _ as ApplyInst:
-            ()
-          case _ as DestroyValueInst:
-            ()
-          case let uedi as UncheckedEnumDataInst:
-            if uedi.uses.count > 1 {
-              logADCS(
-                prefix: prefixFail,
-                msg: "unchecked_enum_data instr has \(uedi.uses.count) uses, but no more than 1 is allowed")
-              logADCS(msg: "  uedi: \(uedi)")
-              logADCS(msg: "  uedi uses begin")
-              for uediUse in uedi.uses {
-                logADCS(msg: "  uediUse.instruction: \(uediUse.instruction)")
-              }
-              logADCS(msg: "  uedi uses end")
-              return false
-            }
-            if uedi.uses.singleUse != nil {
-              if let bri = uedi.uses.singleUse!.instruction as? BranchInst {
-                // All OK
-              } else {
-                logADCS(
-                  prefix: prefixFail,
-                  msg: "unchecked_enum_data instr has unexpected single use")
-                logADCS(msg: "  uedi: \(uedi)")
-                logADCS(msg: "  uedi use: \(uedi.uses.singleUse!.instruction)")
-                for (idx, uediUseResult) in uedi.uses.singleUse!.instruction.results.enumerated() {
-                  logADCS(msg: "  uedi use result \(idx) uses begin")
-                  for useOfResult in uediUseResult.uses {
-                    logADCS(msg: "    uedi use use: \(useOfResult.instruction)")
-                  }
-                  logADCS(msg: "  uedi use result \(idx) uses end")
-                }
-                return false
-              }
-            }
-          case let cfi as ConvertFunctionInst:
-            if cfi.uses.count != 2 {
-              logADCS(
-                prefix: prefixFail,
-                msg: "expected exactly 2 uses of convert_function use of payload tuple element, found \(cfi.uses.count)")
-              for (idx, cfiUse) in cfi.uses.enumerated() {
-                logADCS(msg: "use \(idx): \(cfiUse)")
-              }
-              return false
-            }
-            var bbiUse = Operand?(nil)
-            var dviUse = Operand?(nil)
-            for cfiUse in cfi.uses {
-              switch cfiUse.instruction {
-                case let bbi as BeginBorrowInst:
-                  if bbiUse != nil {
-                    logADCS(
-                      prefix: prefixFail,
-                      msg: "multiple begin_borrow uses of convert_function result found, but exactly 1 expected")
-                    return false
-                  }
-                  bbiUse = cfiUse
-                case let dvi as DestroyValueInst:
-                  if dviUse != nil {
-                    logADCS(
-                      prefix: prefixFail,
-                      msg: "multiple destroy_value uses of convert_function result found, but exactly 1 expected")
-                    return false
-                  }
-                  dviUse = cfiUse
-                default:
-                  logADCS(
-                    prefix: prefixFail,
-                    msg: "unexpected use of convert_function result found: \(cfiUse)")
-                  return false
-              }
-            }
-            assert(dviUse != nil)
-            assert(bbiUse != nil)
-
-          case let bbi as BeginBorrowInst:
-            if bbi.uses.count != 2 {
-              logADCS(
-                prefix: prefixFail,
-                msg: "expected exactly 2 uses of begin_borrow use of payload tuple element, found \(bbi.uses.count)")
-              for (idx, bbiUse) in bbi.uses.enumerated() {
-                logADCS(msg: "use \(idx): \(bbiUse)")
-              }
-              return false
-            }
-            var aiUse = Operand?(nil)
-            var ebUse = Operand?(nil)
-            for bbiUse in bbi.uses {
-              switch bbiUse.instruction {
-                case let eb as EndBorrowInst:
-                  if ebUse != nil {
-                    logADCS(
-                      prefix: prefixFail,
-                      msg: "multiple end_borrow uses of begin_borrow result found, but exactly 1 expected")
-                    return false
-                  }
-                  ebUse = bbiUse
-                case let ai as ApplyInst:
-                  if aiUse != nil {
-                    logADCS(
-                      prefix: prefixFail,
-                      msg: "multiple apply uses of begin_borrow result found, but exactly 1 expected")
-                    return false
-                  }
-                  aiUse = bbiUse
-                default:
-                  logADCS(
-                    prefix: prefixFail,
-                    msg: "unexpected use of begin_borrow result found: \(bbiUse)")
-                  return false
-              }
-            }
-            assert(ebUse != nil)
-            assert(aiUse != nil)
-
-          case _ as SwitchEnumInst:
-            ()
-          default:
-            logADCS(
-              prefix: prefixFail,
-              msg: "unexpected use of an element of the tuple being argument of pullback "
-                + pb.name.string + " basic block " + pbBB.shortDescription)
-            logADCS(msg: "  dti: \(dti)")
-            logADCS(msg: "  result: \(result)")
-            logADCS(msg: "  use.instruction: \(use.instruction)")
-            return false
-          }
-        }
-      }
     }
+  }
+
+  var foundBranchTracingEnumParam = false
+  for paramInfo in pb.convention.parameters {
+    if paramInfo.type.rawType.bridged.type == bteArgOfPb.type.canonicalType.rawType.bridged.type {
+      foundBranchTracingEnumParam = true
+      break
+    }
+  }
+
+  if !foundBranchTracingEnumParam {
+    logADCS(
+      prefix: prefixFail,
+      msg: "cannot find pullback param matching branch tracing enum type \(bteArgOfPb.type)")
+    return false
   }
 
   return true
@@ -1000,13 +1052,13 @@ private func rewriteApplyInstructionCFG(
     guard let ei = inst as? EnumInst else {
       continue
     }
-    guard let newEnumType = enumDict[ei.results[0].type.bridged] else {
+    guard let newEnumType = SILBridging_enumDictGetByKey(enumDict, ei.results[0].type.bridged).typeOrNil else {
       continue
     }
 
     let builder = Builder(before: ei, context)
     let newEI = builder.createEnum(
-      caseIndex: ei.caseIndex, payload: ei.payload, enumType: newEnumType.type)
+      caseIndex: ei.caseIndex, payload: ei.payload, enumType: newEnumType)
     ei.replace(with: newEI, context)
   }
 
@@ -1014,7 +1066,7 @@ private func rewriteApplyInstructionCFG(
     guard let arg = getEnumArgOfVJPBB(bb) else {
       continue
     }
-    if enumDict[arg.type.bridged] == nil {
+    if SILBridging_enumDictGetByKey(enumDict, arg.type.bridged).typeOrNil == nil {
       continue
     }
     bb.bridged.recreateEnumBlockArgument(arg.bridged)
@@ -1755,7 +1807,7 @@ private func markConvertedAndReabstractedClosuresAsUsed(
 
 private func rewriteUsesOfPayloadItem(
   use: Operand, resultIdx: Int, closureInfoArray: [ClosureInfoCFG],
-  newDti: DestructureTupleInst, context: FunctionPassContext
+  result: Value, useTei: Bool, context: FunctionPassContext
 ) {
   switch use.instruction {
   case let cfi as ConvertFunctionInst:
@@ -1775,6 +1827,7 @@ private func rewriteUsesOfPayloadItem(
       assert(cfi.uses.count == 2)
       var bbiUse = Operand?(nil)
       var dviUse = Operand?(nil)
+      var sriUse = Operand?(nil)
       for cfiUse in cfi.uses {
         switch cfiUse.instruction {
           case let bbi as BeginBorrowInst:
@@ -1783,18 +1836,25 @@ private func rewriteUsesOfPayloadItem(
           case let dvi as DestroyValueInst:
             assert(dviUse == nil)
             dviUse = cfiUse
+          case let sri as DestroyValueInst:
+            assert(sriUse == nil)
+            sriUse = cfiUse
           default:
             assert(false)
         }
       }
-      assert(dviUse != nil)
+      assert((dviUse != nil) != (sriUse != nil))
       assert(bbiUse != nil)
-      dviUse!.instruction.parentBlock.eraseInstruction(dviUse!.instruction)
-      rewriteUsesOfPayloadItem(use: bbiUse!, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti, context: context)
+      if dviUse != nil {
+        dviUse!.instruction.parentBlock.eraseInstruction(dviUse!.instruction)
+      } else {
+        sriUse!.instruction.parentBlock.eraseInstruction(sriUse!.instruction)
+      }
+      rewriteUsesOfPayloadItem(use: bbiUse!, resultIdx: resultIdx, closureInfoArray: closureInfoArray, result: result, useTei: useTei, context: context)
       cfi.parentBlock.eraseInstruction(cfi)
     } else {
       let newCFI = builder.createConvertFunction(
-        originalFunction: newDti.results[resultIdx],
+        originalFunction: result,
         resultType: cfi.type,
         withoutActuallyEscaping: cfi.withoutActuallyEscaping)
       cfi.replace(with: newCFI, context)
@@ -1832,11 +1892,11 @@ private func rewriteUsesOfPayloadItem(
       assert(ebUse != nil)
       assert(aiUse != nil)
       ebUse!.instruction.parentBlock.eraseInstruction(ebUse!.instruction)
-      rewriteUsesOfPayloadItem(use: aiUse!, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti, context: context)
+      rewriteUsesOfPayloadItem(use: aiUse!, resultIdx: resultIdx, closureInfoArray: closureInfoArray, result: result, useTei: useTei, context: context)
       bbi.parentBlock.eraseInstruction(bbi)
     } else {
       let newBBI = builder.createBeginBorrow(
-        of: newDti.results[resultIdx],
+        of: result,
         isLexical: bbi.isLexical,
         hasPointerEscape: bbi.hasPointerEscape,
         isFromVarDecl: bbi.isFromVarDecl)
@@ -1857,15 +1917,28 @@ private func rewriteUsesOfPayloadItem(
       }
     }
     if closureInfoOpt != nil {
-      let dtiOfCapturedArgsTuple = builder.createDestructureTuple(
-        tuple: newDti.results[resultIdx])
+      var teiArray = [TupleExtractInst]()
+      var dtiOfCapturedArgsTuple = DestructureTupleInst?(nil)
+      if useTei {
+        for (tupleIdx, tupleElem) in result.type.tupleElements.enumerated() {
+          teiArray.append(builder.createTupleExtract(tuple: result, elementIndex: tupleIdx))
+        }
+      } else {
+        dtiOfCapturedArgsTuple = builder.createDestructureTuple(tuple: result)
+      }
       if closureInfoOpt!.subsetThunk == nil {
         var newArgs = [Value]()
         for op in ai.argumentOperands {
           newArgs.append(op.value)
         }
-        for res in dtiOfCapturedArgsTuple.results {
-          newArgs.append(res)
+        if useTei {
+          for res in teiArray {
+            newArgs.append(res)
+          }
+        } else {
+          for res in dtiOfCapturedArgsTuple!.results {
+            newArgs.append(res)
+          }
         }
         let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
         let newFri = builder.createFunctionRef(vjpFn)
@@ -1875,7 +1948,15 @@ private func rewriteUsesOfPayloadItem(
 
         // MYTODO: maybe we can set insertion point earlier
         let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
-        for res in dtiOfCapturedArgsTuple.results {
+        var resArray = [Value]()
+        if useTei {
+          resArray = teiArray
+        } else {
+          for dtiRes in dtiOfCapturedArgsTuple!.results {
+            resArray.append(dtiRes)
+          }
+        }
+        for res in resArray {
           if res.type.isTrivial(in: res.parentFunction) {
             continue
           }
@@ -1887,7 +1968,11 @@ private func rewriteUsesOfPayloadItem(
             }
           }
           if needDestroy {
-            newBuilder.createDestroyValue(operand: res)
+            if ai.parentFunction.hasOwnership {
+              newBuilder.createDestroyValue(operand: res)
+            } else {
+              newBuilder.createReleaseValue(operand: res)
+            }
           }
         }
       } else {
@@ -1895,7 +1980,15 @@ private func rewriteUsesOfPayloadItem(
         let maybePai = closureInfoOpt!.closure as? PartialApplyInst
         if maybePai != nil {
           var newArgs = [Value]()
-          for res in dtiOfCapturedArgsTuple.results {
+          var resArray = [Value]()
+          if useTei {
+            resArray = teiArray
+          } else {
+            for dtiRes in dtiOfCapturedArgsTuple!.results {
+              resArray.append(dtiRes)
+            }
+          }
+          for res in resArray {
             newArgs.append(res)
           }
           let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
@@ -1909,7 +2002,7 @@ private func rewriteUsesOfPayloadItem(
 
           // MYTODO: maybe we can set insertion point earlier
           let newBuilder = Builder(before: newPai.parentBlock.terminator, context)
-          for res in dtiOfCapturedArgsTuple.results {
+          for res in resArray {
             if res.type.isTrivial(in: res.parentFunction) {
               continue
             }
@@ -1921,7 +2014,11 @@ private func rewriteUsesOfPayloadItem(
               }
             }
             if needDestroy {
-              newBuilder.createDestroyValue(operand: res)
+              if ai.parentFunction.hasOwnership {
+                newBuilder.createDestroyValue(operand: res)
+              } else {
+                newBuilder.createReleaseValue(operand: res)
+              }
             }
           }
         } else {
@@ -1948,7 +2045,11 @@ private func rewriteUsesOfPayloadItem(
         let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
         assert(newClosure!.uses.singleUse != nil)
         if !newClosure!.type.isTrivial(in: newAi.parentFunction) && !newClosure!.uses.singleUse!.endsLifetime {
-          newBuilder.createDestroyValue(operand: newClosure!)
+          if ai.parentFunction.hasOwnership {
+            newBuilder.createDestroyValue(operand: newClosure!)
+          } else {
+            newBuilder.createReleaseValue(operand: newClosure!)
+          }
         }
       }
     } else {
@@ -1957,7 +2058,7 @@ private func rewriteUsesOfPayloadItem(
         newArgs.append(op.value)
       }
       let newAi = builder.createApply(
-        function: newDti.results[resultIdx], ai.substitutionMap, arguments: newArgs)
+        function: result, ai.substitutionMap, arguments: newArgs)
       ai.replace(with: newAi, context)
     }
 
@@ -1970,15 +2071,37 @@ private func rewriteUsesOfPayloadItem(
     }
     if needDestroyValue {
       let builder = Builder(before: dvi, context)
-      builder.createDestroyValue(operand: newDti.results[resultIdx])
+      if dvi.parentFunction.hasOwnership {
+        builder.createDestroyValue(operand: result)
+      } else {
+        builder.createReleaseValue(operand: result)
+      }
     }
     dvi.parentBlock.eraseInstruction(dvi)
+
+  case let sri as StrongReleaseInst:
+    var needDestroyValue = true
+    for closureInfo in closureInfoArray {
+      if closureInfo.idxInEnumPayload == resultIdx {
+        needDestroyValue = false
+      }
+    }
+    if needDestroyValue {
+      let builder = Builder(before: sri, context)
+      builder.createStrongRelease(operand: result)
+    }
+    sri.parentBlock.eraseInstruction(sri)
+
+  case let tei as TupleExtractInst:
+    let builder = Builder(before: tei, context)
+    builder.createTupleExtract(tuple: tei.tuple, elementIndex: tei.fieldIndex)
+    tei.parentBlock.eraseInstruction(tei)
 
   case let uedi as UncheckedEnumDataInst:
     let builder = Builder(before: uedi, context)
     let newUedi = builder.createUncheckedEnumData(
-      enum: newDti.results[resultIdx], caseIndex: uedi.caseIndex,
-      resultType: newDti.results[resultIdx].type.bridged.getEnumCasePayload(
+      enum: result, caseIndex: uedi.caseIndex,
+      resultType: result.type.bridged.getEnumCasePayload(
         uedi.caseIndex, uedi.parentFunction.bridged
       ).type)
     uedi.replace(with: newUedi, context)
@@ -1986,7 +2109,7 @@ private func rewriteUsesOfPayloadItem(
   case let sei as SwitchEnumInst:
     let builder = Builder(before: sei, context)
     let newSEI = builder.createSwitchEnum(
-      enum: newDti.results[resultIdx], cases: getEnumCasesForSwitchEnumInst(sei))
+      enum: result, cases: getEnumCasesForSwitchEnumInst(sei))
     newSEI.parentBlock.eraseInstruction(sei)
 
   default:
@@ -2099,7 +2222,7 @@ extension SpecializationCloner {
         let enumType = uedi!.`enum`.type
         let caseIdx = uedi!.caseIndex
         for (enumInst, payload) in enumToPayload {
-          if enumDict[enumInst.type.bridged] == enumType.bridged && enumInst.caseIndex == caseIdx {
+          if SILBridging_enumDictGetByKey(enumDict, enumInst.type.bridged) == enumType.bridged && enumInst.caseIndex == caseIdx {
             tiInVjp = payload
             break
           }
@@ -2110,7 +2233,7 @@ extension SpecializationCloner {
         let enumType = sei!.enumOp.type
         let caseIdx = sei!.getUniqueCase(forSuccessor: bb)!
         for (enumInst, payload) in enumToPayload {
-          if enumDict[enumInst.type.bridged] == enumType.bridged && enumInst.caseIndex == caseIdx {
+          if SILBridging_enumDictGetByKey(enumDict, enumInst.type.bridged) == enumType.bridged && enumInst.caseIndex == caseIdx {
             tiInVjp = payload
             break
           }
@@ -2142,23 +2265,40 @@ extension SpecializationCloner {
       logADCS(msg: "recreateTupleBlockArgument: \(bb.shortDescription)")
       let newArg = bb.bridged.recreateTupleBlockArgument(arg.bridged).argument
 
-      assert(newArg.uses.count <= 1)
-      if newArg.uses.singleUse == nil {
+      if newArg.uses.count == 0 {
         continue
       }
-      let oldDti = newArg.uses.singleUse!.instruction as! DestructureTupleInst
-      let builderBeforeOldDti = Builder(before: oldDti, self.context)
-      let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
 
-      for (resultIdx, result) in oldDti.results.enumerated() {
-        for use in result.uses {
-          rewriteUsesOfPayloadItem(
-            use: use, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti,
-            context: self.context)
+      if newArg.uses.count == 1 && newArg.uses.singleUse!.instruction as? DestructureTupleInst != nil {
+        let oldDti = newArg.uses.singleUse!.instruction as! DestructureTupleInst
+        let builderBeforeOldDti = Builder(before: oldDti, self.context)
+        let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
+
+        for (resultIdx, result) in oldDti.results.enumerated() {
+          for use in result.uses {
+            rewriteUsesOfPayloadItem(
+              use: use, resultIdx: resultIdx, closureInfoArray: closureInfoArray, result: newDti.results[resultIdx],
+              useTei: false, context: self.context)
+          }
         }
+
+        oldDti.parentBlock.eraseInstruction(oldDti)
+        continue
       }
 
-      oldDti.parentBlock.eraseInstruction(oldDti)
+      for newArgUse in newArg.uses {
+        let oldTei = newArgUse.instruction as! TupleExtractInst
+        let builderBeforeOldTei = Builder(before: oldTei, self.context)
+        let newTei = builderBeforeOldTei.createTupleExtract(tuple: oldTei.tuple, elementIndex: oldTei.fieldIndex)
+
+        for use in oldTei.results[0].uses {
+          rewriteUsesOfPayloadItem(
+            use: use, resultIdx: oldTei.fieldIndex, closureInfoArray: closureInfoArray, result: newTei.results[0],
+            useTei: true, context: self.context)
+        }
+
+        oldTei.parentBlock.eraseInstruction(oldTei)
+      }
     }
   }
 
@@ -2177,8 +2317,8 @@ extension SpecializationCloner {
       if clonedEntryBlockArgType == enumType {
         // This should always hold since we have at least 1 closure (otherwise, we wouldn't go here).
         // It causes re-write of the corresponding branch tracing enum, and the top enum type will be re-written transitively.
-        assert(enumDict[enumType.bridged] != nil)
-        clonedEntryBlockArgType = enumDict[enumType.bridged]!.type
+        assert(SILBridging_enumDictGetByKey(enumDict, enumType.bridged).typeOrNil != nil)
+        clonedEntryBlockArgType = SILBridging_enumDictGetByKey(enumDict, enumType.bridged).typeOrNil!
       }
       let clonedEntryBlockArg = clonedEntryBlock.addFunctionArgument(
         type: clonedEntryBlockArgType, self.context)
@@ -2579,17 +2719,20 @@ private func getSpecializedParametersCFG(
   let applySiteCallee = pullbackClosureInfo.pullbackFn
   var specializedParamInfoList: [ParameterInfo] = []
   var foundBranchTracingEnumParam = false
+  var enumDictCopy = enumDict
   // Start by adding all original parameters except for the closure parameters.
   for paramInfo in applySiteCallee.convention.parameters {
     // TODO: is this safe to perform such check?
-    if paramInfo.type.rawType.bridged.type != enumType.canonicalType.rawType.bridged.type {
+    if !SILType_equalEnums(paramInfo.type.bridged, enumType.canonicalType.bridged) {
       specializedParamInfoList.append(paramInfo)
       continue
     }
     assert(!foundBranchTracingEnumParam)
     foundBranchTracingEnumParam = true
     let newParamInfo = ParameterInfo(
-      type: enumDict[enumType.bridged]!.type.canonicalType, convention: paramInfo.convention,
+      type: SILBridging_enumDictGetByKey(enumDictCopy, enumType.bridged).type.canonicalType,
+      //type: SILBridging_enumDictGetByKey(enumDict, enumType.bridged]!.type.canonicalType,
+      convention: paramInfo.convention,
       options: paramInfo.options, hasLoweredAddresses: paramInfo.hasLoweredAddresses)
     specializedParamInfoList.append(newParamInfo)
   }
