@@ -102,6 +102,8 @@
 import AST
 import SIL
 import SILBridging
+import CxxStdlib
+import Cxx
 
 private let verbose = false
 
@@ -152,6 +154,12 @@ extension EnumTypeAndCase: Hashable {
 }
 
 extension Type: Hashable {
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(1)
+  }
+}
+
+extension BridgedType: Hashable {
   public func hash(into hasher: inout Hasher) {
     hasher.combine(1)
   }
@@ -670,8 +678,8 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
   } while remainingSpecializationRounds > 0
 
   if !isSingleBB && canRunMultiBB && !isMultiBBWithoutBranchTracingEnumPullbackArg {
-    var enumDict: EnumDict = [:]
     var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
+    var enumDict = EnumDict()
     defer {
       adcsHelper.clearEnumDict()
     }
@@ -926,174 +934,24 @@ private func getOrCreateSpecializedFunctionCFG(
   }
 
   let closureInfos = pullbackClosureInfo.closureInfosCFG
-  var enumTypesQueue = [Type]()
   let enumTypeOfEntryBBArg = getEnumArgOfEntryPbBB(pb.entryBlock, vjp: vjp)!.type
-  var exitBlock = BasicBlock?(nil)
-  for bb in pullbackClosureInfo.pullbackFn.blocks {
-    if bb.isReachableExitBlock {
-      if let ri = bb.terminator as? ReturnInst {
-        assert(exitBlock == nil)
-        exitBlock = bb
-      }
-    }
+
+  var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
+  defer {
+    adcsHelper.clearClosuresBuffer()
   }
-  assert(exitBlock != nil)
-
-  var bbVisited = [BasicBlock: Bool]()
-  var bbQueue = [BasicBlock]()
-
-  if pb.blocks.singleElement != nil {
-    var btesBefore = [Type:[Type]]()
-    var btesBeforeForBB = [BasicBlock:[Type]]()
-    var btes = [Type]()
-    for inst in vjp.instructions {
-      guard let ei = inst as? EnumInst else {
-        continue
-      }
-      if !ei.type.isBranchTracingEnum(vjp: vjp) {
-        continue
-      }
-      if !btes.contains(ei.type) {
-        btes.append(ei.type)
-        btesBefore[ei.type] = []
-      }
-    }
-    for bb in vjp.blocks {
-      btesBeforeForBB[bb] = [Type]()
-    }
-
-    while bbVisited.count != vjp.blocks.count {
-      for bb in vjp.blocks {
-        if bbVisited[bb] == true {
-          continue
-        }
-        var allPredsVisited = true
-        var btesBeforeCurrent = [Type]()
-        for predBB in bb.predecessors {
-          if bbVisited[predBB] != true {
-            allPredsVisited = false
-            break
-          }
-          for bte in btesBeforeForBB[predBB]! {
-            if !btesBeforeCurrent.contains(bte) {
-              btesBeforeCurrent.append(bte)
-            }
-          }
-        }
-        if !allPredsVisited {
-          continue
-        }
-        for inst in bb.instructions {
-          guard let ei = inst as? EnumInst else {
-            continue
-          }
-          if !ei.type.isBranchTracingEnum(vjp: vjp) {
-            continue
-          }
-          for bte in btesBeforeCurrent {
-            if !btesBefore[ei.type]!.contains(bte) {
-              btesBefore[ei.type]!.append(bte)
-            }
-          }
-          if !btesBeforeCurrent.contains(ei.type) {
-            btesBeforeCurrent.append(ei.type)
-          }
-        }
-        bbQueue.append(bb)
-        bbVisited[bb] = true
-        btesBeforeForBB[bb] = btesBeforeCurrent
-      }
-    }
-
-    while enumTypesQueue.count != btes.count {
-      for bte in btes {
-        if btesBefore[bte] == nil {
-          continue
-        }
-        if btesBefore[bte]!.count != 0 {
-          continue
-        }
-        for bteInner in btes {
-          if btesBefore[bteInner] == nil {
-            continue
-          }
-          guard let idx = btesBefore[bteInner]!.firstIndex(of: bte) else {
-            continue
-          }
-          btesBefore[bteInner]!.remove(at: idx)
-        }
-        enumTypesQueue.append(bte)
-        btesBefore[bte] = nil
-        break
-      }
-    }
-  } else {
-    while bbVisited.count != pullbackClosureInfo.pullbackFn.blocks.count {
-      for bb in pullbackClosureInfo.pullbackFn.blocks {
-        if bbVisited[bb] == true {
-          continue
-        }
-        var allSuccVisited = true
-        for succBB in bb.successors {
-          if bbVisited[succBB] != true {
-            allSuccVisited = false
-            break
-          }
-        }
-        if !allSuccVisited {
-          continue
-        }
-        var currentEnumTypeOpt = Type?(nil)
-        if bb == bb.parentFunction.entryBlock {
-          currentEnumTypeOpt = enumTypeOfEntryBBArg
-        } else {
-          let argOpt = getEnumPayloadArgOfPbBB(bb, vjp: vjp)
-          if argOpt != nil && argOpt!.uses.singleUse != nil {
-            let dti = argOpt!.uses.singleUse!.instruction as! DestructureTupleInst
-            if dti.results[0].type.isBranchTracingEnum(vjp: vjp) {
-              assert(dti.results[0].uses.count <= 1)
-              if dti.results[0].uses.singleUse != nil {
-                currentEnumTypeOpt = dti.results[0].type
-              }
-            }
-          }
-        }
-        if currentEnumTypeOpt != nil && !enumTypesQueue.contains(currentEnumTypeOpt!) {
-          enumTypesQueue.append(currentEnumTypeOpt!)
-        }
-        bbQueue.append(bb)
-        bbVisited[bb] = true
-      }
-    }
+  for closureInfoCFG in closureInfos {
+    adcsHelper.appendToClosuresBuffer(
+      closureInfoCFG.enumTypeAndCase.enumType.bridged,
+      closureInfoCFG.enumTypeAndCase.caseIdx,
+      closureInfoCFG.closure.bridged,
+      closureInfoCFG.idxInEnumPayload)
   }
-
-  logADCS(msg: "enumTypesQueue.count = \(enumTypesQueue.count) BEGIN")
-  for (idx, enumType) in enumTypesQueue.enumerated() {
-    logADCS(msg: "\(idx): \(enumType)")
-  }
-  logADCS(msg: "enumTypesQueue.count = \(enumTypesQueue.count) END")
-
-  for enumType in enumTypesQueue {
-    var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
-    defer {
-      adcsHelper.clearClosuresBuffer()
-    }
-    for closureInfoCFG in closureInfos {
-      if enumType != closureInfoCFG.enumTypeAndCase.enumType {
-        continue
-      }
-      adcsHelper.appendToClosuresBuffer(
-        closureInfoCFG.enumTypeAndCase.enumType.bridged,
-        closureInfoCFG.enumTypeAndCase.caseIdx,
-        closureInfoCFG.closure.bridged,
-        closureInfoCFG.idxInEnumPayload)
-    }
-    enumDict[enumType] =
-      adcsHelper.rewriteBranchTracingEnum( /*enumType: */
-        enumType.bridged,
-        /*topVjp: */pullbackClosureInfo.paiOfPullback.parentFunction.bridged
-      ).type
-  }
+  enumDict =
+      adcsHelper.rewriteAllEnums(
+        /*topVjp: */pullbackClosureInfo.paiOfPullback.parentFunction.bridged,
+        /*topEnum: */enumTypeOfEntryBBArg.bridged
+      )
 
   let specializedParameters = getSpecializedParametersCFG(
     basedOn: pullbackClosureInfo, pb: pb, enumType: enumTypeOfEntryBBArg, enumDict: enumDict, context)
@@ -1109,7 +967,7 @@ private func getOrCreateSpecializedFunctionCFG(
       let closureSpecCloner = SpecializationCloner(
         emptySpecializedFunction: emptySpecializedFunction, functionPassContext)
       closureSpecCloner.cloneAndSpecializeFunctionBodyCFG(
-        using: pullbackClosureInfo, enumDict: enumDict, enumTypesQueue: enumTypesQueue)
+        using: pullbackClosureInfo, enumDict: enumDict)
     })
 
   return (specializedPb, false)
@@ -1142,13 +1000,13 @@ private func rewriteApplyInstructionCFG(
     guard let ei = inst as? EnumInst else {
       continue
     }
-    guard let newEnumType = enumDict[ei.results[0].type] else {
+    guard let newEnumType = enumDict[ei.results[0].type.bridged] else {
       continue
     }
 
     let builder = Builder(before: ei, context)
     let newEI = builder.createEnum(
-      caseIndex: ei.caseIndex, payload: ei.payload, enumType: newEnumType)
+      caseIndex: ei.caseIndex, payload: ei.payload, enumType: newEnumType.type)
     ei.replace(with: newEI, context)
   }
 
@@ -1156,7 +1014,7 @@ private func rewriteApplyInstructionCFG(
     guard let arg = getEnumArgOfVJPBB(bb) else {
       continue
     }
-    if enumDict[arg.type] == nil {
+    if enumDict[arg.type.bridged] == nil {
       continue
     }
     bb.bridged.recreateEnumBlockArgument(arg.bridged)
@@ -2155,7 +2013,7 @@ extension BasicBlock {
 
 extension SpecializationCloner {
   fileprivate func cloneAndSpecializeFunctionBodyCFG(
-    using pullbackClosureInfo: PullbackClosureInfo, enumDict: EnumDict, enumTypesQueue: [Type]
+    using pullbackClosureInfo: PullbackClosureInfo, enumDict: EnumDict
   ) {
     let closureInfos = pullbackClosureInfo.closureInfosCFG
     self.cloneEntryBlockArgsWithoutOrigClosuresCFG(
@@ -2191,7 +2049,7 @@ extension SpecializationCloner {
       }
     }
 
-    logADCS(msg: "bbQueue.count = \(enumTypesQueue.count) BEGIN")
+    logADCS(msg: "bbQueue.count = \(bbQueue.count) BEGIN")
     for (idx, bb) in bbQueue.enumerated() {
       logADCS(msg: "\(idx): \(bb.shortDescription)")
     }
@@ -2239,16 +2097,9 @@ extension SpecializationCloner {
         let uedi = possibleUEDI as? UncheckedEnumDataInst
         assert(uedi != nil)
         let enumType = uedi!.`enum`.type
-        var enumTypeNotSpec = Optional<Type>(nil)
-        for (from, to) in enumDict {
-          if to == enumType {
-            enumTypeNotSpec = from
-          }
-        }
-        assert(enumTypeNotSpec != nil)
         let caseIdx = uedi!.caseIndex
         for (enumInst, payload) in enumToPayload {
-          if enumInst.type == enumTypeNotSpec! && enumInst.caseIndex == caseIdx {
+          if enumDict[enumInst.type.bridged] == enumType.bridged && enumInst.caseIndex == caseIdx {
             tiInVjp = payload
             break
           }
@@ -2257,16 +2108,9 @@ extension SpecializationCloner {
         let sei = predBB.terminator as? SwitchEnumInst
         assert(sei != nil)
         let enumType = sei!.enumOp.type
-        var enumTypeNotSpec = Optional<Type>(nil)
-        for (from, to) in enumDict {
-          if to == enumType {
-            enumTypeNotSpec = from
-          }
-        }
-        assert(enumTypeNotSpec != nil)
         let caseIdx = sei!.getUniqueCase(forSuccessor: bb)!
         for (enumInst, payload) in enumToPayload {
-          if enumInst.type == enumTypeNotSpec! && enumInst.caseIndex == caseIdx {
+          if enumDict[enumInst.type.bridged] == enumType.bridged && enumInst.caseIndex == caseIdx {
             tiInVjp = payload
             break
           }
@@ -2333,8 +2177,8 @@ extension SpecializationCloner {
       if clonedEntryBlockArgType == enumType {
         // This should always hold since we have at least 1 closure (otherwise, we wouldn't go here).
         // It causes re-write of the corresponding branch tracing enum, and the top enum type will be re-written transitively.
-        assert(enumDict[enumType] != nil)
-        clonedEntryBlockArgType = enumDict[enumType]!
+        assert(enumDict[enumType.bridged] != nil)
+        clonedEntryBlockArgType = enumDict[enumType.bridged]!.type
       }
       let clonedEntryBlockArg = clonedEntryBlock.addFunctionArgument(
         type: clonedEntryBlockArgType, self.context)
@@ -2726,7 +2570,7 @@ extension Builder {
   }
 }
 
-typealias EnumDict = [Type: Type]
+typealias EnumDict = BranchTracingEnumDict
 
 private func getSpecializedParametersCFG(
   basedOn pullbackClosureInfo: PullbackClosureInfo, pb: Function, enumType: Type, enumDict: EnumDict,
@@ -2745,7 +2589,7 @@ private func getSpecializedParametersCFG(
     assert(!foundBranchTracingEnumParam)
     foundBranchTracingEnumParam = true
     let newParamInfo = ParameterInfo(
-      type: enumDict[enumType]!.canonicalType, convention: paramInfo.convention,
+      type: enumDict[enumType.bridged]!.type.canonicalType, convention: paramInfo.convention,
       options: paramInfo.options, hasLoweredAddresses: paramInfo.hasLoweredAddresses)
     specializedParamInfoList.append(newParamInfo)
   }
