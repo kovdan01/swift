@@ -205,6 +205,53 @@ private func dumpVJPAndPB(vjp: Function, pb: Function) {
 
 var isMultiBBWithoutBranchTracingEnumPullbackArg: Bool = false
 
+enum PayloadValues {
+  case DestructureTuple([Value])
+//  case TupleExtract([Value])
+  case ZeroUses
+  case Unsupported
+}
+
+func getPayloadValues(payload : Argument, vjp : Function) -> PayloadValues {
+  if payload.uses.count == 0 {
+    return PayloadValues.ZeroUses
+  }
+
+  var results = [Value]()
+
+  if payload.uses.singleUse != nil && payload.uses.singleUse!.instruction as? DestructureTupleInst != nil {
+    let dti = payload.uses.singleUse!.instruction as! DestructureTupleInst
+    // TODO: do we need to check that results is not empty?
+    if dti.operands[0].value.type.tupleElements.count != 0
+      && dti.results[0].type.isBranchTracingEnum(vjp: vjp) && dti.results[0].uses.count > 1 {
+      return PayloadValues.Unsupported
+    }
+    for result in dti.results {
+      results.append(result)
+    }
+    return PayloadValues.DestructureTuple(results)
+  }
+
+//  var idxs = [Int]()
+//  for use in payload.uses {
+//    guard let tei = use.instruction as? TupleExtractInst else {
+//      return PayloadValues.Unsupported
+//    }
+//    if idxs.contains(tei.fieldIndex) {
+//      return PayloadValues.Unsupported
+//    }
+//    if tei.fieldIndex == 0 &&
+//      tei.type.isBranchTracingEnum(vjp: vjp) && tei.results[0].uses.count > 1 {
+//      return PayloadValues.Unsupported
+//    }
+//    idxs.append(tei.fieldIndex)
+//    results.append(tei)
+//  }
+//  return PayloadValues.TupleExtract(results)
+
+  return PayloadValues.Unsupported
+}
+
 private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
   assert(vjp.blocks.singleElement == nil)
 
@@ -362,48 +409,14 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     guard let argOfPbBB = getEnumPayloadArgOfPbBB(pbBB, vjp: vjp) else {
       continue
     }
-    if argOfPbBB.uses.count > 1 {
-      logADCS(
-        prefix: prefixFail,
-        msg: "tuple argument of pullback " + pb.name.string + " basic block "
-          + pbBB.shortDescription + " has more than 1 uses")
-      logADCS(msg: "  argOfPbBB: \(argOfPbBB)")
-      logADCS(msg: "  bb begin")
-      logADCS(msg: "  \(pbBB)")
-      logADCS(msg: "  bb end")
+    let payloadValues = getPayloadValues(payload: argOfPbBB, vjp: vjp)
+    switch payloadValues {
+    case .ZeroUses:
+      ()
+    case .Unsupported:
       return false
-    }
-    if argOfPbBB.uses.singleUse != nil {
-      guard let dti = argOfPbBB.uses.singleUse!.instruction as? DestructureTupleInst else {
-        logADCS(
-          prefix: prefixFail,
-          msg: "tuple argument of pullback " + pb.name.string + " basic block "
-            + pbBB.shortDescription + " single use is not a destructure_tuple_inst")
-        logADCS(msg: "  use: " + argOfPbBB.uses.singleUse!.description)
-        logADCS(msg: "  instruction: " + argOfPbBB.uses.singleUse!.instruction.description)
-        logADCS(msg: "  parent block begin")
-        logADCS(msg: "  " + argOfPbBB.uses.singleUse!.instruction.parentBlock.description)
-        logADCS(msg: "  parent block end")
-        return false
-      }
-      // TODO: do we need to check that results is not empty?
-      if dti.operands[0].value.type.tupleElements.count != 0
-        && dti.results[0].type.isBranchTracingEnum(vjp: vjp) && dti.results[0].uses.count > 1
-      {
-        logADCS(
-          prefix: prefixFail,
-          msg: "predecessor element of the tuple being argument of pullback " + pb.name.string
-            + " basic block " + pbBB.shortDescription + " has more than 1 use")
-        logADCS(msg: "  dti: \(dti)")
-        logADCS(msg: "  dti.results[0]: \(dti.results[0])")
-        logADCS(msg: "  uses begin count = \(dti.results[0].uses.count)")
-        for use in dti.results[0].uses {
-          logADCS(msg: "    use.instruction: \(use.instruction)")
-        }
-        logADCS(msg: "  uses end count = \(dti.results[0].uses.count)")
-        return false
-      }
-      for result in dti.results {
+    case .DestructureTuple(let results):
+      for result in results {
         for use in result.uses {
           switch use.instruction {
           case _ as ApplyInst:
@@ -529,7 +542,6 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
               prefix: prefixFail,
               msg: "unexpected use of an element of the tuple being argument of pullback "
                 + pb.name.string + " basic block " + pbBB.shortDescription)
-            logADCS(msg: "  dti: \(dti)")
             logADCS(msg: "  result: \(result)")
             logADCS(msg: "  use.instruction: \(use.instruction)")
             return false
