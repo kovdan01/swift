@@ -25,6 +25,8 @@
 #include "swift/SIL/SILWitnessTable.h"
 #endif
 
+#include <unordered_map>
+
 SWIFT_BEGIN_NULLABILITY_ANNOTATIONS
 
 struct BridgedInstruction;
@@ -285,6 +287,10 @@ struct BridgedType {
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType getFunctionTypeWithNoEscape(bool withNoEscape) const;
   BRIDGED_INLINE BridgedArgumentConvention getCalleeConvention() const;
 };
+
+inline bool operator==(const BridgedType &lhs, const BridgedType &rhs) {
+  return lhs.opaqueValue == rhs.opaqueValue;
+}
 
 // SIL Bridging
 
@@ -1155,6 +1161,15 @@ struct OptionalBridgedDefaultWitnessTable {
   const swift::SILDefaultWitnessTable * _Nullable table;
 };
 
+struct BridgedTypeHasher {
+  unsigned operator()(const BridgedType &value) const {
+    return llvm::DenseMapInfo<void *>::getHashValue(value.opaqueValue);
+  }
+};
+
+using BranchTracingEnumDict =
+    std::unordered_map<BridgedType, BridgedType, BridgedTypeHasher>;
+
 struct BridgedAutoDiffClosureSpecializationHelper {
   SWIFT_IMPORT_UNSAFE void appendToClosuresBuffer(BridgedType enumType,
                                                   SwiftInt caseIdx,
@@ -1168,6 +1183,9 @@ struct BridgedAutoDiffClosureSpecializationHelper {
   SWIFT_IMPORT_UNSAFE void clearEnumDict();
   SWIFT_IMPORT_UNSAFE BridgedType
   rewriteBranchTracingEnum(BridgedType enumType, BridgedFunction topVjp) const;
+
+  SWIFT_IMPORT_UNSAFE BranchTracingEnumDict
+  rewriteAllEnums(BridgedFunction topVjp, BridgedType topEnum) const;
 };
 
 struct BridgedBuilder{
