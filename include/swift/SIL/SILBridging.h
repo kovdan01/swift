@@ -1162,6 +1162,9 @@ struct BridgedTypeHasher {
 using BranchTracingEnumDict =
     std::unordered_map<BridgedType, BridgedType, BridgedTypeHasher>;
 
+BridgedType SILBridging_enumDictGetByKey(const BranchTracingEnumDict &dict,
+                                         BridgedType key);
+
 struct BridgedAutoDiffClosureSpecializationHelper {
   SWIFT_IMPORT_UNSAFE void appendToClosuresBuffer(BridgedType enumType,
                                                   SwiftInt caseIdx,
@@ -1179,11 +1182,6 @@ struct BridgedAutoDiffClosureSpecializationHelper {
   SWIFT_IMPORT_UNSAFE BranchTracingEnumDict
   rewriteAllEnums(BridgedFunction topVjp, BridgedType topEnum) const;
 };
-
-void SILBridging_printEnumDict(const BranchTracingEnumDict &enumDict);
-
-bool SILBridging_branchTracingEnumHasGenericSignature(BridgedFunction topVjp,
-                                                      BridgedType enumType);
 
 struct BridgedBuilder{
 

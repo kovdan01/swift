@@ -387,7 +387,18 @@ func checkIfCanRunForPayloadValues(results : [Value], prefixFail: String, pb: Fu
   }
   return true
 }
-
+private extension Type {
+  func isRemovableMetatype(in function: Function) -> Bool {
+    if isMetatype {
+      if representationOfMetatype == .thick {
+        let instanceTy = loweredInstanceTypeOfMetatype(in: function)
+        // For structs and enums we know the metatype statically.
+        return instanceTy.isStruct || instanceTy.isEnum
+      }
+    }
+    return false
+  }
+}
 private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
   assert(vjp.blocks.singleElement == nil)
 
@@ -451,10 +462,36 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     return false
   }
 
-//  if SILBridging_branchTracingEnumHasGenericSignature(vjp.bridged, bteArgOfPb.type.bridged) {
+  logADCS(msg: "LLLLLL 00 BEGIN")
+  logADCS(msg: "\(bteArgOfPb.type.canonicalType)")
+  logADCS(msg: "LLLLLL 00 MIDDLE 00")
+  logADCS(msg: "\(vjp.forwardingSubstitutionMap)")
+  logADCS(msg: "LLLLLL 00 MIDDLE 01")
+  logADCS(msg: "\(pb.forwardingSubstitutionMap)")
+  logADCS(msg: "LLLLLL 00 MIDDLE 02")
+  logADCS(msg: "\(pb.genericSignature)")
+  logADCS(msg: "LLLLLL 00 MIDDLE 03")
+  logADCS(msg: "\(pb.loweredFunctionType)")
+  logADCS(msg: "LLLLLL 00 MIDDLE 04")
+  logADCS(msg: "\(pb.hasLoweredAddresses)")
+  logADCS(msg: "LLLLLL 00 MIDDLE 05")
+  logADCS(msg: "\(bteArgOfPb.type.canonicalType.isArchetype)")
+  logADCS(msg: "LLLLLL 00 MIDDLE 06")
+  logADCS(msg: "\(bteArgOfPb.type.canonicalType.isExistentialArchetype)")
+  logADCS(msg: "LLLLLL 00 MIDDLE 07")
+  logADCS(msg: "\(bteArgOfPb.type.canonicalType.isGenericTypeParameter)")
+  logADCS(msg: "LLLLLL 00 MIDDLE 08")
+  logADCS(msg: "\(bteArgOfPb.type.canonicalType.isMetatype)")
+  logADCS(msg: "LLLLLL 00 MIDDLE 09")
+  logADCS(msg: "\(bteArgOfPb.type.canonicalType.isExistentialMetatype)")
+  logADCS(msg: "LLLLLL 00 MIDDLE 10")
+  logADCS(msg: "\(bteArgOfPb.type.isRemovableMetatype(in: pb))")
+  logADCS(msg: "LLLLLL 00 END")
+
+//  if bteArgOfPb.type.canonicalType.hasArchetype {
 //    logADCS(
 //      prefix: prefixFail,
-//      msg: "unsupported generic signature in type decl \(bteArgOfPb.type)")
+//      msg: "has local archetype \(bteArgOfPb.type)")
 //    return false
 //  }
 
@@ -567,6 +604,32 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
         return false
       }
     }
+  }
+
+//  var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
+//  defer {
+//    adcsHelper.clearClosuresBuffer()
+//    adcsHelper.clearEnumDict()
+//  }
+//  let enumDict =
+//      adcsHelper.rewriteAllEnums(
+//        /*topVjp: */vjp.bridged,
+//        /*topEnum: */bteArgOfPb.type.bridged
+//      )
+
+  var foundBranchTracingEnumParam = false
+  for paramInfo in pb.convention.parameters {
+    if paramInfo.type.rawType.bridged.type == bteArgOfPb.type.canonicalType.rawType.bridged.type {
+      foundBranchTracingEnumParam = true
+      break
+    }
+  }
+
+  if !foundBranchTracingEnumParam {//enumDict[bteArgOfPb.type.bridged] == nil {
+    logADCS(
+      prefix: prefixFail,
+      msg: "unexpected enumDict transform \(bteArgOfPb.type)")
+    return false
   }
 
   return true
@@ -983,17 +1046,16 @@ private func getOrCreateSpecializedFunctionCFG(
         /*topEnum: */enumTypeOfEntryBBArg.bridged
       )
 
-  logADCS(msg: "JJJJJJJJ 00")
-
   let specializedParameters = getSpecializedParametersCFG(
     basedOn: pullbackClosureInfo, pb: pb, enumType: enumTypeOfEntryBBArg, enumDict: enumDict, context)
 
-  logADCS(msg: "JJJJJJJJ 01")
+  logADCS(msg: "KKKKKK 00")
+
   let specializedPb =
     context.createSpecializedFunctionDeclaration(from: pb, withName: specializedPbName,
                                                  withParams: specializedParameters,
                                                  makeThin: true, makeBare: true)
-  logADCS(msg: "JJJJJJJJ 02")
+  logADCS(msg: "KKKKKK 01")
 
   context.buildSpecializedFunction(
     specializedFunction: specializedPb,
@@ -1003,7 +1065,7 @@ private func getOrCreateSpecializedFunctionCFG(
       closureSpecCloner.cloneAndSpecializeFunctionBodyCFG(
         using: pullbackClosureInfo, enumDict: enumDict)
     })
-  logADCS(msg: "JJJJJJJJ 03")
+  logADCS(msg: "KKKKKK 02")
 
   return (specializedPb, false)
 }
@@ -1035,13 +1097,13 @@ private func rewriteApplyInstructionCFG(
     guard let ei = inst as? EnumInst else {
       continue
     }
-    guard let newEnumType = enumDict[ei.results[0].type.bridged] else {
+    guard let newEnumType = SILBridging_enumDictGetByKey(enumDict, ei.results[0].type.bridged).typeOrNil else {
       continue
     }
 
     let builder = Builder(before: ei, context)
     let newEI = builder.createEnum(
-      caseIndex: ei.caseIndex, payload: ei.payload, enumType: newEnumType.type)
+      caseIndex: ei.caseIndex, payload: ei.payload, enumType: newEnumType)
     ei.replace(with: newEI, context)
   }
 
@@ -1049,7 +1111,7 @@ private func rewriteApplyInstructionCFG(
     guard let arg = getEnumArgOfVJPBB(bb) else {
       continue
     }
-    if enumDict[arg.type.bridged] == nil {
+    if SILBridging_enumDictGetByKey(enumDict, arg.type.bridged).typeOrNil == nil {
       continue
     }
     bb.bridged.recreateEnumBlockArgument(arg.bridged)
@@ -2134,7 +2196,7 @@ extension SpecializationCloner {
         let enumType = uedi!.`enum`.type
         let caseIdx = uedi!.caseIndex
         for (enumInst, payload) in enumToPayload {
-          if enumDict[enumInst.type.bridged] == enumType.bridged && enumInst.caseIndex == caseIdx {
+          if SILBridging_enumDictGetByKey(enumDict, enumInst.type.bridged) == enumType.bridged && enumInst.caseIndex == caseIdx {
             tiInVjp = payload
             break
           }
@@ -2145,7 +2207,7 @@ extension SpecializationCloner {
         let enumType = sei!.enumOp.type
         let caseIdx = sei!.getUniqueCase(forSuccessor: bb)!
         for (enumInst, payload) in enumToPayload {
-          if enumDict[enumInst.type.bridged] == enumType.bridged && enumInst.caseIndex == caseIdx {
+          if SILBridging_enumDictGetByKey(enumDict, enumInst.type.bridged) == enumType.bridged && enumInst.caseIndex == caseIdx {
             tiInVjp = payload
             break
           }
@@ -2212,8 +2274,8 @@ extension SpecializationCloner {
       if clonedEntryBlockArgType == enumType {
         // This should always hold since we have at least 1 closure (otherwise, we wouldn't go here).
         // It causes re-write of the corresponding branch tracing enum, and the top enum type will be re-written transitively.
-        assert(enumDict[enumType.bridged] != nil)
-        clonedEntryBlockArgType = enumDict[enumType.bridged]!.type
+        assert(SILBridging_enumDictGetByKey(enumDict, enumType.bridged).typeOrNil != nil)
+        clonedEntryBlockArgType = SILBridging_enumDictGetByKey(enumDict, enumType.bridged).typeOrNil!
       }
       let clonedEntryBlockArg = clonedEntryBlock.addFunctionArgument(
         type: clonedEntryBlockArgType, self.context)
@@ -2615,41 +2677,38 @@ private func getSpecializedParametersCFG(
   var specializedParamInfoList: [ParameterInfo] = []
   var foundBranchTracingEnumParam = false
   var enumDictCopy = enumDict
-  logADCS(msg: "LLLLLLL 00 enumDict BEGIN")
-  SILBridging_printEnumDict(enumDictCopy)
-  logADCS(msg: "LLLLLLL 00 enumDict MIDDLE 00")
-  logADCS(msg: "\(enumType)")
-  logADCS(msg: "LLLLLLL 00 enumDict MIDDLE 01")
-  logADCS(msg: "\(enumDict[enumType.bridged])")
-  logADCS(msg: "LLLLLLL 00 enumDict END")
   // Start by adding all original parameters except for the closure parameters.
+    logADCS(msg: "IIIIII 00")
   for paramInfo in applySiteCallee.convention.parameters {
     // TODO: is this safe to perform such check?
-    logADCS(msg: "IIIIIII 00 BEGIN")
+    logADCS(msg: "IIIIII 01 BEGIN")
     logADCS(msg: "\(paramInfo.type)")
     logADCS(msg: "\(enumType.canonicalType)")
-    logADCS(msg: "IIIIIII 00 MIDDLE")
-    logADCS(msg: "\(paramInfo.type.rawType)")
-    logADCS(msg: "\(enumType.canonicalType.rawType)")
-    logADCS(msg: "IIIIIII 00 END")
+    logADCS(msg: "IIIIII 01 END")
     if !SILType_equalEnums(paramInfo.type.bridged, enumType.canonicalType.bridged) {
+    logADCS(msg: "IIIIII 02")
 //    if paramInfo.type.rawType.bridged.type != enumType.canonicalType.rawType.bridged.type {
-      logADCS(msg: "IIIIIII 01")
       specializedParamInfoList.append(paramInfo)
       continue
     }
-    logADCS(msg: "IIIIIII 02")
+    logADCS(msg: "IIIIII 03 BEGIN")
+    logADCS(msg: "\(enumDict[enumType.bridged])")
+    logADCS(msg: "IIIIII 03 MIDDLE")
+    logADCS(msg: "\(SILBridging_enumDictGetByKey(enumDictCopy, enumType.bridged).typeOrNil)")
+    logADCS(msg: "IIIIII 03 END")
     assert(!foundBranchTracingEnumParam)
     foundBranchTracingEnumParam = true
     let newParamInfo = ParameterInfo(
-      type: enumDict[enumType.bridged]!.type.canonicalType, convention: paramInfo.convention,
+      type: SILBridging_enumDictGetByKey(enumDictCopy, enumType.bridged).type.canonicalType,
+      //type: SILBridging_enumDictGetByKey(enumDict, enumType.bridged]!.type.canonicalType,
+      convention: paramInfo.convention,
       options: paramInfo.options, hasLoweredAddresses: paramInfo.hasLoweredAddresses)
-    logADCS(msg: "IIIIIII 03")
+    logADCS(msg: "IIIIII 04")
     specializedParamInfoList.append(newParamInfo)
   }
-  logADCS(msg: "IIIIIII 04")
+    logADCS(msg: "IIIIII 05")
   assert(foundBranchTracingEnumParam)
-  logADCS(msg: "IIIIIII 05")
+    logADCS(msg: "IIIIII 06")
   return specializedParamInfoList
 }
 
