@@ -674,6 +674,23 @@ void BridgedAutoDiffClosureSpecializationHelper::clearEnumDict() {
   enumDict.clear();
 }
 
+void SILBridging_printEnumDict(const BranchTracingEnumDict &enumDict) {
+  for (const auto &[from, to] : enumDict) {
+    llvm::errs() << from.unbridged() << ": " << to.unbridged() << "\n";
+  }
+}
+
+bool SILBridging_branchTracingEnumHasGenericSignature(BridgedFunction topVjp,
+                                                      BridgedType enumType) {
+  return !topVjp.getFunction()
+              ->getLoweredFunctionType()
+              ->getSubstGenericSignature()
+              .isNull();
+  // EnumDecl *ed = enumType.unbridged().getEnumOrBoundGenericEnum();
+  // assert(ed != nullptr);
+  // return !ed->getGenericSignature().isNull();
+}
+
 std::vector<Type> getPredTypes(Type enumType) {
   std::vector<Type> ret;
   EnumDecl *ed = enumType->getEnumOrBoundGenericEnum();
@@ -744,15 +761,21 @@ std::vector<Type> getEnumQueue(BridgedType topEnum) {
 BranchTracingEnumDict
 BridgedAutoDiffClosureSpecializationHelper::rewriteAllEnums(
     BridgedFunction topVjp, BridgedType topEnum) const {
+  llvm::errs() << "\nHHHHHHHH " << (void *)(topVjp.getFunction()) << "\n";
+  SILModule &module = topVjp.getFunction()->getModule();
+
   std::vector<Type> enumQueue = getEnumQueue(topEnum);
   BranchTracingEnumDict dict;
 
   for (const Type &t : enumQueue) {
     EnumDecl *ed = t->getEnumOrBoundGenericEnum();
     auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
-    Lowering::AbstractionPattern pattern(traceDeclType);
+    Lowering::AbstractionPattern pattern(topVjp.getFunction()
+                                             ->getLoweredFunctionType()
+                                             ->getSubstGenericSignature(),
+                                         traceDeclType);
 
-    SILType silType = topVjp.getFunction()->getModule().Types.getLoweredType(
+    SILType silType = module.Types.getLoweredType(
         pattern, traceDeclType, TypeExpansionContext::minimal());
 
     dict[BridgedType(silType)] =
@@ -859,7 +882,10 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
   file.getParentModule()->clearLookupCache();
 
   auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
-  Lowering::AbstractionPattern pattern(traceDeclType);
+  Lowering::AbstractionPattern pattern(topVjp.getFunction()
+                                           ->getLoweredFunctionType()
+                                           ->getSubstGenericSignature(),
+                                       traceDeclType);
 
   SILType newEnumType = topVjp.getFunction()->getModule().Types.getLoweredType(
       pattern, traceDeclType, TypeExpansionContext::minimal());

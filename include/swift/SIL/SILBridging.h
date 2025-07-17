@@ -229,6 +229,7 @@ BridgedYieldInfoArray SILFunctionType_getYields(BridgedCanType);
 SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedLifetimeDependenceInfoArray
 SILFunctionType_getLifetimeDependencies(BridgedCanType);
 
+BRIDGED_INLINE bool SILType_equalEnums(BridgedCanType, BridgedCanType);
 
 struct BridgedType {
   void * _Nullable opaqueValue;
@@ -1178,6 +1179,11 @@ struct BridgedAutoDiffClosureSpecializationHelper {
   SWIFT_IMPORT_UNSAFE BranchTracingEnumDict
   rewriteAllEnums(BridgedFunction topVjp, BridgedType topEnum) const;
 };
+
+void SILBridging_printEnumDict(const BranchTracingEnumDict &enumDict);
+
+bool SILBridging_branchTracingEnumHasGenericSignature(BridgedFunction topVjp,
+                                                      BridgedType enumType);
 
 struct BridgedBuilder{
 
