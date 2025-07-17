@@ -260,6 +260,8 @@ func checkIfCanRunForPayloadValues(results : [Value], prefixFail: String, pb: Fu
         ()
       case _ as DestroyValueInst:
         ()
+      case _ as StrongReleaseInst:
+        ()
       case let uedi as UncheckedEnumDataInst:
         if uedi.uses.count > 1 {
           logADCS(
@@ -304,6 +306,7 @@ func checkIfCanRunForPayloadValues(results : [Value], prefixFail: String, pb: Fu
         }
         var bbiUse = Operand?(nil)
         var dviUse = Operand?(nil)
+        var sriUse = Operand?(nil)
         for cfiUse in cfi.uses {
           switch cfiUse.instruction {
             case let bbi as BeginBorrowInst:
@@ -322,6 +325,14 @@ func checkIfCanRunForPayloadValues(results : [Value], prefixFail: String, pb: Fu
                 return false
               }
               dviUse = cfiUse
+            case let sri as StrongReleaseInst:
+              if sriUse != nil {
+                logADCS(
+                  prefix: prefixFail,
+                  msg: "multiple strong_release uses of convert_function result found, but exactly 1 expected")
+                return false
+              }
+              sriUse = cfiUse
             default:
               logADCS(
                 prefix: prefixFail,
@@ -329,7 +340,7 @@ func checkIfCanRunForPayloadValues(results : [Value], prefixFail: String, pb: Fu
               return false
           }
         }
-        assert(dviUse != nil)
+        assert((dviUse != nil) != (sriUse != nil))
         assert(bbiUse != nil)
 
       case let bbi as BeginBorrowInst:
@@ -374,6 +385,9 @@ func checkIfCanRunForPayloadValues(results : [Value], prefixFail: String, pb: Fu
 
       case _ as SwitchEnumInst:
         ()
+      case _ as TupleExtractInst:
+        ()
+
       default:
         logADCS(
           prefix: prefixFail,
@@ -1852,7 +1866,8 @@ private func markConvertedAndReabstractedClosuresAsUsed(
 
 private func rewriteUsesOfPayloadItem(
   use: Operand, resultIdx: Int, closureInfoArray: [ClosureInfoCFG],
-  newDti: DestructureTupleInst, context: FunctionPassContext
+  result: Value, context: FunctionPassContext
+  //newDti: DestructureTupleInst, context: FunctionPassContext
 ) {
   switch use.instruction {
   case let cfi as ConvertFunctionInst:
@@ -1872,6 +1887,7 @@ private func rewriteUsesOfPayloadItem(
       assert(cfi.uses.count == 2)
       var bbiUse = Operand?(nil)
       var dviUse = Operand?(nil)
+      var sriUse = Operand?(nil)
       for cfiUse in cfi.uses {
         switch cfiUse.instruction {
           case let bbi as BeginBorrowInst:
@@ -1880,18 +1896,25 @@ private func rewriteUsesOfPayloadItem(
           case let dvi as DestroyValueInst:
             assert(dviUse == nil)
             dviUse = cfiUse
+          case let sri as DestroyValueInst:
+            assert(sriUse == nil)
+            sriUse = cfiUse
           default:
             assert(false)
         }
       }
-      assert(dviUse != nil)
+      assert((dviUse != nil) != (sriUse != nil))
       assert(bbiUse != nil)
-      dviUse!.instruction.parentBlock.eraseInstruction(dviUse!.instruction)
-      rewriteUsesOfPayloadItem(use: bbiUse!, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti, context: context)
+      if dviUse != nil {
+        dviUse!.instruction.parentBlock.eraseInstruction(dviUse!.instruction)
+      } else {
+        sriUse!.instruction.parentBlock.eraseInstruction(sriUse!.instruction)
+      }
+      rewriteUsesOfPayloadItem(use: bbiUse!, resultIdx: resultIdx, closureInfoArray: closureInfoArray, result: result,/*newDti: newDti,*/ context: context)
       cfi.parentBlock.eraseInstruction(cfi)
     } else {
       let newCFI = builder.createConvertFunction(
-        originalFunction: newDti.results[resultIdx],
+        originalFunction: result,
         resultType: cfi.type,
         withoutActuallyEscaping: cfi.withoutActuallyEscaping)
       cfi.replace(with: newCFI, context)
@@ -1929,11 +1952,11 @@ private func rewriteUsesOfPayloadItem(
       assert(ebUse != nil)
       assert(aiUse != nil)
       ebUse!.instruction.parentBlock.eraseInstruction(ebUse!.instruction)
-      rewriteUsesOfPayloadItem(use: aiUse!, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti, context: context)
+      rewriteUsesOfPayloadItem(use: aiUse!, resultIdx: resultIdx, closureInfoArray: closureInfoArray, result: result,/*newDti: newDti, */context: context)
       bbi.parentBlock.eraseInstruction(bbi)
     } else {
       let newBBI = builder.createBeginBorrow(
-        of: newDti.results[resultIdx],
+        of: result,
         isLexical: bbi.isLexical,
         hasPointerEscape: bbi.hasPointerEscape,
         isFromVarDecl: bbi.isFromVarDecl)
@@ -1955,7 +1978,7 @@ private func rewriteUsesOfPayloadItem(
     }
     if closureInfoOpt != nil {
       let dtiOfCapturedArgsTuple = builder.createDestructureTuple(
-        tuple: newDti.results[resultIdx])
+        tuple: result)
       if closureInfoOpt!.subsetThunk == nil {
         var newArgs = [Value]()
         for op in ai.argumentOperands {
@@ -1984,7 +2007,11 @@ private func rewriteUsesOfPayloadItem(
             }
           }
           if needDestroy {
-            newBuilder.createDestroyValue(operand: res)
+            if ai.parentFunction.hasOwnership {
+              newBuilder.createDestroyValue(operand: res)
+            } else {
+              newBuilder.createReleaseValue(operand: res)
+            }
           }
         }
       } else {
@@ -2018,7 +2045,11 @@ private func rewriteUsesOfPayloadItem(
               }
             }
             if needDestroy {
-              newBuilder.createDestroyValue(operand: res)
+              if ai.parentFunction.hasOwnership {
+                newBuilder.createDestroyValue(operand: res)
+              } else {
+                newBuilder.createReleaseValue(operand: res)
+              }
             }
           }
         } else {
@@ -2045,7 +2076,11 @@ private func rewriteUsesOfPayloadItem(
         let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
         assert(newClosure!.uses.singleUse != nil)
         if !newClosure!.type.isTrivial(in: newAi.parentFunction) && !newClosure!.uses.singleUse!.endsLifetime {
-          newBuilder.createDestroyValue(operand: newClosure!)
+          if ai.parentFunction.hasOwnership {
+            newBuilder.createDestroyValue(operand: newClosure!)
+          } else {
+            newBuilder.createReleaseValue(operand: newClosure!)
+          }
         }
       }
     } else {
@@ -2054,7 +2089,7 @@ private func rewriteUsesOfPayloadItem(
         newArgs.append(op.value)
       }
       let newAi = builder.createApply(
-        function: newDti.results[resultIdx], ai.substitutionMap, arguments: newArgs)
+        function: result, ai.substitutionMap, arguments: newArgs)
       ai.replace(with: newAi, context)
     }
 
@@ -2067,15 +2102,37 @@ private func rewriteUsesOfPayloadItem(
     }
     if needDestroyValue {
       let builder = Builder(before: dvi, context)
-      builder.createDestroyValue(operand: newDti.results[resultIdx])
+      if dvi.parentFunction.hasOwnership {
+        builder.createDestroyValue(operand: result)
+      } else {
+        builder.createReleaseValue(operand: result)
+      }
     }
     dvi.parentBlock.eraseInstruction(dvi)
+
+  case let sri as StrongReleaseInst:
+    var needDestroyValue = true
+    for closureInfo in closureInfoArray {
+      if closureInfo.idxInEnumPayload == resultIdx {
+        needDestroyValue = false
+      }
+    }
+    if needDestroyValue {
+      let builder = Builder(before: sri, context)
+      builder.createStrongRelease(operand: result)
+    }
+    sri.parentBlock.eraseInstruction(sri)
+
+  case let tei as TupleExtractInst:
+    let builder = Builder(before: tei, context)
+    builder.createTupleExtract(tuple: tei.tuple, elementIndex: tei.fieldIndex)
+    tei.parentBlock.eraseInstruction(tei)
 
   case let uedi as UncheckedEnumDataInst:
     let builder = Builder(before: uedi, context)
     let newUedi = builder.createUncheckedEnumData(
-      enum: newDti.results[resultIdx], caseIndex: uedi.caseIndex,
-      resultType: newDti.results[resultIdx].type.bridged.getEnumCasePayload(
+      enum: result, caseIndex: uedi.caseIndex,
+      resultType: result.type.bridged.getEnumCasePayload(
         uedi.caseIndex, uedi.parentFunction.bridged
       ).type)
     uedi.replace(with: newUedi, context)
@@ -2083,7 +2140,7 @@ private func rewriteUsesOfPayloadItem(
   case let sei as SwitchEnumInst:
     let builder = Builder(before: sei, context)
     let newSEI = builder.createSwitchEnum(
-      enum: newDti.results[resultIdx], cases: getEnumCasesForSwitchEnumInst(sei))
+      enum: result, cases: getEnumCasesForSwitchEnumInst(sei))
     newSEI.parentBlock.eraseInstruction(sei)
 
   default:
@@ -2239,23 +2296,44 @@ extension SpecializationCloner {
       logADCS(msg: "recreateTupleBlockArgument: \(bb.shortDescription)")
       let newArg = bb.bridged.recreateTupleBlockArgument(arg.bridged).argument
 
-      assert(newArg.uses.count <= 1)
-      if newArg.uses.singleUse == nil {
+      if newArg.uses.count == 0 {
         continue
       }
-      let oldDti = newArg.uses.singleUse!.instruction as! DestructureTupleInst
-      let builderBeforeOldDti = Builder(before: oldDti, self.context)
-      let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
 
-      for (resultIdx, result) in oldDti.results.enumerated() {
-        for use in result.uses {
-          rewriteUsesOfPayloadItem(
-            use: use, resultIdx: resultIdx, closureInfoArray: closureInfoArray, newDti: newDti,
-            context: self.context)
+      if newArg.uses.count == 1 && newArg.uses.singleUse!.instruction as? DestructureTupleInst != nil {
+        //assert(newArg.uses.count <= 1)
+        //if newArg.uses.singleUse == nil {
+        //  continue
+        //}
+        let oldDti = newArg.uses.singleUse!.instruction as! DestructureTupleInst
+        let builderBeforeOldDti = Builder(before: oldDti, self.context)
+        let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
+
+        for (resultIdx, result) in oldDti.results.enumerated() {
+          for use in result.uses {
+            rewriteUsesOfPayloadItem(
+              use: use, resultIdx: resultIdx, closureInfoArray: closureInfoArray, result: newDti.results[resultIdx],//newDti: newDti,
+              context: self.context)
+          }
         }
+
+        oldDti.parentBlock.eraseInstruction(oldDti)
+        continue
       }
 
-      oldDti.parentBlock.eraseInstruction(oldDti)
+      for newArgUse in newArg.uses {
+        let oldTei = newArgUse.instruction as! TupleExtractInst
+        let builderBeforeOldTei = Builder(before: oldTei, self.context)
+        let newTei = builderBeforeOldTei.createTupleExtract(tuple: oldTei.tuple, elementIndex: oldTei.fieldIndex)
+
+        for use in oldTei.results[0].uses {
+          rewriteUsesOfPayloadItem(
+            use: use, resultIdx: oldTei.fieldIndex, closureInfoArray: closureInfoArray, result: newTei.results[0],//newDti: newDti,
+            context: self.context)
+        }
+
+        oldTei.parentBlock.eraseInstruction(oldTei)
+      }
     }
   }
 
