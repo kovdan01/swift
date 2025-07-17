@@ -765,19 +765,17 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
   let prefix = "getPartialApplyOfPullbackInExitVJPBB: failure reason "
   var exitBBOpt = BasicBlock?(nil)
   for block in vjp.blocks {
-    if block.isReachableExitBlock {
-      guard block.terminator as? ReturnInst != nil else {
-        logADCS(msg: "getPartialApplyOfPullbackInExitVJPBB: reachable exit block begin")
-        logADCS(msg: "\(block)")
-        logADCS(msg: "getPartialApplyOfPullbackInExitVJPBB: reachable exit block end")
-        continue
-      }
-      if exitBBOpt != nil {
-        logADCS(prefix: prefix, msg: "0")
-        return nil
-      }
-      exitBBOpt = block
+    guard block.terminator as? ReturnInst != nil else {
+      logADCS(msg: "getPartialApplyOfPullbackInExitVJPBB: reachable exit block begin")
+      logADCS(msg: "\(block)")
+      logADCS(msg: "getPartialApplyOfPullbackInExitVJPBB: reachable exit block end")
+      continue
     }
+    if exitBBOpt != nil {
+      logADCS(prefix: prefix, msg: "0")
+      return nil
+    }
+    exitBBOpt = block
   }
   if exitBBOpt == nil {
     logADCS(prefix: prefix, msg: "1")
