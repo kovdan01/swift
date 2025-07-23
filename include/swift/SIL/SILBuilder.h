@@ -1782,10 +1782,13 @@ public:
   createUncheckedEnumData(SILLocation Loc, SILValue Operand,
                           EnumElementDecl *Element, SILType Ty,
                           ValueOwnershipKind forwardingOwnershipKind) {
+    llvm::errs() << "IIIIIII 00\n";
     ASSERT(isLoadableOrOpaque(Ty));
+    llvm::errs() << "IIIIIII 01\n";
     // Assert that this works and does not crash.
     (void)getModule().getCaseIndex(Element);
 
+    llvm::errs() << "IIIIIII 02\n";
     return insert(new (getModule()) UncheckedEnumDataInst(
         getSILDebugLocation(Loc), Operand, Element, Ty,
         forwardingOwnershipKind));

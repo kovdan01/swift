@@ -284,6 +284,10 @@ inline bool operator==(const BridgedType &lhs, const BridgedType &rhs) {
   return lhs.opaqueValue == rhs.opaqueValue;
 }
 
+void SILType_printEnumDecl(BridgedType st/*, BridgedCanType ct*/);
+
+void SILType_dumpCanType(BridgedCanType ct);
+
 // SIL Bridging
 
 struct BridgedValue {
@@ -1174,11 +1178,13 @@ struct BridgedAutoDiffClosureSpecializationHelper {
   SWIFT_IMPORT_UNSAFE void clearClosuresBufferForPb();
   SWIFT_IMPORT_UNSAFE void clearEnumDict();
   SWIFT_IMPORT_UNSAFE BridgedType
-  rewriteBranchTracingEnum(BridgedType enumType, BridgedFunction topVjp) const;
+  rewriteBranchTracingEnum(BridgedType enumType, BridgedFunction topVjp, BridgedFunction topPb) const;
 
   SWIFT_IMPORT_UNSAFE BranchTracingEnumDict
-  rewriteAllEnums(BridgedFunction topVjp, BridgedType topEnum) const;
+  rewriteAllEnums(BridgedFunction topVjp, BridgedFunction topPb, BridgedType topEnum) const;
 };
+
+BridgedType SILType_getIntoContext(BridgedType t, BridgedFunction f);
 
 struct BridgedBuilder{
 

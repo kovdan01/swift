@@ -3709,6 +3709,12 @@ TypeConverter::getTypeLowering(SILType type,
                                TypeExpansionContext forExpansion,
                                CanGenericSignature sig) {
   // The type lowering for a type parameter relies on its context.
+
+  if (!(sig || !type.getASTType()->hasTypeParameter())) {
+    llvm::errs() << "HHHHHHH 00\n";
+    type.getASTType()->dump();
+  }
+
   assert(sig || !type.getASTType()->hasTypeParameter());
 
   // We use the Raw AST type to ensure that moveonlywrapped values use the move

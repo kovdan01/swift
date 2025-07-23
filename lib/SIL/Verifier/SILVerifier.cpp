@@ -5540,6 +5540,13 @@ public:
             require(eltArgTy == bbArgTy.copyingMoveOnlyWrapper(eltArgTy),
                     "switch_enum destination bbarg must match case arg type");
           } else {
+            if (eltArgTy != bbArgTy) {
+              llvm::errs() << "KKKKKKKKK 00 BEGIN\n";
+              eltArgTy.getASTType()->dump();
+              llvm::errs() << "KKKKKKKKK 00 MIDDLE\n";
+              bbArgTy.getASTType()->dump();
+              llvm::errs() << "KKKKKKKKK 00 END\n";
+            }
             require(eltArgTy == bbArgTy,
                     "switch_enum destination bbarg must match case arg type");
           }

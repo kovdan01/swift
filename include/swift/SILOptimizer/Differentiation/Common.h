@@ -278,8 +278,18 @@ inline void createEntryArguments(SILFunction *f) {
     createFunctionArgument(f->mapTypeIntoContext(indResTy).getAddressType());
   }
   for (auto paramTy : conv.getParameterSILTypes(f->getTypeExpansionContext())) {
-    if (paramTy.hasArchetype())
+    llvm::errs() << "FFFFFFFF 00 BEGIN\n";
+    paramTy.getASTType()->dump();
+    llvm::errs() << "FFFFFFFF 00 MIDDLE 00\n";
+    if (paramTy.hasArchetype()) {
       paramTy = paramTy.mapTypeOutOfContext();
+      llvm::errs() << "FFFFFFFF 00 MIDDLE 01\n";
+      paramTy.getASTType()->dump();
+      llvm::errs() << "FFFFFFFF 00 MIDDLE 02\n";
+    }
+    llvm::errs() << "FFFFFFFF 00 MIDDLE 03\n";
+    f->mapTypeIntoContext(paramTy).getASTType()->dump();
+    llvm::errs() << "FFFFFFFF 00 END\n";
     createFunctionArgument(f->mapTypeIntoContext(paramTy));
   }
 }
