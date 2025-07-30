@@ -178,11 +178,7 @@ extension Type {
       return false
     }
     assert(vjp.isAutodiffVJP)
-    let res : Bool = vjp.bridged.isAutodiffBranchTracingEnumValid(self.bridged)
-    if !res {
-      logADCS(msg: "Foreign branch tracing enum encountered: vjp = \(vjp.name), enum type = \(self.description)")
-    }
-    return res
+    return vjp.bridged.isAutodiffBranchTracingEnumValid(self.bridged)
   }
 }
 
@@ -526,6 +522,11 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     }
   }
 
+  guard ensureEnumPayloadsAreTupleInst(vjp: vjp) else {
+    logADCS(prefix: prefixFail, msg: "branch tracing enum payload is not defined by a TupleInst")
+    return false
+  }
+
   for pbBB in pb.blocks {
     guard let sei = pbBB.terminator as? SwitchEnumInst else {
       continue
@@ -766,9 +767,6 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
   var exitBBOpt = BasicBlock?(nil)
   for block in vjp.blocks {
     guard block.terminator as? ReturnInst != nil else {
-      logADCS(msg: "getPartialApplyOfPullbackInExitVJPBB: reachable exit block begin")
-      logADCS(msg: "\(block)")
-      logADCS(msg: "getPartialApplyOfPullbackInExitVJPBB: reachable exit block end")
       continue
     }
     if exitBBOpt != nil {
@@ -1021,6 +1019,32 @@ private func getOrCreateSpecializedFunctionCFG(
     })
 
   return (specializedPb, false)
+}
+
+private func ensureEnumPayloadsAreTupleInst(vjp: Function) -> Bool {
+  for inst in vjp.instructions {
+    guard let ei = inst as? EnumInst else {
+      continue
+    }
+    if !ei.type.isBranchTracingEnum(vjp: vjp) {
+      continue
+    }
+    let instOpt = ei.operands[0].value.definingInstruction
+    if instOpt == nil {
+      logADCS(msg: "Branch tracing enum payload is not defined by an instruction: \(ei)")
+      logADCS(msg: "Parent BB begin")
+      logADCS(msg: "\(ei.parentBlock)")
+      logADCS(msg: "Parent BB end")
+      return false
+    }
+    let tiOpt = instOpt as? TupleInst
+    if tiOpt == nil {
+      logADCS(msg: "Branch tracing enum payload is defined by a non-tuple instruction: \(ei)")
+      logADCS(msg: "Defining instruction: \(instOpt!)")
+      return false
+    }
+  }
+  return true
 }
 
 private func findEnumsAndPayloadsInVjp(vjp: Function) -> [EnumInst:TupleInst] {
@@ -2092,8 +2116,8 @@ private func rewriteUsesOfPayloadItem(
 
   case let tei as TupleExtractInst:
     let builder = Builder(before: tei, context)
-    builder.createTupleExtract(tuple: tei.tuple, elementIndex: tei.fieldIndex)
-    tei.parentBlock.eraseInstruction(tei)
+    let newTei = builder.createTupleExtract(tuple: tei.tuple, elementIndex: tei.fieldIndex)
+    tei.replace(with: newTei, context)
 
   case let uedi as UncheckedEnumDataInst:
     let builder = Builder(before: uedi, context)
@@ -2295,7 +2319,7 @@ extension SpecializationCloner {
             useTei: true, context: self.context)
         }
 
-        oldTei.parentBlock.eraseInstruction(oldTei)
+        oldTei.replace(with: newTei, self.context)
       }
     }
   }
