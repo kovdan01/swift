@@ -868,7 +868,7 @@ private func getPullbackClosureInfoCFG(in caller: Function, _ context: FunctionP
       logADCS(msg: "AAAAAA 03 \(rootClosure)")
       if pullbackClosureInfoOpt == nil {
         pullbackClosureInfoOpt = PullbackClosureInfo(paiOfPullback: getPartialApplyOfPullbackInExitVJPBB(vjp: caller)!)
-      logADCS(msg: "AAAAAA 04 \(rootClosure)")
+        logADCS(msg: "AAAAAA 04 \(rootClosure)")
       }
       for closureInfo in closureInfoArr {
         pullbackClosureInfoOpt!.closureInfosCFG.append(closureInfo)
@@ -1134,7 +1134,9 @@ private func rewriteApplyInstructionCFG(
       }
       let idxInTuple = closureInfo.idxInEnumPayload
       assert(
-        (closureInfo.subsetThunk == nil && ti.operands[idxInTuple].value == closureInfo.closure)
+        (closureInfo.subsetThunk == nil && (ti.operands[idxInTuple].value == closureInfo.closure
+        // MYTODO
+        || (ti.operands[idxInTuple].value.type.isOptional && ti.operands[idxInTuple].value.definingInstruction!.operands[0].value == closureInfo.closure)))
           || (closureInfo.subsetThunk != nil
             && ti.operands[idxInTuple].value == closureInfo.subsetThunk!)
       )
@@ -1413,22 +1415,54 @@ private func handleNonAppliesCFG(
   }
 
   for use in closure.uses {
-    guard let ti = use.instruction as? TupleInst else {
+    var tiOpt = use.instruction as? TupleInst
+    var useIndex = use.index
+    if tiOpt == nil {
       let paiOfPbInExitVjpBB = getPartialApplyOfPullbackInExitVJPBB(
         vjp: rootClosure.parentFunction)!
       let paiOpt = rootClosure as? PartialApplyInst
       assert(paiOpt != paiOfPbInExitVjpBB)
-      logADCS(msg: "handleNonAppliesCFG: unexpected use of closure")
-      logADCS(msg: "handleNonAppliesCFG:   root closure: " + rootClosure.description)
-      logADCS(msg: "handleNonAppliesCFG:   closure: " + closure.description)
-      logADCS(msg: "handleNonAppliesCFG:   use.instruction: " + use.instruction.description)
-      logADCS(
-        msg: "handleNonAppliesCFG:   root closure use count: " + String(rootClosure.uses.count))
-      logADCS(msg: "handleNonAppliesCFG:   parent block of use begin")
-      logADCS(msg: "handleNonAppliesCFG:   " + use.instruction.parentBlock.description)
-      logADCS(msg: "handleNonAppliesCFG:   parent block of use end")
-      return []
+
+      guard let ei = use.instruction as? EnumInst else {
+        logADCS(msg: "handleNonAppliesCFG: unexpected use of closure")
+        logADCS(msg: "handleNonAppliesCFG:   root closure: " + rootClosure.description)
+        logADCS(msg: "handleNonAppliesCFG:   closure: " + closure.description)
+        logADCS(msg: "handleNonAppliesCFG:   use.instruction: " + use.instruction.description)
+        logADCS(
+          msg: "handleNonAppliesCFG:   root closure use count: " + String(rootClosure.uses.count))
+        logADCS(msg: "handleNonAppliesCFG:   parent block of use begin")
+        logADCS(msg: "handleNonAppliesCFG:   " + use.instruction.parentBlock.description)
+        logADCS(msg: "handleNonAppliesCFG:   parent block of use end")
+        return []
+      }
+
+      let isOptional = ei.type.isOptional
+      guard isOptional else {
+        // MYTODO
+        logADCS(msg: "BBBBBBB 00")
+        return []
+      }
+
+      let tiUseOfOptOpt = ei.uses.singleUse
+      if tiUseOfOptOpt == nil {
+        // MYTODO
+        logADCS(msg: "BBBBBBB 01")
+        return []
+      }
+
+      tiOpt = tiUseOfOptOpt!.instruction as? TupleInst
+      if tiOpt == nil {
+        // MYTODO
+        logADCS(msg: "BBBBBBB 02")
+        logADCS(msg: "ei: \(ei)")
+        logADCS(msg: "ti: \(tiUseOfOptOpt)")
+        logADCS(msg: "singleUse: \(ei.uses.singleUse)")
+        return []
+      }
+
+      useIndex = tiUseOfOptOpt!.index
     }
+    let ti = tiOpt!
     for tiUse in ti.uses {
       guard let ei = tiUse.instruction as? EnumInst else {
         let paiOfPbInExitVjpBB = getPartialApplyOfPullbackInExitVJPBB(
@@ -1459,7 +1493,7 @@ private func handleNonAppliesCFG(
         ClosureInfoCFG(
           closure: rootClosure,
           subsetThunk: subsetThunkOpt,
-          idxInEnumPayload: use.index,
+          idxInEnumPayload: useIndex,
           capturedArgs: capturedArgs,
           enumTypeAndCase: enumTypeAndCase, payloadTuple: ti
         ))
@@ -1946,7 +1980,13 @@ private func rewriteUsesOfPayloadItem(
           teiArray.append(builder.createTupleExtract(tuple: result, elementIndex: tupleIdx))
         }
       } else {
+        logADCS(msg: "FFFFFFFF 00 BEGIN")
+        logADCS(msg: "\(result)")
+        logADCS(msg: "FFFFFFFF 00 MIDDLE 00")
+        logADCS(msg: "\(result.type)")
+        logADCS(msg: "FFFFFFFF 00 MIDDLE 01")
         dtiOfCapturedArgsTuple = builder.createDestructureTuple(tuple: result)
+        logADCS(msg: "FFFFFFFF 00 END")
       }
       if closureInfoOpt!.subsetThunk == nil {
         var newArgs = [Value]()
@@ -2120,6 +2160,13 @@ private func rewriteUsesOfPayloadItem(
     tei.replace(with: newTei, context)
 
   case let uedi as UncheckedEnumDataInst:
+    logADCS(msg: "CCCCCCC 00 BEGIN")
+    logADCS(msg: "\(uedi)")
+    logADCS(msg: "CCCCCCC 00 MIDDLE 00")
+    logADCS(msg: "\(uedi.type)")
+    logADCS(msg: "CCCCCCC 00 MIDDLE 01")
+    logADCS(msg: "\(result)")
+    logADCS(msg: "CCCCCCC 00 MIDDLE 02")
     let builder = Builder(before: uedi, context)
     let newUedi = builder.createUncheckedEnumData(
       enum: result, caseIndex: uedi.caseIndex,
@@ -2127,12 +2174,48 @@ private func rewriteUsesOfPayloadItem(
         uedi.caseIndex, uedi.parentFunction.bridged
       ).type)
     uedi.replace(with: newUedi, context)
+    logADCS(msg: "\(newUedi)")
+    logADCS(msg: "CCCCCCC 00 MIDDLE 03")
+    logADCS(msg: "\(newUedi.type)")
+    logADCS(msg: "CCCCCCC 00 END")
 
   case let sei as SwitchEnumInst:
     let builder = Builder(before: sei, context)
     let newSEI = builder.createSwitchEnum(
       enum: result, cases: getEnumCasesForSwitchEnumInst(sei))
     newSEI.parentBlock.eraseInstruction(sei)
+
+    if newSEI.operands[0].value.type.isOptional {
+      // MYTODO
+      assert(newSEI.parentBlock.successors.count == 2)
+      var succSome = BasicBlock?(nil)
+      var succNone = BasicBlock?(nil)
+      for succ in newSEI.parentBlock.successors {
+        if succ.arguments.count == 0 {
+          assert(succNone == nil)
+          succNone = succ
+        } else if succ.arguments.count == 1 {
+          assert(succSome == nil)
+          succSome = succ
+        } else {
+          assert(false)
+        }
+      }
+      assert(succSome != nil && succNone != nil)
+      let succ = succSome!
+      let newArg = succ.bridged.recreateOptionalBlockArgument(newSEI.operands[0].value.type.bridged).argument
+      logADCS(msg: "EEEEEEE 00 BEGIN")
+      logADCS(msg: "\(newArg)")
+      logADCS(msg: "EEEEEEE 00 MIDDLE")
+      //assert(newArg.uses.singleUse != nil)
+      //let aiOpt = newArg.uses.singleUse as? ApplyInst
+      //assert(aiOpt != nil)
+      for argUse in newArg.uses {
+        rewriteUsesOfPayloadItem(use: argUse, resultIdx: resultIdx, closureInfoArray: closureInfoArray, result: newArg/*result*/, useTei: useTei, context: context)
+      }
+      logADCS(msg: "\(newArg.parentBlock)")
+      logADCS(msg: "EEEEEEE 00 END")
+    }
 
   default:
     assert(false)
@@ -2271,7 +2354,10 @@ extension SpecializationCloner {
         for (opIdx, op) in tiInVjp!.operands.enumerated() {
           let val = op.value
           for closureInfo in closureInfos {
-            if ((closureInfo.subsetThunk == nil && closureInfo.closure == val)
+            if ((closureInfo.subsetThunk == nil &&
+                   (closureInfo.closure == val
+                   // MYTODO
+                   || val.type.isOptional && val.definingInstruction!.operands[0].value == closureInfo.closure))
               || (closureInfo.subsetThunk != nil && closureInfo.subsetThunk! == val))
               && closureInfo.payloadTuple == tiInVjp! // MYTODO: is this correct?
             {
