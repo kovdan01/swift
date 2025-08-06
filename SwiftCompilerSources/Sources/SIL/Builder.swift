@@ -634,6 +634,13 @@ public struct Builder {
     return notifyNew(tuple.getAs(TupleInst.self))
   }
 
+  public func createOptionalNone(tupleElements: [Value]) -> EnumInst {
+    let opt = tupleElements.withBridgedValues { valuesRef in
+      return bridged.createOptionalNone(valuesRef)
+    }
+    return notifyNew(opt.getAs(EnumInst.self))
+  }
+
   public func createPayloadTupleForBranchTracingEnum(elements: [Value], tupleWithLabels: Type)
     -> TupleInst
   {
