@@ -258,34 +258,19 @@ BridgedBasicBlock::recreateTupleBlockArgument(BridgedArgument arg) const {
       continue;
     }
 
-    Type newElTy;
     if (auto *pai = dyn_cast<PartialApplyInst>(
             closuresBuffersForPb[idxInClosuresBuffer].first.unbridged())) {
-      //newTupleElTypes.emplace_back(
-      newElTy =
-          getPAICapturedArgTypes(pai, bb->getModule().getASTContext());
+      newTupleElTypes.emplace_back(
+          getPAICapturedArgTypes(pai, bb->getModule().getASTContext()));
     } else {
       assert(isa<ThinToThickFunctionInst>(
           closuresBuffersForPb[idxInClosuresBuffer].first.unbridged()));
-      //newTupleElTypes.emplace_back(
-      newElTy =
-          TupleType::get({}, bb->getModule().getASTContext());
+      newTupleElTypes.emplace_back(
+          TupleType::get({}, bb->getModule().getASTContext()));
     }
-    if (oldTupleTy->getElementType(i)->isOptional()) {
-      assert(i + 1 == oldTupleTy->getNumElements());
-      newElTy = OptionalType::get(newElTy)->getCanonicalType();
-      llvm::errs() << "YYYYYYYY 03 BEGIN\n"
-                   << newElTy << '\n'
-                   << "YYYYYYYY 03 END\n";
-    }
-    newTupleElTypes.emplace_back(newElTy);
   }
   auto newTupleTy = swift::SILType::getFromOpaqueValue(
       swift::TupleType::get(newTupleElTypes, bb->getModule().getASTContext()));
-
-  llvm::errs() << "YYYYYYYY 00 BEGIN\n"
-               << newTupleTy << '\n'
-               << "YYYYYYYY 00 END\n";
 
   swift::ValueOwnershipKind oldOwnership =
       bb->getArgument(argIdx)->getOwnershipKind();
@@ -294,37 +279,6 @@ BridgedBasicBlock::recreateTupleBlockArgument(BridgedArgument arg) const {
       bb->insertPhiArgument(argIdx, newTupleTy, oldOwnership);
   oldArg->replaceAllUsesWith(newArg);
   eraseArgument(argIdx + 1);
-
-  return {newArg};
-}
-
-BridgedArgument
-BridgedBasicBlock::recreateOptionalBlockArgument(BridgedType optionalType) const {
-  swift::SILBasicBlock *bb = unbridged();
-  assert(!bb->isEntry());
-  SILArgument *oldArg = bb->getArgument(0);
-
-  SILModule &module = bb->getFunction()->getModule();
-
-  SILType silType = optionalType.unbridged();
-  assert(silType.getASTType()->isOptional());
-
-  swift::ValueOwnershipKind oldOwnership =
-      bb->getArgument(0)->getOwnershipKind();
-
-  CanType type = silType.getASTType()->getOptionalObjectType()->getCanonicalType();
-  Lowering::AbstractionPattern pattern(bb->getFunction()
-                                           ->getLoweredFunctionType()
-                                           ->getSubstGenericSignature(),
-                                       type);
-  SILType loweredType = module.Types.getLoweredType(
-      pattern, type, TypeExpansionContext::minimal());
-
-  swift::SILPhiArgument *newArg =
-      bb->insertPhiArgument(0, loweredType, oldOwnership);
-
-  oldArg->replaceAllUsesWith(newArg);
-  eraseArgument(1);
 
   return {newArg};
 }
@@ -795,9 +749,8 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteAllEnums(
   SILModule &module = topVjp.getFunction()->getModule();
 
   std::vector<Type> enumQueue = getEnumQueue(topEnum);
+  BranchTracingEnumDict dict;
 
-  std::vector<SILType> loweredEnumQueue;
-  loweredEnumQueue.reserve(enumQueue.size());
   for (const Type &t : enumQueue) {
     EnumDecl *ed = t->getEnumOrBoundGenericEnum();
     auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
@@ -806,75 +759,11 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteAllEnums(
                                              ->getSubstGenericSignature(),
                                          traceDeclType);
 
-    loweredEnumQueue.emplace_back(module.Types.getLoweredType(
-        pattern, traceDeclType, TypeExpansionContext::minimal()));
-  }
+    SILType silType = module.Types.getLoweredType(
+        pattern, traceDeclType, TypeExpansionContext::minimal());
 
-  llvm::DenseMap<llvm::StringRef, BridgedInstruction> optionalClosuresDict;
-
-  for (const SILType &t : loweredEnumQueue) {
-    EnumDecl *ed = t.getEnumOrBoundGenericEnum();
-    for (EnumCaseDecl *ecd : ed->getAllCases()) {
-      assert(ecd->getElements().size() == 1);
-      EnumElementDecl *eed = ecd->getElements().front();
-      ParamDecl &paramDecl = *eed->getParameterList()->front();
-      auto *tt = cast<TupleType>(paramDecl.getInterfaceType().getPointer());
-      if (tt->getNumElements() != 0 && tt->getElementType(tt->getNumElements() - 1)->isOptional()) {
-        unsigned enumIdx = module.getCaseIndex(eed);
-        llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
-            *closuresBuffer = &closuresBuffers[t][enumIdx];
-        for (const auto &[closure, idxInPayload] : *closuresBuffer) {
-          if (idxInPayload == tt->getNumElements() - 1) {
-            assert(!optionalClosuresDict.contains(eed->getNameStr()));
-            optionalClosuresDict.insert({eed->getNameStr(), closure});
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  for (const SILType &t : loweredEnumQueue) {
-    EnumDecl *ed = t.getEnumOrBoundGenericEnum();
-    for (EnumCaseDecl *ecd : ed->getAllCases()) {
-      assert(ecd->getElements().size() == 1);
-      EnumElementDecl *eed = ecd->getElements().front();
-      ParamDecl &paramDecl = *eed->getParameterList()->front();
-      auto *tt = cast<TupleType>(paramDecl.getInterfaceType().getPointer());
-      if (tt->getNumElements() != 0 && tt->getElementType(tt->getNumElements() - 1)->isOptional()) {
-        unsigned enumIdx = module.getCaseIndex(eed);
-        llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
-            *closuresBuffer = &closuresBuffers[t][enumIdx];
-        bool found = false;
-        for (const auto &[closure, idxInPayload] : *closuresBuffer) {
-          if (idxInPayload == tt->getNumElements() - 1) {
-            found = true;
-            break;
-          }
-        }
-        if (!found) {
-          assert(optionalClosuresDict.contains(eed->getNameStr()));
-          closuresBuffer->emplace_back(optionalClosuresDict.at(eed->getNameStr()), tt->getNumElements() - 1);
-        }
-      }
-    }
-  }
-
-  BranchTracingEnumDict dict;
-
-  for (const SILType &t : loweredEnumQueue) {
-    // EnumDecl *ed = t->getEnumOrBoundGenericEnum();
-    // auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
-    // Lowering::AbstractionPattern pattern(topVjp.getFunction()
-    //                                          ->getLoweredFunctionType()
-    //                                          ->getSubstGenericSignature(),
-    //                                      traceDeclType);
-
-    // SILType silType = module.Types.getLoweredType(
-    //     pattern, traceDeclType, TypeExpansionContext::minimal());
-
-    dict[BridgedType(t)] =
-        rewriteBranchTracingEnum(BridgedType(t), topVjp);
+    dict[BridgedType(silType)] =
+        rewriteBranchTracingEnum(BridgedType(silType), topVjp);
   }
 
   return dict;
@@ -946,8 +835,6 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
     assert(oldECD->getElements().size() == 1);
     EnumElementDecl *oldEED = oldECD->getElements().front();
 
-    //oldEED->getNameStr();
-
     unsigned enumIdx = module.getCaseIndex(oldEED);
 
     llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
@@ -965,17 +852,6 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
       unsigned idxInClosuresBuffer = -1;
       for (unsigned j = 0; j < closuresBuffer->size(); ++j) {
         if ((*closuresBuffer)[j].second == i) {
-          if (!(idxInClosuresBuffer == unsigned(-1) ||
-                (*closuresBuffer)[j].first.unbridged() ==
-                    (*closuresBuffer)[idxInClosuresBuffer].first.unbridged())) {
-            llvm::errs() << "XXXXXXX 00 BEGIN\n"
-                         << idxInClosuresBuffer << ' ' << i << ' ' << j << '\n'
-                         << "XXXXXXX 00 MIDDLE 00\n"
-                         << *(*closuresBuffer)[j].first.unbridged() << '\n'
-                         << "XXXXXXX 00 MIDDLE 01\n"
-                         << *(*closuresBuffer)[idxInClosuresBuffer].first.unbridged() << '\n'
-                         << "XXXXXXX 00 END\n";
-          }
           assert(idxInClosuresBuffer == unsigned(-1) ||
                  (*closuresBuffer)[j].first.unbridged() ==
                      (*closuresBuffer)[idxInClosuresBuffer].first.unbridged());
@@ -990,13 +866,6 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
           assert(isa<ThinToThickFunctionInst>(
               (*closuresBuffer)[idxInClosuresBuffer].first.unbridged()));
           type = TupleType::get({}, astContext);
-        }
-        if (tt->getElementType(i)->isOptional()) {
-          assert(i + 1 == tt->getNumElements());
-          type = OptionalType::get(type)->getCanonicalType();
-          llvm::errs() << "YYYYYYYY 01 BEGIN\n"
-                       << type << '\n'
-                       << "YYYYYYYY 01 END\n";
         }
       } else {
         type = tt->getElementType(i);

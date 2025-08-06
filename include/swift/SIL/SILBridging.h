@@ -968,8 +968,6 @@ struct BridgedBasicBlock {
   recreateEnumBlockArgument(BridgedArgument arg) const;
   SWIFT_IMPORT_UNSAFE BridgedArgument
   recreateTupleBlockArgument(BridgedArgument arg) const;
-  SWIFT_IMPORT_UNSAFE BridgedArgument
-  recreateOptionalBlockArgument(BridgedType optionalType) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument addFunctionArgument(BridgedType type) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument insertFunctionArgument(SwiftInt atPosition, BridgedType type,
                                                                             BridgedValue::Ownership ownership,
