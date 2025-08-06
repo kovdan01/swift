@@ -287,6 +287,8 @@ struct BridgedType {
   getTupleElementType(SwiftInt idx) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType getFunctionTypeWithNoEscape(bool withNoEscape) const;
   BRIDGED_INLINE BridgedArgumentConvention getCalleeConvention() const;
+  SWIFT_IMPORT_UNSAFE BridgedOwnedString
+  getEnumTypeCaseName(SwiftInt caseIdx) const;
 };
 
 inline bool operator==(const BridgedType &lhs, const BridgedType &rhs) {
@@ -973,6 +975,8 @@ struct BridgedBasicBlock {
   recreateEnumBlockArgument(BridgedArgument arg) const;
   SWIFT_IMPORT_UNSAFE BridgedArgument
   recreateTupleBlockArgument(BridgedArgument arg) const;
+  SWIFT_IMPORT_UNSAFE BridgedArgument
+  recreateOptionalBlockArgument(BridgedType optionalType) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument addFunctionArgument(BridgedType type) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument insertFunctionArgument(SwiftInt atPosition, BridgedType type,
                                                                             BridgedValue::Ownership ownership,
@@ -1396,6 +1400,9 @@ struct BridgedBuilder{
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createConvertEscapeToNoEscape(BridgedValue originalFunction, BridgedType resultType, bool isLifetimeGuaranteed) const;
 
   SWIFT_IMPORT_UNSAFE void destroyCapturedArgs(BridgedInstruction partialApply) const;
+
+  SWIFT_IMPORT_UNSAFE BridgedInstruction createOptionalSome(BridgedValue value) const;
+  SWIFT_IMPORT_UNSAFE BridgedInstruction createOptionalNone(BridgedValueArray tupleElements) const;
 };
 
 // Context
