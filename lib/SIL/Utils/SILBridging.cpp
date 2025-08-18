@@ -187,6 +187,34 @@ BridgedFunction BridgedTestArguments::takeFunction() const {
   return {arguments->takeFunction()};
 }
 
+/// Returns the lowered SIL type of the branching trace enum associated with
+/// the given original block.
+static SILType getBranchingTraceEnumLoweredType(EnumDecl *ed, SILFunction *vjp) {
+  auto traceDeclType =
+      ed->getDeclaredInterfaceType()->getCanonicalType();
+  Lowering::AbstractionPattern pattern(
+      vjp->getLoweredFunctionType()->getSubstGenericSignature(),
+      traceDeclType);
+  Lowering::TypeConverter typeConverter(*ed->getParentModule());
+  return typeConverter.getLoweredType(pattern, traceDeclType,
+                                      TypeExpansionContext::minimal());
+}
+
+/// Remap any archetypes into the current function's context.
+SILType remapType(SILType ty, SILFunction *foo) {
+  if (ty.hasArchetype())
+    ty = ty.mapTypeOutOfContext();
+  auto remappedType = ty.getASTType()->getReducedType(
+      foo->getLoweredFunctionType()->getSubstGenericSignature());
+  auto remappedSILType =
+      SILType::getPrimitiveType(remappedType, ty.getCategory());
+  // FIXME: Sometimes getPullback() doesn't have a generic environment, in which
+  // case callers are apparently happy to receive an interface type.
+  if (foo->getGenericEnvironment())
+    return foo->mapTypeIntoContext(remappedSILType);
+  return remappedSILType;
+}
+
 static SourceFile &getSourceFile(SILFunction *f) {
   if (f->hasLocation())
     if (auto *declContext = f->getLocation().getAsDeclContext())
@@ -783,21 +811,13 @@ std::vector<Type> getEnumQueue(BridgedType topEnum) {
 BranchTracingEnumDict
 BridgedAutoDiffClosureSpecializationHelper::rewriteAllEnums(
     BridgedFunction topVjp, BridgedType topEnum) const {
-  SILModule &module = topVjp.getFunction()->getModule();
-
   std::vector<Type> enumQueue = getEnumQueue(topEnum);
   BranchTracingEnumDict dict;
 
   for (const Type &t : enumQueue) {
     EnumDecl *ed = t->getEnumOrBoundGenericEnum();
-    auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
-    Lowering::AbstractionPattern pattern(topVjp.getFunction()
-                                             ->getLoweredFunctionType()
-                                             ->getSubstGenericSignature(),
-                                         traceDeclType);
 
-    SILType silType = module.Types.getLoweredType(
-        pattern, traceDeclType, TypeExpansionContext::minimal());
+    SILType silType = remapType(getBranchingTraceEnumLoweredType(ed, topVjp.getFunction()), topVjp.getFunction());
 
     dict[BridgedType(silType)] =
         rewriteBranchTracingEnum(BridgedType(silType), topVjp);
@@ -874,6 +894,10 @@ static GenericParamList *cloneGenericParameters(ASTContext &ctx,
     clonedParams.push_back(clonedParam);
   }
   return GenericParamList::create(ctx, SourceLoc(), clonedParams, SourceLoc());
+}
+
+BridgedType BridgedType::mapTypeOutOfContext() const {
+  return {unbridged().mapTypeOutOfContext()};
 }
 
 BridgedType
@@ -963,7 +987,7 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
       newElements.emplace_back(type, label);
     }
 
-    Type newTupleType = TupleType::get(newElements, astContext);
+    Type newTupleType = TupleType::get(newElements, astContext)->mapTypeOutOfContext();
 
     auto *newParamDecl = ParamDecl::cloneWithoutType(astContext, &oldParamDecl);
     newParamDecl->setInterfaceType(newTupleType);
@@ -987,14 +1011,9 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
   file.addTopLevelDecl(ed);
   file.getParentModule()->clearLookupCache();
 
-  auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
-  Lowering::AbstractionPattern pattern(topVjp.getFunction()
-                                           ->getLoweredFunctionType()
-                                           ->getSubstGenericSignature(),
-                                       traceDeclType);
-
-  SILType newEnumType = topVjp.getFunction()->getModule().Types.getLoweredType(
-      pattern, traceDeclType, TypeExpansionContext::minimal());
+  SILType newEnumType =
+      remapType(getBranchingTraceEnumLoweredType(ed, topVjp.getFunction()),
+                topVjp.getFunction());
 
   enumDict[enumType.unbridged()] = newEnumType;
 

@@ -582,21 +582,6 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     }
   }
 
-  var foundBranchTracingEnumParam = false
-  for paramInfo in pb.convention.parameters {
-    if paramInfo.type.rawType.bridged.type == bteArgOfPb.type.canonicalType.rawType.bridged.type {
-      foundBranchTracingEnumParam = true
-      break
-    }
-  }
-
-  if !foundBranchTracingEnumParam {
-    logADCS(
-      prefix: prefixFail,
-      msg: "cannot find pullback param matching branch tracing enum type \(bteArgOfPb.type)")
-    return false
-  }
-
   return true
 }
 
@@ -2421,7 +2406,8 @@ extension SpecializationCloner {
     let clonedFunction = self.cloned
     let clonedEntryBlock = self.entryBlock
 
-    for arg in originalEntryBlock.arguments {
+    //for arg in originalEntryBlock.arguments {
+    for arg in pb.arguments {
       var clonedEntryBlockArgType = arg.type.getLoweredType(in: clonedFunction)
       if clonedEntryBlockArgType == enumType {
         // This should always hold since we have at least 1 closure (otherwise, we wouldn't go here).
@@ -2832,15 +2818,14 @@ private func getSpecializedParametersCFG(
   // Start by adding all original parameters except for the closure parameters.
   for paramInfo in applySiteCallee.convention.parameters {
     // TODO: is this safe to perform such check?
-    if !SILType_equalEnums(paramInfo.type.bridged, enumType.canonicalType.bridged) {
+    if paramInfo.type != enumType.bridged.mapTypeOutOfContext().type.canonicalType {
       specializedParamInfoList.append(paramInfo)
       continue
     }
     assert(!foundBranchTracingEnumParam)
     foundBranchTracingEnumParam = true
     let newParamInfo = ParameterInfo(
-      type: SILBridging_enumDictGetByKey(enumDictCopy, enumType.bridged).type.canonicalType,
-      //type: SILBridging_enumDictGetByKey(enumDict, enumType.bridged]!.type.canonicalType,
+      type: SILBridging_enumDictGetByKey(enumDictCopy, enumType.bridged).mapTypeOutOfContext().type.canonicalType,
       convention: paramInfo.convention,
       options: paramInfo.options, hasLoweredAddresses: paramInfo.hasLoweredAddresses)
     specializedParamInfoList.append(newParamInfo)

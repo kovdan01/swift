@@ -289,6 +289,7 @@ struct BridgedType {
   BRIDGED_INLINE BridgedArgumentConvention getCalleeConvention() const;
   SWIFT_IMPORT_UNSAFE BridgedOwnedString
   getEnumTypeCaseName(SwiftInt caseIdx) const;
+  SWIFT_IMPORT_UNSAFE BridgedType mapTypeOutOfContext() const;
 };
 
 inline bool operator==(const BridgedType &lhs, const BridgedType &rhs) {
