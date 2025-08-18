@@ -582,21 +582,6 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     }
   }
 
-  var foundBranchTracingEnumParam = false
-  for paramInfo in pb.convention.parameters {
-    if paramInfo.type.rawType.bridged.type == bteArgOfPb.type.canonicalType.rawType.bridged.type {
-      foundBranchTracingEnumParam = true
-      break
-    }
-  }
-
-  if !foundBranchTracingEnumParam {
-    logADCS(
-      prefix: prefixFail,
-      msg: "cannot find pullback param matching branch tracing enum type \(bteArgOfPb.type)")
-    return false
-  }
-
   return true
 }
 
@@ -1043,6 +1028,7 @@ private func getOrCreateSpecializedFunctionCFG(
   enumDict =
       adcsHelper.rewriteAllEnums(
         /*topVjp: */pullbackClosureInfo.paiOfPullback.parentFunction.bridged,
+        /*topPb: */pullbackClosureInfo.pullbackFn.bridged,
         /*topEnum: */enumTypeOfEntryBBArg.bridged
       )
 
@@ -2421,9 +2407,12 @@ extension SpecializationCloner {
     let clonedFunction = self.cloned
     let clonedEntryBlock = self.entryBlock
 
-    for arg in originalEntryBlock.arguments {
+    //for arg in originalEntryBlock.arguments {
+    for arg in pb.arguments {
       var clonedEntryBlockArgType = arg.type.getLoweredType(in: clonedFunction)
-      if clonedEntryBlockArgType == enumType {
+      //if clonedEntryBlockArgType == enumType {
+      //if "\(clonedEntryBlockArgType)" == "\(enumType)" {
+      if SILType_equalEnums(clonedEntryBlockArgType.canonicalType.bridged, enumType.canonicalType.bridged) {
         // This should always hold since we have at least 1 closure (otherwise, we wouldn't go here).
         // It causes re-write of the corresponding branch tracing enum, and the top enum type will be re-written transitively.
         assert(SILBridging_enumDictGetByKey(enumDict, enumType.bridged).typeOrNil != nil)
@@ -2839,8 +2828,7 @@ private func getSpecializedParametersCFG(
     assert(!foundBranchTracingEnumParam)
     foundBranchTracingEnumParam = true
     let newParamInfo = ParameterInfo(
-      type: SILBridging_enumDictGetByKey(enumDictCopy, enumType.bridged).type.canonicalType,
-      //type: SILBridging_enumDictGetByKey(enumDict, enumType.bridged]!.type.canonicalType,
+      type: SILBridging_enumDictGetByKey(enumDictCopy, enumType.bridged).mapTypeOutOfContext().type.canonicalType,
       convention: paramInfo.convention,
       options: paramInfo.options, hasLoweredAddresses: paramInfo.hasLoweredAddresses)
     specializedParamInfoList.append(newParamInfo)

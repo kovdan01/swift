@@ -289,6 +289,7 @@ struct BridgedType {
   BRIDGED_INLINE BridgedArgumentConvention getCalleeConvention() const;
   SWIFT_IMPORT_UNSAFE BridgedOwnedString
   getEnumTypeCaseName(SwiftInt caseIdx) const;
+  SWIFT_IMPORT_UNSAFE BridgedType mapTypeOutOfContext() const;
 };
 
 inline bool operator==(const BridgedType &lhs, const BridgedType &rhs) {
@@ -1190,10 +1191,10 @@ struct BridgedAutoDiffClosureSpecializationHelper {
   SWIFT_IMPORT_UNSAFE void clearClosuresBufferForPb();
   SWIFT_IMPORT_UNSAFE void clearEnumDict();
   SWIFT_IMPORT_UNSAFE BridgedType
-  rewriteBranchTracingEnum(BridgedType enumType, BridgedFunction topVjp) const;
+  rewriteBranchTracingEnum(BridgedType enumType, BridgedFunction topVjp, BridgedFunction topPb) const;
 
   SWIFT_IMPORT_UNSAFE BranchTracingEnumDict
-  rewriteAllEnums(BridgedFunction topVjp, BridgedType topEnum) const;
+  rewriteAllEnums(BridgedFunction topVjp, BridgedFunction topPb, BridgedType topEnum) const;
 };
 
 struct BridgedBuilder{
