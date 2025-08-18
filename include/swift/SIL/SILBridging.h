@@ -289,6 +289,7 @@ struct BridgedType {
   BRIDGED_INLINE BridgedArgumentConvention getCalleeConvention() const;
   SWIFT_IMPORT_UNSAFE BridgedOwnedString
   getEnumTypeCaseName(SwiftInt caseIdx) const;
+  SWIFT_IMPORT_UNSAFE BridgedType mapTypeOutOfContext() const;
 };
 
 inline bool operator==(const BridgedType &lhs, const BridgedType &rhs) {
@@ -1174,9 +1175,6 @@ struct BridgedTypeHasher {
 
 using BranchTracingEnumDict =
     std::unordered_map<BridgedType, BridgedType, BridgedTypeHasher>;
-
-BridgedType SILBridging_enumDictGetByKey(const BranchTracingEnumDict &dict,
-                                         BridgedType key);
 
 struct BridgedAutoDiffClosureSpecializationHelper {
   SWIFT_IMPORT_UNSAFE void appendToClosuresBuffer(BridgedType enumType,
