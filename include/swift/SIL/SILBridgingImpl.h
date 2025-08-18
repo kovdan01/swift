@@ -257,6 +257,11 @@ BridgedParameterInfoArray SILFunctionType_getParameters(BridgedCanType funcTy) {
 }
 
 bool SILType_equalEnums(BridgedCanType lhs, BridgedCanType rhs) {
+  // llvm::errs() << "\nXXXXXXXXX 00 BEGIN\n"
+  //              << lhs.unbridged().getEnumOrBoundGenericEnum()
+  //              << "\nXXXXXXXXX 00 MIDDLE\n"
+  //              << rhs.unbridged()
+  //              << "\nXXXXXXXXX 00 END\n";
   return lhs.unbridged().getEnumOrBoundGenericEnum() ==
          rhs.unbridged().getEnumOrBoundGenericEnum();
 }
