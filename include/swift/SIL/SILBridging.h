@@ -949,22 +949,6 @@ struct OptionalBridgedBasicBlock {
   BRIDGED_INLINE swift::SILBasicBlock * _Nullable unbridged() const;
 };
 
-struct BridgedTypeHasher {
-  unsigned operator()(const BridgedType &value) const {
-    return llvm::DenseMapInfo<void *>::getHashValue(value.opaqueValue);
-  }
-};
-
-using BranchTracingEnumDict =
-    std::unordered_map<BridgedType, BridgedType, BridgedTypeHasher>;
-
-struct ClosureAndIdxInPayload {
-  BridgedInstruction closure;
-  SwiftInt idxInPayload;
-};
-
-using VectorOfClosureAndIdxInPayload = std::vector<ClosureAndIdxInPayload>;
-
 struct BridgedBasicBlock {
   SwiftObject obj;
 
@@ -983,11 +967,10 @@ struct BridgedBasicBlock {
   BRIDGED_INLINE SwiftInt getNumArguments() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument getArgument(SwiftInt index) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument addBlockArgument(BridgedType type, BridgedValue::Ownership ownership) const;
-  SWIFT_IMPORT_UNSAFE BridgedArgument recreateEnumBlockArgument(
-      BridgedArgument arg, const BranchTracingEnumDict &dict) const;
-  SWIFT_IMPORT_UNSAFE BridgedArgument recreateTupleBlockArgument(
-      BridgedArgument arg, const BranchTracingEnumDict &dict,
-      const VectorOfClosureAndIdxInPayload &closuresBuffersForPb) const;
+  SWIFT_IMPORT_UNSAFE BridgedArgument
+  recreateEnumBlockArgument(BridgedArgument arg) const;
+  SWIFT_IMPORT_UNSAFE BridgedArgument
+  recreateTupleBlockArgument(BridgedArgument arg) const;
   SWIFT_IMPORT_UNSAFE BridgedArgument
   recreateOptionalBlockArgument(BridgedType optionalType) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument addFunctionArgument(BridgedType type) const;
@@ -1183,29 +1166,31 @@ inline bool operator==(const BridgedType &lhs, const BridgedType &rhs) {
   return lhs.opaqueValue == rhs.opaqueValue;
 }
 
-struct BridgedClosureInfoCFG {
-  BridgedType enumType;
-  SwiftInt enumCaseIdx;
-  BridgedInstruction closure;
-  SwiftInt idxInPayload;
+struct BridgedTypeHasher {
+  unsigned operator()(const BridgedType &value) const {
+    return llvm::DenseMapInfo<void *>::getHashValue(value.opaqueValue);
+  }
 };
 
-using VectorOfBridgedClosureInfoCFG = std::vector<BridgedClosureInfoCFG>;
+using BranchTracingEnumDict =
+    std::unordered_map<BridgedType, BridgedType, BridgedTypeHasher>;
 
 struct BridgedAutoDiffClosureSpecializationHelper {
-  SWIFT_IMPORT_UNSAFE BridgedType rewriteBranchTracingEnum(
-      BridgedType enumType, BridgedFunction topVjp, /*TODO: operator[] const*/
-      std::unordered_map<
-          BridgedType,
-          llvm::DenseMap<
-              SwiftInt,
-              llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>>,
-          BridgedTypeHasher> &closuresBuffers,
-      const BranchTracingEnumDict &dict) const;
+  SWIFT_IMPORT_UNSAFE void appendToClosuresBuffer(BridgedType enumType,
+                                                  SwiftInt caseIdx,
+                                                  BridgedInstruction closure,
+                                                  SwiftInt idxInPayload);
+  SWIFT_IMPORT_UNSAFE void
+  appendToClosuresBufferForPb(BridgedInstruction closure,
+                              SwiftInt idxInPayload);
+  SWIFT_IMPORT_UNSAFE void clearClosuresBuffer();
+  SWIFT_IMPORT_UNSAFE void clearClosuresBufferForPb();
+  SWIFT_IMPORT_UNSAFE void clearEnumDict();
+  SWIFT_IMPORT_UNSAFE BridgedType
+  rewriteBranchTracingEnum(BridgedType enumType, BridgedFunction topVjp) const;
 
-  SWIFT_IMPORT_UNSAFE BranchTracingEnumDict rewriteAllEnums(
-      BridgedFunction topVjp, BridgedType topEnum,
-      const VectorOfBridgedClosureInfoCFG &vectorOfClosureInfoCFG) const;
+  SWIFT_IMPORT_UNSAFE BranchTracingEnumDict
+  rewriteAllEnums(BridgedFunction topVjp, BridgedType topEnum) const;
 };
 
 struct BridgedBuilder{
