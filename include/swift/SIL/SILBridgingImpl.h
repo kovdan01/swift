@@ -437,6 +437,14 @@ BridgedType BridgedType::getEnumCasePayload(EnumElementIterator i, BridgedFuncti
   return swift::SILType();
 }
 
+BridgedType BridgedType::getEnumCasePayload(SwiftInt caseIndex,
+                                            BridgedFunction f) const {
+  swift::EnumElementDecl *elt = unbridged().getEnumElement(caseIndex);
+  if (elt->hasAssociatedValues())
+    return unbridged().getEnumElementType(elt, f.getFunction());
+  return swift::SILType();
+}
+
 SwiftInt BridgedType::getNumTupleElements() const {
   return unbridged().getNumTupleElements();
 }
@@ -1065,6 +1073,11 @@ bool BridgedInstruction::shouldBeForwarding() const {
   return llvm::isa<swift::OwnershipForwardingSingleValueInstruction>(unbridged()) ||
          llvm::isa<swift::OwnershipForwardingTermInst>(unbridged()) ||
          llvm::isa<swift::OwnershipForwardingMultipleValueInstruction>(unbridged());
+}
+
+BridgedSubstitutionMap BridgedInstruction::getSubstitutionMap() const {
+  auto *pai = llvm::cast<swift::PartialApplyInst>(unbridged());
+  return {pai->getSubstitutionMap()};
 }
 
 SwiftInt BridgedInstruction::MultipleValueInstruction_getNumResults() const {
@@ -1867,6 +1880,10 @@ void BridgedBasicBlock::moveAllInstructionsToEnd(BridgedBasicBlock dest) const {
 
 void BridgedBasicBlock::moveArgumentsTo(BridgedBasicBlock dest) const {
   dest.unbridged()->moveArgumentList(unbridged());
+}
+
+void BridgedBasicBlock::eraseInstruction(BridgedInstruction inst) const {
+  unbridged()->erase(inst.unbridged());
 }
 
 OptionalBridgedSuccessor BridgedBasicBlock::getFirstPred() const {
