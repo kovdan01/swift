@@ -199,6 +199,12 @@ public:
   }
 };
 
+/// Clone the generic parameters of the given generic signature and return a new
+/// `GenericParamList`.
+GenericParamList *cloneGenericParameters(ASTContext &ctx,
+                                         DeclContext *dc,
+                                         CanGenericSignature sig);
+
 } // end namespace autodiff
 } // end namespace swift
 
