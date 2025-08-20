@@ -614,8 +614,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
 }
 
 private func multiBBHelper(
-  pullbackClosureInfo: PullbackClosureInfo, function: Function, enumDict: inout EnumDict,
-  context: FunctionPassContext
+  pullbackClosureInfo: PullbackClosureInfo, function: Function, context: FunctionPassContext
 ) {
   var closuresSet = Set<SingleValueInstruction>()
   for closureInfo in pullbackClosureInfo.closureInfosCFG {
@@ -631,6 +630,8 @@ private func multiBBHelper(
       totalClosures += 1
     }
   }
+
+  var enumDict = EnumDict()
 
   let (specializedFunction, alreadyExists) =
     getOrCreateSpecializedFunctionCFG(
@@ -752,12 +753,6 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
   } while remainingSpecializationRounds > 0
 
   if !isSingleBB && canRunMultiBB && !isMultiBBWithoutBranchTracingEnumPullbackArg {
-    var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
-    var enumDict = EnumDict()
-    defer {
-      adcsHelper.clearEnumDict()
-    }
-
     remainingSpecializationRounds = 5
     repeat {
       logADCS(msg: "Remaining specialization rounds: " + String(remainingSpecializationRounds))
@@ -773,7 +768,7 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
       }
 
       multiBBHelper(
-        pullbackClosureInfo: pullbackClosureInfo, function: function, enumDict: &enumDict,
+        pullbackClosureInfo: pullbackClosureInfo, function: function,
         context: context)
 
       remainingSpecializationRounds -= 1
@@ -1165,7 +1160,7 @@ private func rewriteApplyInstructionCFG(
     if enumDict[arg.type.bridged] == nil {
       continue
     }
-    bb.bridged.recreateEnumBlockArgument(arg.bridged)
+    bb.bridged.recreateEnumBlockArgument(arg.bridged, enumDict)
   }
   let pai = pullbackClosureInfo.paiOfPullback as! PartialApplyInst
 
@@ -2431,7 +2426,7 @@ extension SpecializationCloner {
         }
       }
       logADCS(msg: "recreateTupleBlockArgument: \(bb.shortDescription)")
-      let newArg = bb.bridged.recreateTupleBlockArgument(arg.bridged).argument
+      let newArg = bb.bridged.recreateTupleBlockArgument(arg.bridged, enumDict).argument
 
       if newArg.uses.count == 0 {
         continue
