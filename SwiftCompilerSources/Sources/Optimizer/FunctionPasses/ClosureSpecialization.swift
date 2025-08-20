@@ -1056,20 +1056,20 @@ private func getOrCreateSpecializedFunctionCFG(
   let enumTypeOfEntryBBArg = getEnumArgOfEntryPbBB(pb.entryBlock, vjp: vjp)!.type
 
   var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
-  defer {
-    adcsHelper.clearClosuresBuffer()
-  }
-  for closureInfoCFG in closureInfos {
-    adcsHelper.appendToClosuresBuffer(
-      closureInfoCFG.enumTypeAndCase.enumType.bridged,
-      closureInfoCFG.enumTypeAndCase.caseIdx,
-      closureInfoCFG.closure.bridged,
-      closureInfoCFG.idxInEnumPayload)
-  }
+  let vectorOfClosureInfoCFG = VectorOfBridgedClosureInfoCFG(
+    closureInfos.map {
+      BridgedClosureInfoCFG(
+        enumType: $0.enumTypeAndCase.enumType.bridged,
+        enumCaseIdx: $0.enumTypeAndCase.caseIdx,
+        closure: $0.closure.bridged,
+        idxInPayload: $0.idxInEnumPayload)
+    })
+
   enumDict =
     adcsHelper.rewriteAllEnums(
       /*topVjp: */pullbackClosureInfo.paiOfPullback.parentFunction.bridged,
-      /*topEnum: */enumTypeOfEntryBBArg.bridged
+      /*topEnum: */enumTypeOfEntryBBArg.bridged,
+      /*vectorOfClosureInfoCFG: */vectorOfClosureInfoCFG
     )
 
   let specializedParameters = getSpecializedParametersCFG(
