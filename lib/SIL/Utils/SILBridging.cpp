@@ -61,9 +61,6 @@ SwiftMetatype SILNode::getSILNodeMetatype(SILNodeKind kind) {
   return metatype;
 }
 
-static llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
-    closuresBuffersForPb;
-
 struct SILTypeHasher {
   unsigned operator()(const SILType &value) const {
     return llvm::DenseMapInfo<SILType>::getHashValue(value);
@@ -275,7 +272,8 @@ BridgedArgument BridgedBasicBlock::recreateOptionalBlockArgument(
 }
 
 BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(
-    BridgedArgument arg, const BranchTracingEnumDict &dict) const {
+    BridgedArgument arg, const BranchTracingEnumDict &dict,
+    const VectorOfClosureAndIdxInPayload &closuresBuffersForPb) const {
   swift::SILBasicBlock *bb = unbridged();
   assert(!bb->isEntry());
   swift::SILArgument *oldArg = arg.getArgument();
@@ -286,10 +284,10 @@ BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(
   for (unsigned i = 0; i < oldTupleTy->getNumElements(); ++i) {
     unsigned idxInClosuresBuffer = -1;
     for (unsigned j = 0; j < closuresBuffersForPb.size(); ++j) {
-      if (closuresBuffersForPb[j].second == i) {
+      if (closuresBuffersForPb[j].idxInPayload == i) {
         if (idxInClosuresBuffer != unsigned(-1)) {
-          assert(closuresBuffersForPb[j].first.unbridged() ==
-                 closuresBuffersForPb[idxInClosuresBuffer].first.unbridged());
+          assert(closuresBuffersForPb[j].closure.unbridged() ==
+                 closuresBuffersForPb[idxInClosuresBuffer].closure.unbridged());
         }
         idxInClosuresBuffer = j;
       }
@@ -310,12 +308,12 @@ BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(
 
     CanType canType;
     if (auto *pai = dyn_cast<PartialApplyInst>(
-            closuresBuffersForPb[idxInClosuresBuffer].first.unbridged())) {
+            closuresBuffersForPb[idxInClosuresBuffer].closure.unbridged())) {
       canType = getPAICapturedArgTypes(pai, bb->getModule().getASTContext())
                     ->getCanonicalType();
     } else {
       assert(isa<ThinToThickFunctionInst>(
-          closuresBuffersForPb[idxInClosuresBuffer].first.unbridged()));
+          closuresBuffersForPb[idxInClosuresBuffer].closure.unbridged()));
       canType = TupleType::get({}, bb->getModule().getASTContext())
                     ->getCanonicalType();
     }
@@ -708,15 +706,6 @@ convertCases(SILType enumTy, const void * _Nullable enumCases, SwiftInt numEnumC
     convertedCases.push_back({mappedElements[c.first], c.second.unbridged()});
   }
   return convertedCases;
-}
-
-void BridgedAutoDiffClosureSpecializationHelper::appendToClosuresBufferForPb(
-    BridgedInstruction closure, SwiftInt idxInPayload) {
-  closuresBuffersForPb.emplace_back(closure, idxInPayload);
-}
-
-void BridgedAutoDiffClosureSpecializationHelper::clearClosuresBufferForPb() {
-  closuresBuffersForPb.clear();
 }
 
 std::vector<Type> getPredTypes(Type enumType) {

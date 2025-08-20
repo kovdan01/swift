@@ -958,6 +958,13 @@ struct BridgedTypeHasher {
 using BranchTracingEnumDict =
     std::unordered_map<BridgedType, BridgedType, BridgedTypeHasher>;
 
+struct ClosureAndIdxInPayload {
+  BridgedInstruction closure;
+  SwiftInt idxInPayload;
+};
+
+using VectorOfClosureAndIdxInPayload = std::vector<ClosureAndIdxInPayload>;
+
 struct BridgedBasicBlock {
   SwiftObject obj;
 
@@ -979,7 +986,8 @@ struct BridgedBasicBlock {
   SWIFT_IMPORT_UNSAFE BridgedArgument recreateEnumBlockArgument(
       BridgedArgument arg, const BranchTracingEnumDict &dict) const;
   SWIFT_IMPORT_UNSAFE BridgedArgument recreateTupleBlockArgument(
-      BridgedArgument arg, const BranchTracingEnumDict &dict) const;
+      BridgedArgument arg, const BranchTracingEnumDict &dict,
+      const VectorOfClosureAndIdxInPayload &closuresBuffersForPb) const;
   SWIFT_IMPORT_UNSAFE BridgedArgument
   recreateOptionalBlockArgument(BridgedType optionalType) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument addFunctionArgument(BridgedType type) const;
@@ -1185,10 +1193,6 @@ struct BridgedClosureInfoCFG {
 using VectorOfBridgedClosureInfoCFG = std::vector<BridgedClosureInfoCFG>;
 
 struct BridgedAutoDiffClosureSpecializationHelper {
-  SWIFT_IMPORT_UNSAFE void
-  appendToClosuresBufferForPb(BridgedInstruction closure,
-                              SwiftInt idxInPayload);
-  SWIFT_IMPORT_UNSAFE void clearClosuresBufferForPb();
   SWIFT_IMPORT_UNSAFE BridgedType rewriteBranchTracingEnum(
       BridgedType enumType, BridgedFunction topVjp, /*TODO: operator[] const*/
       std::unordered_map<

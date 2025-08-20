@@ -2403,9 +2403,7 @@ extension SpecializationCloner {
 
       var closureInfoArray = [ClosureInfoCFG]()
       var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
-      defer {
-        adcsHelper.clearClosuresBufferForPb()
-      }
+      var arrayOfClosureAndIdxInPayload = [ClosureAndIdxInPayload]()
       if tiInVjp != nil {
         for (opIdx, op) in tiInVjp!.operands.enumerated() {
           let val = op.value
@@ -2418,15 +2416,18 @@ extension SpecializationCloner {
             {
               assert(closureInfo.idxInEnumPayload == opIdx)
               closureInfoArray.append(closureInfo)
-              adcsHelper.appendToClosuresBufferForPb(
-                closureInfo.closure.bridged,
-                closureInfo.idxInEnumPayload)
+              arrayOfClosureAndIdxInPayload.append(
+                ClosureAndIdxInPayload(
+                  closure: closureInfo.closure.bridged,
+                  idxInPayload: closureInfo.idxInEnumPayload))
             }
           }
         }
       }
       logADCS(msg: "recreateTupleBlockArgument: \(bb.shortDescription)")
-      let newArg = bb.bridged.recreateTupleBlockArgument(arg.bridged, enumDict).argument
+      let newArg = bb.bridged.recreateTupleBlockArgument(
+        arg.bridged, enumDict, VectorOfClosureAndIdxInPayload(arrayOfClosureAndIdxInPayload)
+      ).argument
 
       if newArg.uses.count == 0 {
         continue
