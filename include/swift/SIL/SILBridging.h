@@ -1167,16 +1167,6 @@ struct BridgedClosureInfoCFG {
 using VectorOfBridgedClosureInfoCFG = std::vector<BridgedClosureInfoCFG>;
 
 struct BridgedAutoDiffClosureSpecializationHelper {
-  SWIFT_IMPORT_UNSAFE BridgedType rewriteBranchTracingEnum(
-      BridgedType enumType, BridgedFunction topVjp, /*TODO: operator[] const*/
-      std::unordered_map<
-          BridgedType,
-          llvm::DenseMap<
-              SwiftInt,
-              llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>>,
-          BridgedTypeHasher> &closuresBuffers,
-      const BranchTracingEnumDict &dict) const;
-
   SWIFT_IMPORT_UNSAFE BranchTracingEnumDict rewriteAllEnums(
       BridgedFunction topVjp, BridgedType topEnum,
       const VectorOfBridgedClosureInfoCFG &vectorOfClosureInfoCFG) const;
