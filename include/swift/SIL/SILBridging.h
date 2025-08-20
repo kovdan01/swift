@@ -541,6 +541,7 @@ struct BridgedFunction {
   bool isTrapNoReturn() const;
   bool isConvertPointerToPointerArgument() const;
   bool isAutodiffVJP() const;
+  bool isAutodiffBranchTracingEnumValid(BridgedType enumType) const;
   SwiftInt specializationLevel() const;
   SWIFT_IMPORT_UNSAFE BridgedSubstitutionMap getMethodSubstitutions(BridgedSubstitutionMap contextSubs,
                                                                     BridgedCanType selfType) const;
@@ -823,6 +824,8 @@ struct BridgedInstruction {
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedBasicBlock BranchInst_getTargetBlock() const;
   BRIDGED_INLINE SwiftInt SwitchEnumInst_getNumCases() const;
   BRIDGED_INLINE SwiftInt SwitchEnumInst_getCaseIndex(SwiftInt idx) const;
+  BRIDGED_INLINE OptionalBridgedBasicBlock
+  SwitchEnumInst_getSuccessorForDefault() const;
   BRIDGED_INLINE SwiftInt StoreInst_getStoreOwnership() const;
   BRIDGED_INLINE SwiftInt AssignInst_getAssignOwnership() const;
   BRIDGED_INLINE MarkDependenceKind MarkDependenceInst_dependenceKind() const;
@@ -963,8 +966,13 @@ struct BridgedBasicBlock {
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE OptionalBridgedInstruction getLastInst() const;
   BRIDGED_INLINE SwiftInt getNumArguments() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument getArgument(SwiftInt index) const;
-  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument
-  addBlockArgument(BridgedType type, BridgedValue::Ownership ownership) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument addBlockArgument(BridgedType type, BridgedValue::Ownership ownership) const;
+  SWIFT_IMPORT_UNSAFE BridgedArgument
+  recreateEnumBlockArgument(BridgedArgument arg) const;
+  SWIFT_IMPORT_UNSAFE BridgedArgument
+  recreateTupleBlockArgument(BridgedArgument arg) const;
+  SWIFT_IMPORT_UNSAFE BridgedArgument
+  recreateOptionalBlockArgument(BridgedType optionalType) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument addFunctionArgument(BridgedType type) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument insertFunctionArgument(SwiftInt atPosition, BridgedType type,
                                                                             BridgedValue::Ownership ownership,
@@ -1340,8 +1348,13 @@ struct BridgedBuilder{
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createStructElementAddr(BridgedValue addr,
                                                                                 SwiftInt fieldIndex) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createDestructureStruct(BridgedValue str) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTuple(BridgedType type,
+                                                                    BridgedValueArray elements) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
-  createTuple(BridgedType type, BridgedValueArray elements) const;
+  createTuple(BridgedValueArray elements) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
+  createPayloadTupleForBranchTracingEnum(BridgedValueArray elements,
+                                         BridgedType tupleWithLabels) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleExtract(BridgedValue str,
                                                                            SwiftInt elementIndex) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleElementAddr(BridgedValue addr,
