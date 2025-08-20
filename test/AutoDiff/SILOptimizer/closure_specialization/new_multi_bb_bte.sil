@@ -1,7 +1,7 @@
 /// Multi basic block VJP, pullback accepting branch tracing enum argument.
 
-// RUN: %target-sil-opt -sil-print-types -test-runner %s -o /dev/null 2>&1 | %FileCheck %s --check-prefixes=TRUNNER,CHECK
-// RUN: %target-sil-opt -sil-print-types -autodiff-closure-specialization1 -sil-combine %s -o - | %FileCheck %s --check-prefixes=COMBINE,CHECK
+// RUN: %target-sil-opt -sil-print-types -test-runner %s -o /dev/null 2>&1 | %FileCheck %s
+// UN: %target-sil-opt -sil-print-types -autodiff-closure-specialization1 -sil-combine %s -o - | %FileCheck %s --check-prefixes=COMBINE,CHECK
 
 // REQUIRES: swift_in_compiler
 
@@ -45,49 +45,19 @@ bb0(%0 : $Float, %1 : $_AD__$s4test5mul42yS2fSgF_bb2__Pred__src_0_wrt_0, %2 : $@
 // reverse-mode derivative of mul42(_:)
 sil hidden @$s4test5mul42yS2fSgFTJrSpSr : $@convention(thin) (Optional<Float>) -> (Float, @owned @callee_guaranteed (Float) -> Optional<Float>.TangentVector) {
 bb0(%0 : $Optional<Float>):
-  //=========== Test callsite and closure gathering logic ===========//
-  specify_test "autodiff_closure_specialize_get_pullback_closure_info"
-  // TRUNNER-LABEL: Specializing closures in function: $s4test5mul42yS2fSgFTJrSpSr
-  // TRUNNER:       PartialApply of pullback:   %[[#]] = partial_apply [callee_guaranteed] %[[#]](%[[#]], %[[#]]) : $@convention(thin) (Float, @owned _AD__$s4test5mul42yS2fSgF_bb2__Pred__src_0_wrt_0, @owned @callee_guaranteed (Float) -> Float) -> Optional<Float>.TangentVector
-  // TRUNNER-NEXT:  Passed in closures:
-  // TRUNNER-NEXT:  1.   %[[#]] = partial_apply [callee_guaranteed] %[[#]](%[[#]], %[[#]]) : $@convention(thin) (Float, Float, Float) -> (Float, Float)
-  // TRUNNER-EMPTY:
-
-  //=========== Test specialized function signature and body ===========//
-  specify_test "autodiff_closure_specialize_specialized_function_signature_and_body"
-  // TRUNNER-LABEL: Generated specialized function: $s4test5mul42yS2fSgFTJpSpSr073$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktj1_k5FZSf_K6SfcfU_S2fTf1nnc_n
-  // CHECK:         sil private [signature_optimized_thunk] [always_inline] @$s4test5mul42yS2fSgFTJpSpSr073$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktj1_k5FZSf_K6SfcfU_S2fTf1nnc_n : $@convention(thin) (Float, @owned _AD__$s4test5mul42yS2fSgF_bb2__Pred__src_0_wrt_0, Float, Float) -> Optional<Float>.TangentVector {
-  // CHECK:         bb0(%0 : $Float, %1 : $_AD__$s4test5mul42yS2fSgF_bb2__Pred__src_0_wrt_0, %2 : $Float, %3 : $Float):
-  // CHECK:           %[[#A4:]] = function_ref @$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float, Float, Float) -> (Float, Float)
-  // CHECK:           %[[#A5:]] = partial_apply [callee_guaranteed] %[[#A4]](%2, %3) : $@convention(thin) (Float, Float, Float) -> (Float, Float)
-  // CHECK:           %[[#A6:]] = function_ref @$sS3fIegydd_TJSpSSUpSrUSUP : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float)) -> Float
-  // TRUNNER:         %[[#A7:]] = partial_apply [callee_guaranteed] %[[#A6]](%[[#A5]]) : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float)) -> Float
-  // TRUNNER:         %[[#A8:]] = apply %[[#A7]](%0) : $@callee_guaranteed (Float) -> Float
-  // COMBINE-NOT:     = partial_apply
-  // COMBINE:         %[[#A8:]] = apply %[[#A6]](%0, %[[#A5]]) : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float)) -> Float
-  // TRUNNER:         strong_release %[[#A7]] : $@callee_guaranteed (Float) -> Float
-  // CHECK:           %[[#A10:]] = enum $Optional<Float>, #Optional.some!enumelt, %[[#A8]] : $Float
-  // CHECK:           %[[#A11:]] = struct $Optional<Float>.TangentVector (%[[#A10]] : $Optional<Float>)
-  // CHECK:           return %[[#A11]] : $Optional<Float>.TangentVector
-
   //=========== Test rewritten body ===========//
-  specify_test "autodiff_closure_specialize_rewritten_caller_body"
-  // TRUNNER-LABEL: Rewritten caller body for: $s4test5mul42yS2fSgFTJrSpSr:
-  // CHECK:         sil hidden @$s4test5mul42yS2fSgFTJrSpSr : $@convention(thin) (Optional<Float>) -> (Float, @owned @callee_guaranteed (Float) -> Optional<Float>.TangentVector) {
-  // CHECK:         bb1(%2 : $Float):
-  // CHECK:         %[[#B4:]] = struct $Float (%[[#]] : $Builtin.FPIEEE32)
-  // TRUNNER:       %[[#B10:]] = function_ref @$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float, Float, Float) -> (Float, Float)
-  // TRUNNER:       %[[#B11:]] = partial_apply [callee_guaranteed] %[[#B10]](%2, %[[#B4]]) : $@convention(thin) (Float, Float, Float) -> (Float, Float)
-  // TRUNNER:       %[[#B12:]] = function_ref @$sS3fIegydd_TJSpSSUpSrUSUP : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float)) -> Float
-  // TRUNNER:       %[[#B13:]] = partial_apply [callee_guaranteed] %[[#B12]](%[[#B11]]) : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float)) -> Float
-  // TRUNNER:       %[[#B14:]] = function_ref @$s4test5mul42yS2fSgFTJpSpSr : $@convention(thin) (Float, @owned _AD__$s4test5mul42yS2fSgF_bb2__Pred__src_0_wrt_0, @owned @callee_guaranteed (Float) -> Float) -> Optional<Float>.TangentVector
-  // COMBINE-NOT:   = partial_apply
-  // COMBINE-NOT:   = function_ref
-  // CHECK:         %[[#B15:]] = function_ref @$s4test5mul42yS2fSgFTJpSpSr073$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktj1_k5FZSf_K6SfcfU_S2fTf1nnc_n : $@convention(thin) (Float, @owned _AD__$s4test5mul42yS2fSgF_bb2__Pred__src_0_wrt_0, Float, Float) -> Optional<Float>.TangentVector
-  // CHECK:         %[[#B16:]] = partial_apply [callee_guaranteed] %[[#B15]](%[[#]], %2, %[[#B4]]) : $@convention(thin) (Float, @owned _AD__$s4test5mul42yS2fSgF_bb2__Pred__src_0_wrt_0, Float, Float) -> Optional<Float>.TangentVector
-  // TRUNNER:       release_value %[[#B11]] : $@callee_guaranteed (Float) -> (Float, Float)
-  // CHECK:         %[[#B18:]] = tuple (%[[#]] : $Float, %[[#B16]] : $@callee_guaranteed (Float) -> Optional<Float>.TangentVector)
-  // CHECK:         return %[[#B18]]
+  specify_test "autodiff_specialize_branch_tracing_enums"
+  // CHECK-LABEL: Specialized branch tracing enum dict for VJP $s4test5mul42yS2fSgFTJrSpSr contains 1 elements:
+  // CHECK-NEXT:  non-specialized BTE 0: enum _AD__$s4test5mul42yS2fSgF_bb2__Pred__src_0_wrt_0 {
+  // CHECK-NEXT:    case bb0(())
+  // CHECK-NEXT:  }
+  // CHECK-NEXT:  specialized BTE 0: enum _AD__$s4test5mul42yS2fSgF_bb2__Pred__src_0_wrt_0_spec {
+  // CHECK-NEXT:    case bb0(())
+  // CHECK-NEXT:  }
+
+  specify_test "autodiff_specialize_bte_arg_in_vjp_bb"
+
+  specify_test "autodiff_specialize_payload_arg_in_pb_bb"
 
   switch_enum %0, case #Optional.some!enumelt: bb1, case #Optional.none!enumelt: bb2
 
@@ -299,63 +269,32 @@ bb6(%122 : $Builtin.FPIEEE32):
 // reverse-mode derivative of Class.method()
 sil hidden @$s4test5ClassV6methodSfyFTJrSpSr : $@convention(method) (Class) -> (Float, @owned @callee_guaranteed (Float) -> Class.TangentVector) {
 bb0(%0 : $Class):
-  //=========== Test callsite and closure gathering logic ===========//
-  specify_test "autodiff_closure_specialize_get_pullback_closure_info"
-  // TRUNNER-LABEL: Specializing closures in function: $s4test5ClassV6methodSfyFTJrSpSr
-  // TRUNNER:       PartialApply of pullback:   %[[#]] = partial_apply [callee_guaranteed] %[[#]](%[[#]], %[[#]], %[[#C42:]]) : $@convention(thin) (Float, @owned _AD__$s4test5ClassV6methodSfyF_bb3__Pred__src_0_wrt_0, @owned @callee_guaranteed (Float) -> Float, @owned @callee_guaranteed (Float) -> (Float, Float)) -> Class.TangentVector
-  // TRUNNER-NEXT:  Passed in closures:
-  // TRUNNER-NEXT:  1.   %[[#]] = partial_apply [callee_guaranteed] %[[#C7:]](%[[#C34:]], %[[#]]) : $@convention(thin) (Float, Float, Float) -> (Float, Float)
-  // TRUNNER-NEXT:  2.   %[[#C42]] = partial_apply [callee_guaranteed] %[[#C7]](%[[#C34]], %[[#]]) : $@convention(thin) (Float, Float, Float) -> (Float, Float)
-  // TRUNNER-EMPTY:
-
-  //=========== Test specialized function signature and body ===========//
-  specify_test "autodiff_closure_specialize_specialized_function_signature_and_body"
-  // TRUNNER-LABEL: Generated specialized function: $s4test5ClassV6methodSfyFTJpSpSr073$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktk1_l5FZSf_L6SfcfU_S2fAES2fTf1nncc_n
-  // CHECK:         sil private @$s4test5ClassV6methodSfyFTJpSpSr073$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktk1_l5FZSf_L6SfcfU_S2fAES2fTf1nncc_n : $@convention(thin) (Float, @owned _AD__$s4test5ClassV6methodSfyF_bb3__Pred__src_0_wrt_0, Float, Float, Float, Float) -> Class.TangentVector {
-  // CHECK:         bb0(%0 : $Float, %1 : $_AD__$s4test5ClassV6methodSfyF_bb3__Pred__src_0_wrt_0, %2 : $Float, %3 : $Float, %4 : $Float, %5 : $Float):
-  // CHECK:           %[[#D6:]] = function_ref @$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float, Float, Float) -> (Float, Float)
-  // CHECK:           %[[#D7:]] = partial_apply [callee_guaranteed] %[[#D6]](%2, %3) : $@convention(thin) (Float, Float, Float) -> (Float, Float)
-  // CHECK:           %[[#D8:]] = function_ref @$sS3fIegydd_TJSpSSUpSrUSUP : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float)) -> Float
-  // TRUNNER:         %[[#D9:]] = partial_apply [callee_guaranteed] %[[#D8]](%[[#D7]]) : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float)) -> Float
-  // COMBINE-NOT:     = partial_apply
-  // CHECK:           %[[#D10:]] = function_ref @$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float, Float, Float) -> (Float, Float)
-  // TRUNNER:         %[[#D11:]] = partial_apply [callee_guaranteed] %[[#D10]](%4, %5) : $@convention(thin) (Float, Float, Float) -> (Float, Float)
-  // COMBINE-NOT:     = partial_apply
-  // TRUNNER:         %[[#D13:]] = apply %[[#D11]](%0) : $@callee_guaranteed (Float) -> (Float, Float)
-  // COMBINE:         %[[#D13:]] = apply %[[#D10]](%0, %4, %5) : $@convention(thin) (Float, Float, Float) -> (Float, Float)
-  // TRUNNER:         strong_release %[[#D11]] : $@callee_guaranteed (Float) -> (Float, Float)
-  // CHECK:           %[[#D15:]] = tuple_extract %[[#D13]] : $(Float, Float), 0
-  // TRUNNER:         %[[#]] = apply %[[#D9]](%[[#D15]]) : $@callee_guaranteed (Float) -> Float
-  // COMBINE:         %[[#]] = apply %[[#D8]](%[[#D15]], %[[#D7]]) : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float)) -> Float
-  // TRUNNER:         strong_release %[[#D9]] : $@callee_guaranteed (Float) -> Float
-
   //=========== Test rewritten body ===========//
-  specify_test "autodiff_closure_specialize_rewritten_caller_body"
-  // TRUNNER-LABEL: Rewritten caller body for: $s4test5ClassV6methodSfyFTJrSpSr:
-  // CHECK:         sil hidden @$s4test5ClassV6methodSfyFTJrSpSr : $@convention(method) (Class) -> (Float, @owned @callee_guaranteed (Float) -> Class.TangentVector) {
-  // CHECK:         bb0(%0 : $Class):
-  // CHECK:           %[[#E2:]] = struct $Float
-  // CHECK:           %[[#E7:]] = function_ref @$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float, Float, Float) -> (Float, Float)
-  // CHECK:           %[[#E9:]] = function_ref @$sS3fIegydd_TJSpSSUpSrUSUP : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float)) -> Float
-  // CHECK:         bb1(%[[#]] : $Float):
-  // CHECK:         bb2:
-  // CHECK:         bb3(%[[#E33:]] : $_AD__$s4test5ClassV6methodSfyF_bb3__Pred__src_0_wrt_0, %[[#E34:]] : $Float):
-  // CHECK:           %[[#E37:]] = struct $Float
+  specify_test "autodiff_specialize_branch_tracing_enums"
+  // CHECK-LABEL: Specialized branch tracing enum dict for VJP $s4test5ClassV6methodSfyFTJrSpSr contains 3 elements:
+  // CHECK-NEXT:  non-specialized BTE 0: enum _AD__$s4test5ClassV6methodSfyF_bb1__Pred__src_0_wrt_0 {
+  // CHECK-NEXT:    case bb0(((Float) -> Float, (Class.TangentVector) -> (Float, Optional<Float>.TangentVector)))
+  // CHECK-NEXT:  }
+  // CHECK-NEXT:  specialized BTE 0: enum _AD__$s4test5ClassV6methodSfyF_bb1__Pred__src_0_wrt_0_spec {
+  // CHECK-NEXT:    case bb0(((Float) -> Float, (Class.TangentVector) -> (Float, Optional<Float>.TangentVector)))
+  // CHECK-NEXT:  }
+  // CHECK-NEXT:  non-specialized BTE 1: enum _AD__$s4test5ClassV6methodSfyF_bb2__Pred__src_0_wrt_0 {
+  // CHECK-NEXT:    case bb0(((Float) -> Float, (Class.TangentVector) -> (Float, Optional<Float>.TangentVector)))
+  // CHECK-NEXT:  }
+  // CHECK-NEXT:  specialized BTE 1: enum _AD__$s4test5ClassV6methodSfyF_bb2__Pred__src_0_wrt_0_spec {
+  // CHECK-NEXT:    case bb0(((Float) -> Float, (Class.TangentVector) -> (Float, Optional<Float>.TangentVector)))
+  // CHECK-NEXT:  }
+  // CHECK-NEXT:  non-specialized BTE 2: enum _AD__$s4test5ClassV6methodSfyF_bb3__Pred__src_0_wrt_0 {
+  // CHECK-NEXT:    case bb2((predecessor: _AD__$s4test5ClassV6methodSfyF_bb2__Pred__src_0_wrt_0, (Float) -> Float))
+  // CHECK-NEXT:    case bb1((predecessor: _AD__$s4test5ClassV6methodSfyF_bb1__Pred__src_0_wrt_0, (Float) -> (Float, Float)))
+  // CHECK-NEXT:  }
+  // CHECK-NEXT:  specialized BTE 2: enum _AD__$s4test5ClassV6methodSfyF_bb3__Pred__src_0_wrt_0_spec {
+  // CHECK-NEXT:    case bb2((predecessor: _AD__$s4test5ClassV6methodSfyF_bb2__Pred__src_0_wrt_0_spec, (Float) -> Float))
+  // CHECK-NEXT:    case bb1((predecessor: _AD__$s4test5ClassV6methodSfyF_bb1__Pred__src_0_wrt_0_spec, (Float) -> (Float, Float)))
+  // CHECK-NEXT:  }
 
-  // TRUNNER:         %[[#E38:]] = partial_apply [callee_guaranteed] %[[#E7]](%[[#E34]], %[[#E2]]) : $@convention(thin) (Float, Float, Float) -> (Float, Float)
-  // TRUNNER:         %[[#]] = partial_apply [callee_guaranteed] %[[#E9]](%[[#E38]]) : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float)) -> Float
-  // TRUNNER:         %[[#E42:]] = partial_apply [callee_guaranteed] %[[#E7]](%[[#E34]], %[[#E37]]) : $@convention(thin) (Float, Float, Float) -> (Float, Float)
-  // TRUNNER:         %[[#]] = function_ref @$s4test5ClassV6methodSfyFTJpSpSr : $@convention(thin) (Float, @owned _AD__$s4test5ClassV6methodSfyF_bb3__Pred__src_0_wrt_0, @owned @callee_guaranteed (Float) -> Float, @owned @callee_guaranteed (Float) -> (Float, Float)) -> Class.TangentVector
-
-  // COMBINE-NOT:     = partial_apply
-  // COMBINE-NOT:     = function_ref @$s4test5ClassV6methodSfyFTJpSpSr
-
-  // CHECK:           %[[#E44:]] = function_ref @$s4test5ClassV6methodSfyFTJpSpSr073$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktk1_l5FZSf_L6SfcfU_S2fAES2fTf1nncc_n : $@convention(thin) (Float, @owned _AD__$s4test5ClassV6methodSfyF_bb3__Pred__src_0_wrt_0, Float, Float, Float, Float) -> Class.TangentVector
-  // CHECK:           %[[#E45:]] = partial_apply [callee_guaranteed] %[[#E44]](%[[#E33]], %[[#E34]], %[[#E2]], %[[#E34]], %[[#E37]]) : $@convention(thin) (Float, @owned _AD__$s4test5ClassV6methodSfyF_bb3__Pred__src_0_wrt_0, Float, Float, Float, Float) -> Class.TangentVector
-  // TRUNNER:         release_value %[[#E38]] : $@callee_guaranteed (Float) -> (Float, Float)
-  // TRUNNER:         release_value %[[#E42]] : $@callee_guaranteed (Float) -> (Float, Float)
-  // CHECK:           %[[#E48:]] = tuple (%[[#]] : $Float, %[[#E45]] : $@callee_guaranteed (Float) -> Class.TangentVector)
-  // CHECK:           return %[[#E48]]
+  specify_test "autodiff_specialize_bte_arg_in_vjp_bb"
+  specify_test "autodiff_specialize_payload_arg_in_pb_bb"
 
   %2 = float_literal $Builtin.FPIEEE32, 0x3F800000 // 1
   %3 = struct $Float (%2)
@@ -568,72 +507,32 @@ bb3(%118 : $Builtin.FPIEEE32, %119 : $Builtin.FPIEEE32, %120 : $Builtin.FPIEEE32
 sil hidden @$s4test14cond_tuple_varyS2fFTJrSpSr : $@convention(thin) (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) {
 [global: ]
 bb0(%0 : $Float):
-  //=========== Test callsite and closure gathering logic ===========//
-  specify_test "autodiff_closure_specialize_get_pullback_closure_info"
-  // TRUNNER-LABEL: Specializing closures in function: $s4test14cond_tuple_varyS2fFTJrSpSr
-  // TRUNNER:       PartialApply of pullback:   %[[#]] = partial_apply [callee_guaranteed] %[[#]](%[[#]], %[[#F1:]], %[[#F2:]], %[[#F3:]]) : $@convention(thin) (Float, @owned _AD__$s4test14cond_tuple_varyS2fF_bb3__Pred__src_0_wrt_0, @owned @callee_guaranteed (Float) -> (Float, Float), @owned @callee_guaranteed (Float) -> (Float, Float), @owned @callee_guaranteed (Float) -> (Float, Float)) -> Float
-  // TRUNNER-NEXT:  Passed in closures:
-  // TRUNNER-NEXT:  1.   %[[#F1]] = thin_to_thick_function %[[#]] : $@convention(thin) (Float) -> (Float, Float) to $@callee_guaranteed (Float) -> (Float, Float)
-  // TRUNNER-NEXT:  2.   %[[#F2]] = thin_to_thick_function %[[#]] : $@convention(thin) (Float) -> (Float, Float) to $@callee_guaranteed (Float) -> (Float, Float)
-  // TRUNNER-NEXT:  3.   %[[#F3]] = thin_to_thick_function %[[#]] : $@convention(thin) (Float) -> (Float, Float) to $@callee_guaranteed (Float) -> (Float, Float)
-  // TRUNNER-EMPTY:
-
-  //=========== Test specialized function signature and body ===========//
-  specify_test "autodiff_closure_specialize_specialized_function_signature_and_body"
-  // TRUNNER-LABEL: Generated specialized function: $s4test14cond_tuple_varyS2fFTJpSpSr067$sSf16_DifferentiationE7_vjpAdd3lhs3rhsSf5value_Sf_SftSfc8pullbacktl1_m5FZSf_M6SfcfU_0ef1_g4E12_i16Subtract3lhs3rhsk1_l1_mnl1_mo1_mP2U_ACTf1nnccc_n
-  // CHECK:         sil private @$s4test14cond_tuple_varyS2fFTJpSpSr067$sSf16_DifferentiationE7_vjpAdd3lhs3rhsSf5value_Sf_SftSfc8pullbacktl1_m5FZSf_M6SfcfU_0ef1_g4E12_i16Subtract3lhs3rhsk1_l1_mnl1_mo1_mP2U_ACTf1nnccc_n : $@convention(thin) (Float, @owned _AD__$s4test14cond_tuple_varyS2fF_bb3__Pred__src_0_wrt_0) -> Float {
-  // CHECK:         bb0(%0 : $Float, %1 : $_AD__$s4test14cond_tuple_varyS2fF_bb3__Pred__src_0_wrt_0):
-  // CHECK:           %[[#F2:]] = function_ref @$sSf16_DifferentiationE7_vjpAdd3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float) -> (Float, Float)
-  // TRUNNER:         %[[#F3:]] = thin_to_thick_function %[[#F2]] : $@convention(thin) (Float) -> (Float, Float) to $@callee_guaranteed (Float) -> (Float, Float)
-  // COMBINE-NOT:     = thin_to_thick_function
-  // CHECK:           %[[#F4:]] = function_ref @$sSf16_DifferentiationE12_vjpSubtract3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float) -> (Float, Float)
-  // TRUNNER:         %[[#F5:]] = thin_to_thick_function %[[#F4]] : $@convention(thin) (Float) -> (Float, Float) to $@callee_guaranteed (Float) -> (Float, Float)
-  // COMBINE-NOT:     = thin_to_thick_function
-  // CHECK:           %[[#F6:]] = function_ref @$sSf16_DifferentiationE7_vjpAdd3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float) -> (Float, Float)
-  // TRUNNER:         %[[#F7:]] = thin_to_thick_function %[[#F6]] : $@convention(thin) (Float) -> (Float, Float) to $@callee_guaranteed (Float) -> (Float, Float)
-  // COMBINE-NOT:     = thin_to_thick_function
-  // CHECK:           %[[#F8:]] = float_literal $Builtin.FPIEEE32, 0x0 // 0
-  // TRUNNER:         %[[#F9:]] = apply %[[#F7]](%0) : $@callee_guaranteed (Float) -> (Float, Float)
-  // COMBINE:         %[[#F9:]] = apply %[[#F6]](%0) : $@callee_guaranteed (Float) -> (Float, Float)
-  // TRUNNER:         strong_release %[[#F7]] : $@callee_guaranteed (Float) -> (Float, Float)
-  // CHECK:           %[[#F11:]] = tuple_extract %[[#F9]] : $(Float, Float), 0
-  // TRUNNER:         %[[#F15:]] = apply %[[#F5]](%[[#F11]]) : $@callee_guaranteed (Float) -> (Float, Float)
-  // COMBINE:         %[[#F15:]] = apply %[[#F4]](%[[#F11]]) : $@callee_guaranteed (Float) -> (Float, Float)
-  // TRUNNER:         strong_release %[[#F5]] : $@callee_guaranteed (Float) -> (Float, Float)
-  // CHECK:           %[[#F17:]] = tuple_extract %[[#F15]] : $(Float, Float), 0
-  // TRUNNER:         %[[#]] = apply %[[#F3]](%[[#F17]]) : $@callee_guaranteed (Float) -> (Float, Float)
-  // COMBINE:         %[[#]] = apply %[[#F2]](%[[#F17]]) : $@callee_guaranteed (Float) -> (Float, Float)
-  // TRUNNER:         strong_release %[[#F3]] : $@callee_guaranteed (Float) -> (Float, Float)
-  // CHECK:         {{^}}bb1{{.*}}:
-  // CHECK:         {{^}}bb2{{.*}}:
-  // CHECK:         {{^}}bb3{{.*}}:
-
   //=========== Test rewritten body ===========//
-  specify_test "autodiff_closure_specialize_rewritten_caller_body"
-  // TRUNNER-LABEL: Rewritten caller body for: $s4test14cond_tuple_varyS2fFTJrSpSr:
-  // CHECK:         sil hidden @$s4test14cond_tuple_varyS2fFTJrSpSr : $@convention(thin) (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) {
-  // CHECK:         bb0(%0 : $Float):
-  // CHECK:           %[[#G7:]] = function_ref @$sSf16_DifferentiationE7_vjpAdd3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float) -> (Float, Float)
-  // CHECK:           %[[#G11:]] = function_ref @$sSf16_DifferentiationE12_vjpSubtract3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float) -> (Float, Float)
-  // CHECK:         bb1:
-  // CHECK:         bb2:
-  // CHECK:         bb3(%[[#G31:]] : $_AD__$s4test14cond_tuple_varyS2fF_bb3__Pred__src_0_wrt_0, %[[#]] : $Builtin.FPIEEE32, %[[#]] : $Builtin.FPIEEE32):
+  specify_test "autodiff_specialize_branch_tracing_enums"
+  // CHECK-LABEL: Specialized branch tracing enum dict for VJP $s4test14cond_tuple_varyS2fFTJrSpSr contains 3 elements:
+  // CHECK-NEXT:  non-specialized BTE 0: enum _AD__$s4test14cond_tuple_varyS2fF_bb1__Pred__src_0_wrt_0 {
+  // CHECK-NEXT:    case bb0(((Float) -> (Float, Float), (Float) -> (Float, Float)))
+  // CHECK-NEXT:  }
+  // CHECK-NEXT:  specialized BTE 0: enum _AD__$s4test14cond_tuple_varyS2fF_bb1__Pred__src_0_wrt_0_spec {
+  // CHECK-NEXT:    case bb0(((Float) -> (Float, Float), (Float) -> (Float, Float)))
+  // CHECK-NEXT:  }
+  // CHECK-NEXT:  non-specialized BTE 1: enum _AD__$s4test14cond_tuple_varyS2fF_bb2__Pred__src_0_wrt_0 {
+  // CHECK-NEXT:    case bb0(((Float) -> (Float, Float), (Float) -> (Float, Float)))
+  // CHECK-NEXT:  }
+  // CHECK-NEXT:  specialized BTE 1: enum _AD__$s4test14cond_tuple_varyS2fF_bb2__Pred__src_0_wrt_0_spec {
+  // CHECK-NEXT:    case bb0(((Float) -> (Float, Float), (Float) -> (Float, Float)))
+  // CHECK-NEXT:  }
+  // CHECK-NEXT:  non-specialized BTE 2: enum _AD__$s4test14cond_tuple_varyS2fF_bb3__Pred__src_0_wrt_0 {
+  // CHECK-NEXT:    case bb2((predecessor: _AD__$s4test14cond_tuple_varyS2fF_bb2__Pred__src_0_wrt_0, (Float) -> Float))
+  // CHECK-NEXT:    case bb1((predecessor: _AD__$s4test14cond_tuple_varyS2fF_bb1__Pred__src_0_wrt_0, (Float) -> (Float, Float), (Float) -> (Float, Float)))
+  // CHECK-NEXT:  }
+  // CHECK-NEXT:  specialized BTE 2: enum _AD__$s4test14cond_tuple_varyS2fF_bb3__Pred__src_0_wrt_0_spec {
+  // CHECK-NEXT:    case bb2((predecessor: _AD__$s4test14cond_tuple_varyS2fF_bb2__Pred__src_0_wrt_0_spec, (Float) -> Float))
+  // CHECK-NEXT:    case bb1((predecessor: _AD__$s4test14cond_tuple_varyS2fF_bb1__Pred__src_0_wrt_0_spec, (Float) -> (Float, Float), (Float) -> (Float, Float)))
+  // CHECK-NEXT:  }
 
-  // COMBINE-NOT:     = thin_to_thick_function
-  // COMBINE-NOT:     = function_ref @$s4test14cond_tuple_varyS2fFTJpSpSr
-
-  // TRUNNER:         %[[#G33:]] = thin_to_thick_function %[[#G7]] : $@convention(thin) (Float) -> (Float, Float) to $@callee_guaranteed (Float) -> (Float, Float)
-  // TRUNNER:         %[[#G34:]] = thin_to_thick_function %[[#G11]] : $@convention(thin) (Float) -> (Float, Float) to $@callee_guaranteed (Float) -> (Float, Float)
-  // TRUNNER:         %[[#G35:]] = thin_to_thick_function %[[#G7]] : $@convention(thin) (Float) -> (Float, Float) to $@callee_guaranteed (Float) -> (Float, Float)
-  // TRUNNER:         %[[#]] = function_ref @$s4test14cond_tuple_varyS2fFTJpSpSr : $@convention(thin) (Float, @owned _AD__$s4test14cond_tuple_varyS2fF_bb3__Pred__src_0_wrt_0, @owned @callee_guaranteed (Float) -> (Float, Float), @owned @callee_guaranteed (Float) -> (Float, Float), @owned @callee_guaranteed (Float) -> (Float, Float)) -> Float
-
-  // CHECK:           %[[#G41:]] = function_ref @$s4test14cond_tuple_varyS2fFTJpSpSr067$sSf16_DifferentiationE7_vjpAdd3lhs3rhsSf5value_Sf_SftSfc8pullbacktl1_m5FZSf_M6SfcfU_0ef1_g4E12_i16Subtract3lhs3rhsk1_l1_mnl1_mo1_mP2U_ACTf1nnccc_n : $@convention(thin) (Float, @owned _AD__$s4test14cond_tuple_varyS2fF_bb3__Pred__src_0_wrt_0) -> Float
-  // CHECK:           %[[#G42:]] = partial_apply [callee_guaranteed] %[[#G41]](%[[#G31]]) : $@convention(thin) (Float, @owned _AD__$s4test14cond_tuple_varyS2fF_bb3__Pred__src_0_wrt_0) -> Float
-  // TRUNNER:         release_value %[[#G33]] : $@callee_guaranteed (Float) -> (Float, Float)
-  // TRUNNER:         release_value %[[#G34]] : $@callee_guaranteed (Float) -> (Float, Float)
-  // TRUNNER:         release_value %[[#G35]] : $@callee_guaranteed (Float) -> (Float, Float)
-  // CHECK:           %[[#G46:]] = tuple (%[[#]] : $Float, %[[#G42]] : $@callee_guaranteed (Float) -> Float)
-  // CHECK:           return %[[#G46]]
+  specify_test "autodiff_specialize_bte_arg_in_vjp_bb"
+  specify_test "autodiff_specialize_payload_arg_in_pb_bb"
 
   %4 = struct_extract %0, #Float._value
   %5 = builtin "fadd_FPIEEE32"(%4, %4) : $Builtin.FPIEEE32
