@@ -178,9 +178,6 @@ struct BridgedPassContext {
                                                                BridgedFunction applySiteCallee) const;
   BridgedOwnedString mangleWithBoxToStackPromotedArgs(BridgedArrayRef bridgedPromotedArgIndices,
                                                       BridgedFunction bridgedOriginalFunction) const;
-  BridgedOwnedString
-  mangleWithAutoDiffBranchTracingEnum(BridgedValue arg, SwiftInt argIdx,
-                                      BridgedFunction pullback) const;
 
   void inlineFunction(BridgedInstruction apply, bool mandatoryInline) const;
   BRIDGED_INLINE bool eliminateDeadAllocations(BridgedFunction f) const;

@@ -1,5 +1,5 @@
 // RUN: %target-sil-opt -sil-print-types -test-runner %s -o /dev/null 2>&1 | %FileCheck %s --check-prefixes=TRUNNER,CHECK
-// RUN: %target-sil-opt -sil-print-types -autodiff-closure-specialization1 -sil-combine %s -o - | %FileCheck %s --check-prefixes=COMBINE,CHECK
+// RUN: %target-sil-opt -sil-print-types -autodiff-closure-specialization -sil-combine %s -o - | %FileCheck %s --check-prefixes=COMBINE,CHECK
 
 // REQUIRES: swift_in_compiler
 
