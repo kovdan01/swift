@@ -527,6 +527,17 @@ convertCases(SILType enumTy, const void * _Nullable enumCases, SwiftInt numEnumC
   return convertedCases;
 }
 
+BridgedOwnedString BridgedType::getEnumTypeCaseName(SwiftInt caseIdx) const {
+  EnumDecl *ed = unbridged().getEnumOrBoundGenericEnum();
+  assert(ed != nullptr);
+
+  for (const auto [idx, EED] : llvm::enumerate(ed->getAllElements()))
+    if (static_cast<SwiftInt>(idx) == caseIdx)
+      return EED->getNameStr();
+
+  assert(false);
+}
+
 BridgedInstruction BridgedBuilder::createSwitchEnumInst(BridgedValue enumVal, OptionalBridgedBasicBlock defaultBlock,
                                         const void * _Nullable enumCases, SwiftInt numEnumCases) const {
   return {unbridged().createSwitchEnum(regularLoc(),
