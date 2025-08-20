@@ -958,6 +958,13 @@ struct BridgedTypeHasher {
 using BranchTracingEnumDict =
     std::unordered_map<BridgedType, BridgedType, BridgedTypeHasher>;
 
+struct ClosureAndIdxInPayload {
+  BridgedInstruction closure;
+  SwiftInt idxInPayload;
+};
+
+using VectorOfClosureAndIdxInPayload = std::vector<ClosureAndIdxInPayload>;
+
 struct BridgedBasicBlock {
   SwiftObject obj;
 
@@ -976,10 +983,11 @@ struct BridgedBasicBlock {
   BRIDGED_INLINE SwiftInt getNumArguments() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument getArgument(SwiftInt index) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument addBlockArgument(BridgedType type, BridgedValue::Ownership ownership) const;
-  SWIFT_IMPORT_UNSAFE BridgedArgument
-  recreateEnumBlockArgument(BridgedArgument arg) const;
-  SWIFT_IMPORT_UNSAFE BridgedArgument
-  recreateTupleBlockArgument(BridgedArgument arg) const;
+  SWIFT_IMPORT_UNSAFE BridgedArgument recreateEnumBlockArgument(
+      BridgedArgument arg, const BranchTracingEnumDict &dict) const;
+  SWIFT_IMPORT_UNSAFE BridgedArgument recreateTupleBlockArgument(
+      BridgedArgument arg, const BranchTracingEnumDict &dict,
+      const VectorOfClosureAndIdxInPayload &closuresBuffersForPb) const;
   SWIFT_IMPORT_UNSAFE BridgedArgument
   recreateOptionalBlockArgument(BridgedType optionalType) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument addFunctionArgument(BridgedType type) const;
