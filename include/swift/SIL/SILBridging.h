@@ -263,6 +263,7 @@ struct BridgedType {
   BRIDGED_INLINE bool isExactSuperclassOf(BridgedType t) const;
   BRIDGED_INLINE bool isMarkedAsImmortal() const;
   BRIDGED_INLINE bool isAddressableForDeps(BridgedFunction f) const;
+  SWIFT_IMPORT_UNSAFE bool isAutodiffBranchTracingEnumInVJP(BridgedFunction vjp) const;
   BRIDGED_INLINE SWIFT_IMPORT_UNSAFE BridgedASTType getRawLayoutSubstitutedLikeType() const;
   BRIDGED_INLINE SWIFT_IMPORT_UNSAFE BridgedASTType getRawLayoutSubstitutedCountType() const;
   BRIDGED_INLINE SwiftInt getCaseIdxOfEnumType(BridgedStringRef name) const;
@@ -282,6 +283,8 @@ struct BridgedType {
   getTupleElementType(SwiftInt idx) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType getFunctionTypeWithNoEscape(bool withNoEscape) const;
   BRIDGED_INLINE BridgedArgumentConvention getCalleeConvention() const;
+  SWIFT_IMPORT_UNSAFE BridgedOwnedString
+  getEnumTypeCaseName(SwiftInt caseIdx) const;
 };
 
 // SIL Bridging
