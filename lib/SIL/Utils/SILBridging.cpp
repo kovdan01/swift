@@ -21,18 +21,18 @@
 #include "swift/AST/ParameterList.h"
 #include "swift/AST/SemanticAttrs.h"
 #include "swift/Basic/Assertions.h"
-#include "swift/SIL/SILContext.h"
-#include "swift/SIL/SILCloner.h"
 #include "swift/SIL/MemAccessUtils.h"
 #include "swift/SIL/OwnershipUtils.h"
 #include "swift/SIL/ParseTestSpecification.h"
 #include "swift/SIL/SILBuilder.h"
+#include "swift/SIL/SILCloner.h"
+#include "swift/SIL/SILContext.h"
 #include "swift/SIL/SILGlobalVariable.h"
 #include "swift/SIL/SILNode.h"
 #include "swift/SIL/Test.h"
-#include <string>
 #include <cstring>
 #include <stdio.h>
+#include <string>
 
 using namespace swift;
 
@@ -67,6 +67,9 @@ static std::unordered_map<
                                  std::pair<BridgedInstruction, SwiftInt>, 8>>,
     BridgedTypeHasher>
     closuresBuffers;
+
+static llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
+    closuresBuffersForPb;
 
 struct SILTypeHasher {
   unsigned operator()(const SILType &value) const {
@@ -229,6 +232,119 @@ static Type getPAICapturedArgTypes(const PartialApplyInst *pai,
   for (const SILValue &arg : pai->getArguments())
     paramTuple.emplace_back(arg->getType().getASTType(), Identifier{});
   return TupleType::get(paramTuple, ctx);
+}
+
+BridgedArgument
+BridgedBasicBlock::recreateEnumBlockArgument(BridgedArgument arg) const {
+  assert(!unbridged()->isEntry());
+  swift::ValueOwnershipKind oldOwnership =
+      arg.getArgument()->getOwnershipKind();
+
+  swift::SILArgument *oldArg = arg.getArgument();
+  unsigned index = oldArg->getIndex();
+  // TODO: switch to contains() after transition to C++20
+  assert(enumDict.find(oldArg->getType()) != enumDict.end());
+  SILType type = enumDict.at(oldArg->getType());
+  swift::SILPhiArgument *newArg =
+      unbridged()->insertPhiArgument(index, type, oldOwnership);
+  oldArg->replaceAllUsesWith(newArg);
+  eraseArgument(index + 1);
+  return {newArg};
+}
+
+BridgedArgument BridgedBasicBlock::recreateOptionalBlockArgument(
+    BridgedType optionalType) const {
+  swift::SILBasicBlock *bb = unbridged();
+  assert(!bb->isEntry());
+  SILArgument *oldArg = bb->getArgument(0);
+
+  SILModule &module = bb->getFunction()->getModule();
+
+  SILType silType = optionalType.unbridged();
+  assert(silType.getASTType()->isOptional());
+
+  swift::ValueOwnershipKind oldOwnership =
+      bb->getArgument(0)->getOwnershipKind();
+
+  CanType type =
+      silType.getASTType()->getOptionalObjectType()->getCanonicalType();
+  Lowering::AbstractionPattern pattern(
+      bb->getFunction()->getLoweredFunctionType()->getSubstGenericSignature(),
+      type);
+  SILType loweredType = module.Types.getLoweredType(
+      pattern, type, TypeExpansionContext::minimal());
+
+  swift::SILPhiArgument *newArg =
+      bb->insertPhiArgument(0, loweredType, oldOwnership);
+
+  oldArg->replaceAllUsesWith(newArg);
+  eraseArgument(1);
+
+  return {newArg};
+}
+
+BridgedArgument
+BridgedBasicBlock::recreateTupleBlockArgument(BridgedArgument arg) const {
+  swift::SILBasicBlock *bb = unbridged();
+  assert(!bb->isEntry());
+  swift::SILArgument *oldArg = arg.getArgument();
+  unsigned argIdx = oldArg->getIndex();
+  auto *oldTupleTy =
+      llvm::cast<swift::TupleType>(oldArg->getType().getASTType().getPointer());
+  llvm::SmallVector<swift::TupleTypeElt, 8> newTupleElTypes;
+  for (unsigned i = 0; i < oldTupleTy->getNumElements(); ++i) {
+    unsigned idxInClosuresBuffer = -1;
+    for (unsigned j = 0; j < closuresBuffersForPb.size(); ++j) {
+      if (closuresBuffersForPb[j].second == i) {
+        if (idxInClosuresBuffer != unsigned(-1)) {
+          assert(closuresBuffersForPb[j].first.unbridged() ==
+                 closuresBuffersForPb[idxInClosuresBuffer].first.unbridged());
+        }
+        idxInClosuresBuffer = j;
+      }
+    }
+
+    if (idxInClosuresBuffer == unsigned(-1)) {
+      Type type = oldTupleTy->getElementType(i);
+      for (const auto &[enumTypeOld, enumTypeNew] : enumDict) {
+        if (enumTypeOld.getDebugDescription() == "$" + type.getString()) {
+          assert(i == 0);
+          type = enumTypeNew.getASTType();
+        }
+      }
+      newTupleElTypes.emplace_back(type, oldTupleTy->getElement(i).getName());
+      continue;
+    }
+
+    CanType canType;
+    if (auto *pai = dyn_cast<PartialApplyInst>(
+            closuresBuffersForPb[idxInClosuresBuffer].first.unbridged())) {
+      canType = getPAICapturedArgTypes(pai, bb->getModule().getASTContext())
+                    ->getCanonicalType();
+    } else {
+      assert(isa<ThinToThickFunctionInst>(
+          closuresBuffersForPb[idxInClosuresBuffer].first.unbridged()));
+      canType = TupleType::get({}, bb->getModule().getASTContext())
+                    ->getCanonicalType();
+    }
+    if (oldTupleTy->getElementType(i)->isOptional()) {
+      assert(i + 1 == oldTupleTy->getNumElements());
+      canType = OptionalType::get(canType)->getCanonicalType();
+    }
+    newTupleElTypes.emplace_back(canType);
+  }
+  auto newTupleTy = swift::SILType::getFromOpaqueValue(
+      swift::TupleType::get(newTupleElTypes, bb->getModule().getASTContext()));
+
+  swift::ValueOwnershipKind oldOwnership =
+      bb->getArgument(argIdx)->getOwnershipKind();
+
+  swift::SILPhiArgument *newArg =
+      bb->insertPhiArgument(argIdx, newTupleTy, oldOwnership);
+  oldArg->replaceAllUsesWith(newArg);
+  eraseArgument(argIdx + 1);
+
+  return {newArg};
 }
 
 namespace {
@@ -702,6 +818,53 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteAllEnums(
   return dict;
 }
 
+BridgedOwnedString BridgedType::getEnumTypeCaseName(SwiftInt caseIdx) const {
+  EnumDecl *ed = unbridged().getEnumOrBoundGenericEnum();
+  SwiftInt idx = 0;
+  for (EnumElementDecl *elem : ed->getAllElements()) {
+    if (idx == caseIdx)
+      return elem->getNameStr();
+    ++idx;
+  }
+  assert(false);
+}
+
+BridgedInstruction
+BridgedBuilder::createOptionalSome(BridgedValue value) const {
+  EnumElementDecl *someEltDecl =
+      unbridged().getASTContext().getOptionalSomeDecl();
+  EnumInst *optionalSome = unbridged().createEnum(
+      loc.getLoc().getLocation(), value.getSILValue(), someEltDecl,
+      SILType::getOptionalType(value.getType().unbridged()),
+      value.getSILValue()->getOwnershipKind());
+  return optionalSome;
+}
+
+BridgedInstruction
+BridgedBuilder::createOptionalNone(BridgedValueArray tupleElements) const {
+  EnumElementDecl *noneEltDecl =
+      unbridged().getASTContext().getOptionalNoneDecl();
+
+  llvm::SmallVector<swift::SILValue, 16> elementValues;
+  llvm::ArrayRef<swift::SILValue> values =
+      tupleElements.getValues(elementValues);
+  llvm::SmallVector<swift::TupleTypeElt, 16> tupleTyElts;
+  tupleTyElts.reserve(values.size());
+  for (const swift::SILValue &value : values) {
+    tupleTyElts.emplace_back(value->getType().getASTType());
+  }
+  swift::Type tupleTy =
+      swift::TupleType::get(tupleTyElts, unbridged().getASTContext());
+  swift::SILType silTupleTy =
+      swift::SILType::getPrimitiveObjectType(tupleTy->getCanonicalType());
+
+  EnumInst *optionalNone =
+      unbridged().createEnum(loc.getLoc().getLocation(), SILValue(),
+                             noneEltDecl, SILType::getOptionalType(silTupleTy));
+
+  return optionalNone;
+}
+
 // MYTODO: copied from LinearMapInfo.cpp. Is this needed?
 /// Clone the generic parameters of the given generic signature and return a new
 /// `GenericParamList`.
@@ -717,6 +880,10 @@ static GenericParamList *cloneGenericParameters(ASTContext &ctx,
     clonedParams.push_back(clonedParam);
   }
   return GenericParamList::create(ctx, SourceLoc(), clonedParams, SourceLoc());
+}
+
+BridgedType BridgedType::mapTypeOutOfContext() const {
+  return {unbridged().mapTypeOutOfContext()};
 }
 
 BridgedType
