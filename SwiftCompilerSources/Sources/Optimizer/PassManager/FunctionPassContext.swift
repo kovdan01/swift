@@ -110,10 +110,6 @@ struct FunctionPassContext : MutatingContext {
     }
   }
 
-  func mangle(withBranchTracingEnum arg: Value, argIdx: Int, from pullback: Function) -> String {
-    String(taking: bridgedPassContext.mangleWithAutoDiffBranchTracingEnum(arg.bridged, argIdx, pullback.bridged))
-  }
-
   func createSpecializedFunctionDeclaration(from original: Function, withName specializedFunctionName: String,
                                             withParams specializedParameters: [ParameterInfo],
                                             makeThin: Bool = false,
