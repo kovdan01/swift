@@ -53,6 +53,9 @@ public func registerOptimizerTests() {
     localVariableReachingAssignmentsTest,
     rangeOverlapsPathTest,
     rewrittenCallerBodyTest,
+    specializeBranchTracingEnums,
+    specializeBTEArgInVjpBB,
+    specializePayloadArgInPullbackBB,
     specializedFunctionSignatureAndBodyTest,
     variableIntroducerTest
   )

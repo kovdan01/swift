@@ -100,10 +100,32 @@
 /// ```
 
 import AST
+import AutoDiffClosureSpecializationBridging
+import Cxx
+import CxxStdlib
 import SIL
 import SILBridging
 
 private let verbose = false
+
+// TODO: unify existing and new logging
+private let needLogADCS = true
+private var passRunCount = 0
+private func logADCS(prefix: String = "", msg: String) {
+  if !needLogADCS || passRunCount == 0 {
+    return
+  }
+  assert(passRunCount == 1 || passRunCount == 2)
+  let allLinesPrefix = "[ADCS][" + String(passRunCount) + "] "
+  let linesArray = msg.split(separator: "\n")
+  for (idx, line) in linesArray.enumerated() {
+    if idx == 0 {
+      debugLog(allLinesPrefix + prefix + line)
+    } else {
+      debugLog(allLinesPrefix + line)
+    }
+  }
+}
 
 private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
   if verbose {
@@ -118,6 +140,52 @@ let generalClosureSpecialization = FunctionPass(
   (function: Function, context: FunctionPassContext) in
   // TODO: Implement general closure specialization optimization
   print("NOT IMPLEMENTED")
+}
+
+struct EnumTypeAndCase {
+  var enumType: Type
+  var caseIdx: Int
+}
+
+// TODO: proper hash
+extension EnumTypeAndCase: Hashable {
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(1)
+  }
+}
+
+extension Type: Hashable {
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(1)
+  }
+}
+
+extension BridgedType: Hashable {
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(1)
+  }
+}
+
+typealias ClosureInfoCFG = (
+  closure: SingleValueInstruction,
+  subsetThunk: PartialApplyInst?,
+  idxInEnumPayload: Int, capturedArgs: [Value],
+  enumTypeAndCase: EnumTypeAndCase, payloadTuple: TupleInst,
+  throwingInfo: (optional: EnumInst, isNone: Bool)?
+)
+
+extension Type {
+  func isBranchTracingEnum(vjp: Function) -> Bool {
+    if !(self.isEnum && self.description.hasPrefix("$_AD__$s")) {
+      return false
+    }
+    assert(vjp.isAutodiffVJP)
+    return vjp.bridged.isAutodiffBranchTracingEnumValid(self.bridged)
+  }
+
+  func getEnumTypeCaseName(caseIdx: Int) -> String {
+    return String(taking: self.bridged.getEnumTypeCaseName(caseIdx))
+  }
 }
 
 let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-specialization") {
@@ -175,6 +243,172 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 
 private let specializationLevelLimit = 2
 
+private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApplyInst? {
+  let prefix = "getPartialApplyOfPullbackInExitVJPBB: failure reason "
+  var exitBBOpt = BasicBlock?(nil)
+  for block in vjp.blocks {
+    guard block.terminator as? ReturnInst != nil else {
+      continue
+    }
+    if exitBBOpt != nil {
+      logADCS(prefix: prefix, msg: "0")
+      return nil
+    }
+    exitBBOpt = block
+  }
+  if exitBBOpt == nil {
+    logADCS(prefix: prefix, msg: "1")
+    return nil
+  }
+  let ri = exitBBOpt!.terminator as! ReturnInst
+  if ri.returnedValue.definingInstruction == nil {
+    logADCS(prefix: prefix, msg: "2")
+    return nil
+  }
+
+  func handleConvertFunctionOrPartialApply(inst: Instruction) -> PartialApplyInst? {
+    let paiOpt = inst as? PartialApplyInst
+    let cfOpt = inst as? ConvertFunctionInst
+    if paiOpt != nil {
+      return paiOpt!
+    }
+    if cfOpt == nil {
+      logADCS(prefix: prefix, msg: "3")
+      let tttfOpt = inst as? ThinToThickFunctionInst
+      if tttfOpt != nil {
+        logADCS(msg: "  instruction: " + inst.description)
+        logADCS(msg: "  parent block begin")
+        logADCS(msg: "  " + inst.parentBlock.description)
+        logADCS(msg: "  parent block end")
+      }
+      return nil
+    }
+    let pai = cfOpt!.operands[0].value as? PartialApplyInst
+    if pai == nil {
+      logADCS(prefix: prefix, msg: "4")
+      logADCS(msg: "  value: " + cfOpt!.operands[0].value.description)
+      logADCS(msg: "  parent block begin")
+      logADCS(msg: "  " + cfOpt!.parentBlock.description)
+      logADCS(msg: "  parent block end")
+    }
+    return pai
+  }
+
+  let tiOpt = ri.returnedValue.definingInstruction as? TupleInst
+  if tiOpt == nil {
+    return handleConvertFunctionOrPartialApply(inst: ri.returnedValue.definingInstruction!)
+  }
+  let ti = tiOpt!
+  if ti.operands.count < 2 {
+    logADCS(prefix: prefix, msg: "5")
+    logADCS(msg: "  ti: " + ti.description)
+    logADCS(msg: "  parent block begin")
+    logADCS(msg: "  " + ti.parentBlock.description)
+    logADCS(msg: "  parent block end")
+    return nil
+  }
+  if ti.operands[ti.operands.count - 1].value.definingInstruction == nil {
+    logADCS(prefix: prefix, msg: "6")
+    logADCS(msg: "  ti: " + ti.description)
+    logADCS(msg: "  value: " + ti.operands[ti.operands.count - 1].value.description)
+    logADCS(msg: "  parent block begin")
+    logADCS(msg: "  " + ti.parentBlock.description)
+    logADCS(msg: "  parent block end")
+    return nil
+  }
+  return handleConvertFunctionOrPartialApply(
+    inst: ti.operands[ti.operands.count - 1].value.definingInstruction!)
+}
+
+private func getPullbackClosureInfoCFG(in caller: Function, _ context: FunctionPassContext)
+  -> PullbackClosureInfo?
+{
+  var pullbackClosureInfoOpt = PullbackClosureInfo?(nil)
+  var supportedClosuresCount = 0
+  var subsetThunkArr = [SingleValueInstruction]()
+
+  for inst in caller.instructions {
+    if let rootClosure = inst.asSupportedClosure {
+      logADCS(msg: "getPullbackClosureInfoCFG 0 \(rootClosure)")
+      supportedClosuresCount += 1
+
+      if rootClosure == getPartialApplyOfPullbackInExitVJPBB(vjp: rootClosure.parentFunction)! {
+        continue
+      }
+      logADCS(msg: "getPullbackClosureInfoCFG 1 \(rootClosure)")
+      if subsetThunkArr.contains(rootClosure) {
+        continue
+      }
+      logADCS(msg: "getPullbackClosureInfoCFG 2 \(rootClosure)")
+      let closureInfoArr = handleNonAppliesCFG(for: rootClosure, context)
+      logADCS(msg: "closureInfoArr.count = " + String(closureInfoArr.count))
+      if closureInfoArr.count == 0 {
+        continue
+      }
+      logADCS(msg: "getPullbackClosureInfoCFG 3 \(rootClosure)")
+      if pullbackClosureInfoOpt == nil {
+        pullbackClosureInfoOpt = PullbackClosureInfo(
+          paiOfPullback: getPartialApplyOfPullbackInExitVJPBB(vjp: caller)!)
+        logADCS(msg: "getPullbackClosureInfoCFG 4 \(rootClosure)")
+      }
+      for closureInfo in closureInfoArr {
+        pullbackClosureInfoOpt!.closureInfosCFG.append(closureInfo)
+        if closureInfo.subsetThunk != nil {
+          subsetThunkArr.append(closureInfo.subsetThunk!)
+        }
+      }
+    }
+  }
+
+  if supportedClosuresCount == 0 {
+    logADCS(msg: "No supported closures found in " + caller.name.string)
+  }
+
+  if pullbackClosureInfoOpt != nil {
+    var closureInfoNoneArr = [ClosureInfoCFG]()
+    for closureInfo in pullbackClosureInfoOpt!.closureInfosCFG {
+      if closureInfo.throwingInfo == nil {
+        continue
+      }
+      let branchTracingEnumCaseName = closureInfo.enumTypeAndCase.enumType.getEnumTypeCaseName(
+        caseIdx: closureInfo.enumTypeAndCase.caseIdx)
+      for inst in caller.instructions {
+        guard let ei = inst as? EnumInst else {
+          continue
+        }
+        if !ei.type.isBranchTracingEnum(vjp: caller) {
+          continue
+        }
+        if branchTracingEnumCaseName != ei.type.getEnumTypeCaseName(caseIdx: ei.caseIndex) {
+          continue
+        }
+        if closureInfo.enumTypeAndCase.enumType == ei.type {
+          continue
+        }
+        let enumTypeAndCase = EnumTypeAndCase(enumType: ei.type, caseIdx: ei.caseIndex)
+        let payloadTuple = ei.operands[0].value as! TupleInst
+        let noneOptional = payloadTuple.operands[payloadTuple.operands.count - 1].value as! EnumInst
+        closureInfoNoneArr.append(
+          ClosureInfoCFG(
+            closure: closureInfo.closure,
+            subsetThunk: closureInfo.subsetThunk,
+            idxInEnumPayload: closureInfo.idxInEnumPayload,
+            capturedArgs: closureInfo.capturedArgs,
+            enumTypeAndCase: enumTypeAndCase,
+            payloadTuple: payloadTuple,
+            throwingInfo: (optional: noneOptional, isNone: true)
+          )
+        )
+      }
+    }
+    for closureInfo in closureInfoNoneArr {
+      pullbackClosureInfoOpt!.closureInfosCFG.append(closureInfo)
+    }
+  }
+
+  return pullbackClosureInfoOpt
+}
+
 private func getPullbackClosureInfo(in caller: Function, _ context: FunctionPassContext)
   -> PullbackClosureInfo?
 {
@@ -210,6 +444,9 @@ private func getPullbackClosureInfo(in caller: Function, _ context: FunctionPass
   }
 
   var pullbackClosureInfoOpt = PullbackClosureInfo?(nil)
+  let isSingleBB = caller.blocks.singleElement != nil
+  var supportedClosuresCount = 0
+  var subsetThunkArr = [SingleValueInstruction]()
 
   for inst in caller.instructions {
     if !convertedAndReabstractedClosures.contains(inst),
@@ -253,6 +490,21 @@ private func getOrCreateSpecializedFunction(
     })
 
   return (specializedFunction, false)
+}
+
+private func findEnumsAndPayloadsInVjp(vjp: Function) -> [EnumInst: TupleInst] {
+  var dict = [EnumInst: TupleInst]()
+  for inst in vjp.instructions {
+    guard let ei = inst as? EnumInst else {
+      continue
+    }
+    if !ei.type.isBranchTracingEnum(vjp: vjp) {
+      continue
+    }
+    let ti = ei.operands[0].value.definingInstruction as! TupleInst
+    dict[ei] = ti
+  }
+  return dict
 }
 
 private func rewriteApplyInstruction(
@@ -319,19 +571,11 @@ private func rewriteApplyInstruction(
 // ===================== Utility functions and extensions ===================== //
 
 private func updatePullbackClosureInfo(
-  for rootClosure: SingleValueInstruction, in pullbackClosureInfoOpt: inout PullbackClosureInfo?,
-  convertedAndReabstractedClosures: inout InstructionSet, _ context: FunctionPassContext
+  for rootClosure: SingleValueInstruction,
+  in pullbackClosureInfoOpt: inout PullbackClosureInfo?,
+  convertedAndReabstractedClosures: inout InstructionSet,
+  _ context: FunctionPassContext
 ) {
-  var rootClosurePossibleLiveRange = InstructionRange(begin: rootClosure, context)
-  defer {
-    rootClosurePossibleLiveRange.deinitialize()
-  }
-
-  var rootClosureApplies = OperandWorklist(context)
-  defer {
-    rootClosureApplies.deinitialize()
-  }
-
   // A "root" closure undergoing conversions and/or reabstractions has additional restrictions placed upon it, in order
   // for a pullback to be specialized against it. We handle conversion/reabstraction uses before we handle apply uses
   // to gather the parameters required to evaluate these restrictions or to skip pullback's uses of "unsupported"
@@ -345,6 +589,16 @@ private func updatePullbackClosureInfo(
   // 2. A root closure may be a partial_apply [stack], in which case we need to make sure that all mark_dependence
   //    bases for it will be available in the specialized callee in case the pullback is specialized against this root
   //    closure.
+
+  var rootClosurePossibleLiveRange = InstructionRange(begin: rootClosure, context)
+  defer {
+    rootClosurePossibleLiveRange.deinitialize()
+  }
+
+  var rootClosureApplies = OperandWorklist(context)
+  defer {
+    rootClosureApplies.deinitialize()
+  }
 
   let (foundUnexpectedUse, haveUsedReabstraction) =
     handleNonApplies(
@@ -371,6 +625,211 @@ private func updatePullbackClosureInfo(
     for: rootClosure, in: &pullbackClosureInfoOpt,
     rootClosurePossibleLiveRange: rootClosurePossibleLiveRange,
     intermediateClosureArgDescriptorData: intermediateClosureArgDescriptorData, context)
+}
+
+private func getEnumArgOfEntryPbBB(_ bb: BasicBlock, vjp: Function) -> Argument? {
+  assert(bb.parentFunction.entryBlock == bb)
+  var argOpt = Argument?(nil)
+  for arg in bb.arguments {
+    if arg.type.isBranchTracingEnum(vjp: vjp) {
+      if argOpt != nil {
+        return nil
+      }
+      argOpt = arg
+    }
+  }
+  return argOpt
+}
+
+private func getEnumArgOfVJPBB(_ bb: BasicBlock) -> Argument? {
+  var argOpt = Argument?(nil)
+  for arg in bb.arguments {
+    if arg.type.isBranchTracingEnum(vjp: bb.parentFunction) {
+      if argOpt != nil {
+        return nil
+      }
+      argOpt = arg
+    }
+  }
+  return argOpt
+}
+
+private func getEnumPayloadArgOfPbBB(_ bb: BasicBlock, vjp: Function) -> Argument? {
+  var argOpt = Argument?(nil)
+  for (argIdx, arg) in bb.arguments.enumerated() {
+    if !arg.type.isTuple {
+      continue
+    }
+
+    let predBBOpt = bb.predecessors.first
+    if predBBOpt == nil {
+      continue
+    }
+    let predBB = predBBOpt!
+
+    let brInstOpt = predBB.terminator as? BranchInst
+    let seInstOpt = predBB.terminator as? SwitchEnumInst
+    if brInstOpt == nil && seInstOpt == nil {
+      continue
+    }
+    if brInstOpt != nil {
+      let brInst = brInstOpt!
+      let possibleUEDI = brInst.operands[argIdx].value.definingInstruction
+      let uedi = possibleUEDI as? UncheckedEnumDataInst
+      if uedi == nil {
+        continue
+      }
+      let enumType = uedi!.`enum`.type
+      if !enumType.isBranchTracingEnum(vjp: vjp) {
+        continue
+      }
+    } else {
+      assert(seInstOpt != nil)
+      let enumType = seInstOpt!.enumOp.type
+      if !enumType.isBranchTracingEnum(vjp: vjp) {
+        continue
+      }
+    }
+
+    if argOpt != nil {
+      return nil
+    }
+    argOpt = arg
+  }
+  return argOpt
+}
+
+extension BasicBlockList {
+  var count: Int {
+    var n = 0
+    for _ in self {
+      n += 1
+    }
+    return n
+  }
+}
+
+extension UseList {
+  var count: Int {
+    var n = 0
+    for _ in self {
+      n += 1
+    }
+    return n
+  }
+}
+
+private func handleNonAppliesCFG(
+  for rootClosure: SingleValueInstruction,
+  _ context: FunctionPassContext
+)
+  -> [ClosureInfoCFG]
+{
+  let enumToPayload: [EnumInst: TupleInst] = findEnumsAndPayloadsInVjp(
+    vjp: rootClosure.parentFunction)
+  var closureInfoArr = [ClosureInfoCFG]()
+
+  var closure = rootClosure
+  var subsetThunkOpt = PartialApplyInst?(nil)
+  var throwingInfoOpt = (optional: EnumInst, isNone: Bool)?(nil)
+  if rootClosure.uses.singleElement != nil {
+    let tiOpt = rootClosure.uses.singleElement!.instruction as? TupleInst
+    if tiOpt == nil {
+      logADCS(
+        msg: "handleNonAppliesCFG: root closure has single use, checking if it's a subset thunk")
+      let maybeSubsetThunkOpt = closure.uses.singleElement!.instruction as? PartialApplyInst
+      if maybeSubsetThunkOpt != nil && maybeSubsetThunkOpt!.argumentOperands.count == 1
+        && maybeSubsetThunkOpt!.referencedFunction != nil
+        && maybeSubsetThunkOpt!.referencedFunction!.description.starts(
+          with: "// autodiff subset parameters thunk for")
+      {
+        logADCS(msg: "handleNonAppliesCFG: subset thunk detected:")
+        logADCS(msg: "  pai: \(maybeSubsetThunkOpt!)")
+        logADCS(msg: "  fri: \(maybeSubsetThunkOpt!.referencedFunction!)")
+        subsetThunkOpt = maybeSubsetThunkOpt
+        closure = subsetThunkOpt!
+      } else {
+        if maybeSubsetThunkOpt != nil {
+          logADCS(
+            msg:
+              "handleNonAppliesCFG: not a subset thunk:")
+          logADCS(msg: "  argumentOperands.count = \(maybeSubsetThunkOpt!.argumentOperands.count)")
+          logADCS(msg: "  referencedFunction = \(maybeSubsetThunkOpt!.referencedFunction)")
+        } else {
+          logADCS(
+            msg:
+              "handleNonAppliesCFG: not a subset thunk, unexpected instruction type: \(closure.uses.singleElement!.instruction)"
+          )
+          let maybeOptionalOpt = rootClosure.uses.singleElement!.instruction as? EnumInst
+          if maybeOptionalOpt != nil && maybeOptionalOpt!.operands.count == 1
+            && maybeOptionalOpt!.type.isOptional
+          {
+            throwingInfoOpt = (optional: maybeOptionalOpt!, isNone: false)
+            closure = maybeOptionalOpt!
+          }
+        }
+      }
+    }
+  }
+
+  for use in closure.uses {
+    guard let ti = use.instruction as? TupleInst else {
+      let paiOfPbInExitVjpBB = getPartialApplyOfPullbackInExitVJPBB(
+        vjp: rootClosure.parentFunction)!
+      let paiOpt = rootClosure as? PartialApplyInst
+      assert(paiOpt != paiOfPbInExitVjpBB)
+      logADCS(msg: "handleNonAppliesCFG: unexpected use of closure")
+      logADCS(msg: "handleNonAppliesCFG:   root closure: " + rootClosure.description)
+      logADCS(msg: "handleNonAppliesCFG:   closure: " + closure.description)
+      logADCS(msg: "handleNonAppliesCFG:   use.instruction: " + use.instruction.description)
+      logADCS(
+        msg: "handleNonAppliesCFG:   root closure use count: " + String(rootClosure.uses.count))
+      logADCS(msg: "handleNonAppliesCFG:   parent block of use begin")
+      logADCS(msg: "handleNonAppliesCFG:   " + use.instruction.parentBlock.description)
+      logADCS(msg: "handleNonAppliesCFG:   parent block of use end")
+      return []
+    }
+    for tiUse in ti.uses {
+      guard let ei = tiUse.instruction as? EnumInst else {
+        let paiOfPbInExitVjpBB = getPartialApplyOfPullbackInExitVJPBB(
+          vjp: rootClosure.parentFunction)!
+        let paiOpt = rootClosure as? PartialApplyInst
+        assert(paiOpt != paiOfPbInExitVjpBB)
+        logADCS(msg: "handleNonAppliesCFG: unexpected use of tuple")
+        logADCS(msg: "handleNonAppliesCFG:   root closure: " + rootClosure.description)
+        logADCS(msg: "handleNonAppliesCFG:   closure.uses.count: " + String(closure.uses.count))
+        logADCS(msg: "handleNonAppliesCFG:   tuple: " + ti.description)
+        logADCS(msg: "handleNonAppliesCFG:   tiUse.instruction: " + tiUse.instruction.description)
+        return []
+      }
+      if !ei.type.isBranchTracingEnum(vjp: rootClosure.parentFunction) {
+        logADCS(msg: "handleNonAppliesCFG: unexpected enum type:" + ei.type.description)
+        return []
+      }
+      assert(enumToPayload[ei] == ti)
+      var capturedArgs = [Value]()
+      let paiOpt = rootClosure as? PartialApplyInst
+      if paiOpt != nil {
+        for argOp in paiOpt!.argumentOperands {
+          capturedArgs.append(argOp.value)
+        }
+      }
+      let enumTypeAndCase = EnumTypeAndCase(enumType: ei.type, caseIdx: ei.caseIndex)
+      closureInfoArr.append(
+        ClosureInfoCFG(
+          closure: rootClosure,
+          subsetThunk: subsetThunkOpt,
+          idxInEnumPayload: use.index,
+          capturedArgs: capturedArgs,
+          enumTypeAndCase: enumTypeAndCase, payloadTuple: ti,
+          throwingInfo: throwingInfoOpt
+        ))
+    }
+  }
+  if closureInfoArr.count == 0 {
+    logADCS(msg: "handleNonAppliesCFG: returning empty closure info array")
+  }
+  return closureInfoArr
 }
 
 /// Handles all non-apply direct and transitive uses of `rootClosure`.
@@ -728,6 +1187,365 @@ private func markConvertedAndReabstractedClosuresAsUsed(
         "While marking converted/reabstracted closures as used, found unexpected instruction: \(convertedAndReabstractedClosure)"
       )
     }
+  }
+}
+
+private func rewriteUsesOfPayloadItem(
+  use: Operand, resultIdx: Int, closureInfoArray: [ClosureInfoCFG],
+  result: Value, useTei: Bool, context: FunctionPassContext
+) {
+  switch use.instruction {
+  case let cfi as ConvertFunctionInst:
+    let builder = Builder(before: cfi, context)
+    var closureInfoOpt = ClosureInfoCFG?(nil)
+    for closureInfo in closureInfoArray {
+      if closureInfo.idxInEnumPayload == resultIdx {
+        if closureInfoOpt != nil {
+          assert(closureInfoOpt!.closure == closureInfo.closure)
+          assert(closureInfoOpt!.payloadTuple == closureInfo.payloadTuple)
+        } else {
+          closureInfoOpt = closureInfo
+        }
+      }
+    }
+    if closureInfoOpt != nil {
+      assert(cfi.uses.count == 2)
+      var bbiUse = Operand?(nil)
+      var dviUse = Operand?(nil)
+      var sriUse = Operand?(nil)
+      for cfiUse in cfi.uses {
+        switch cfiUse.instruction {
+        case let bbi as BeginBorrowInst:
+          assert(bbiUse == nil)
+          bbiUse = cfiUse
+        case let dvi as DestroyValueInst:
+          assert(dviUse == nil)
+          dviUse = cfiUse
+        case let sri as DestroyValueInst:
+          assert(sriUse == nil)
+          sriUse = cfiUse
+        default:
+          assert(false)
+        }
+      }
+      assert((dviUse != nil) != (sriUse != nil))
+      assert(bbiUse != nil)
+      if dviUse != nil {
+        dviUse!.instruction.parentBlock.eraseInstruction(dviUse!.instruction)
+      } else {
+        sriUse!.instruction.parentBlock.eraseInstruction(sriUse!.instruction)
+      }
+      rewriteUsesOfPayloadItem(
+        use: bbiUse!, resultIdx: resultIdx, closureInfoArray: closureInfoArray, result: result,
+        useTei: useTei, context: context)
+      cfi.parentBlock.eraseInstruction(cfi)
+    } else {
+      let newCFI = builder.createConvertFunction(
+        originalFunction: result,
+        resultType: cfi.type,
+        withoutActuallyEscaping: cfi.withoutActuallyEscaping)
+      cfi.replace(with: newCFI, context)
+    }
+
+  case let bbi as BeginBorrowInst:
+    let builder = Builder(before: bbi, context)
+    var closureInfoOpt = ClosureInfoCFG?(nil)
+    for closureInfo in closureInfoArray {
+      if closureInfo.idxInEnumPayload == resultIdx {
+        if closureInfoOpt != nil {
+          assert(closureInfoOpt!.closure == closureInfo.closure)
+          assert(closureInfoOpt!.payloadTuple == closureInfo.payloadTuple)
+        } else {
+          closureInfoOpt = closureInfo
+        }
+      }
+    }
+    if closureInfoOpt != nil {
+      assert(bbi.uses.count == 2)
+      var aiUse = Operand?(nil)
+      var ebUse = Operand?(nil)
+      for bbiUse in bbi.uses {
+        switch bbiUse.instruction {
+        case let eb as EndBorrowInst:
+          assert(ebUse == nil)
+          ebUse = bbiUse
+        case let ai as ApplyInst:
+          assert(aiUse == nil)
+          aiUse = bbiUse
+        default:
+          assert(false)
+        }
+      }
+      assert(ebUse != nil)
+      assert(aiUse != nil)
+      ebUse!.instruction.parentBlock.eraseInstruction(ebUse!.instruction)
+      rewriteUsesOfPayloadItem(
+        use: aiUse!, resultIdx: resultIdx, closureInfoArray: closureInfoArray, result: result,
+        useTei: useTei, context: context)
+      bbi.parentBlock.eraseInstruction(bbi)
+    } else {
+      let newBBI = builder.createBeginBorrow(
+        of: result,
+        isLexical: bbi.isLexical,
+        hasPointerEscape: bbi.hasPointerEscape,
+        isFromVarDecl: bbi.isFromVarDecl)
+      bbi.replace(with: newBBI, context)
+    }
+
+  case let ai as ApplyInst:
+    let builder = Builder(before: ai, context)
+    var closureInfoOpt = ClosureInfoCFG?(nil)
+    for closureInfo in closureInfoArray {
+      if closureInfo.idxInEnumPayload == resultIdx {
+        if closureInfoOpt != nil {
+          assert(closureInfoOpt!.closure == closureInfo.closure)
+          assert(closureInfoOpt!.payloadTuple == closureInfo.payloadTuple)
+        } else {
+          closureInfoOpt = closureInfo
+        }
+      }
+    }
+    if closureInfoOpt != nil {
+      var teiArray = [TupleExtractInst]()
+      var dtiOfCapturedArgsTuple = DestructureTupleInst?(nil)
+      if useTei {
+        for (tupleIdx, tupleElem) in result.type.tupleElements.enumerated() {
+          teiArray.append(builder.createTupleExtract(tuple: result, elementIndex: tupleIdx))
+        }
+      } else {
+        dtiOfCapturedArgsTuple = builder.createDestructureTuple(tuple: result)
+      }
+      if closureInfoOpt!.subsetThunk == nil {
+        var newArgs = [Value]()
+        for op in ai.argumentOperands {
+          newArgs.append(op.value)
+        }
+        if useTei {
+          for res in teiArray {
+            newArgs.append(res)
+          }
+        } else {
+          for res in dtiOfCapturedArgsTuple!.results {
+            newArgs.append(res)
+          }
+        }
+        let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
+        let newFri = builder.createFunctionRef(vjpFn)
+        let newAi = builder.createApply(
+          function: newFri, ai.substitutionMap, arguments: newArgs)
+        ai.replace(with: newAi, context)
+
+        // MYTODO: maybe we can set insertion point earlier
+        let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
+        var resArray = [Value]()
+        if useTei {
+          resArray = teiArray
+        } else {
+          for dtiRes in dtiOfCapturedArgsTuple!.results {
+            resArray.append(dtiRes)
+          }
+        }
+        for res in resArray {
+          if res.type.isTrivial(in: res.parentFunction) {
+            continue
+          }
+          var needDestroy = true
+          for resUse in res.uses {
+            if resUse.endsLifetime {
+              needDestroy = false
+              break
+            }
+          }
+          if needDestroy {
+            if ai.parentFunction.hasOwnership {
+              newBuilder.createDestroyValue(operand: res)
+            } else {
+              newBuilder.createReleaseValue(operand: res)
+            }
+          }
+        }
+      } else {
+        var newClosure = SingleValueInstruction?(nil)
+        let maybePai = closureInfoOpt!.closure as? PartialApplyInst
+        if maybePai != nil {
+          var newArgs = [Value]()
+          var resArray = [Value]()
+          if useTei {
+            resArray = teiArray
+          } else {
+            for dtiRes in dtiOfCapturedArgsTuple!.results {
+              resArray.append(dtiRes)
+            }
+          }
+          for res in resArray {
+            newArgs.append(res)
+          }
+          let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
+          let newFri = builder.createFunctionRef(vjpFn)
+          let newPai = builder.createPartialApply(
+            function: newFri, substitutionMap: maybePai!.substitutionMap,
+            capturedArguments: newArgs, calleeConvention: maybePai!.calleeConvention,
+            hasUnknownResultIsolation: maybePai!.hasUnknownResultIsolation,
+            isOnStack: maybePai!.isOnStack)
+          newClosure = newPai
+
+          // MYTODO: maybe we can set insertion point earlier
+          let newBuilder = Builder(before: newPai.parentBlock.terminator, context)
+          for res in resArray {
+            if res.type.isTrivial(in: res.parentFunction) {
+              continue
+            }
+            var needDestroy = true
+            for resUse in res.uses {
+              if resUse.endsLifetime {
+                needDestroy = false
+                break
+              }
+            }
+            if needDestroy {
+              if ai.parentFunction.hasOwnership {
+                newBuilder.createDestroyValue(operand: res)
+              } else {
+                newBuilder.createReleaseValue(operand: res)
+              }
+            }
+          }
+        } else {
+          let maybeTttfi = closureInfoOpt!.closure as? ThinToThickFunctionInst
+          assert(maybeTttfi != nil)
+          let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
+          let newFri = builder.createFunctionRef(vjpFn)
+          let newTttfi = builder.createThinToThickFunction(
+            thinFunction: newFri, resultType: maybeTttfi!.type)
+          newClosure = newTttfi
+        }
+        assert(newClosure != nil)
+        let subsetThunkFn = closureInfoOpt!.subsetThunk!.referencedFunction!
+        let newFri = builder.createFunctionRef(subsetThunkFn)
+
+        var newArgs = [Value]()
+        for op in ai.argumentOperands {
+          newArgs.append(op.value)
+        }
+        newArgs.append(newClosure!)
+        let newAi = builder.createApply(
+          function: newFri, ai.substitutionMap, arguments: newArgs)
+        ai.replace(with: newAi, context)
+        let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
+        assert(newClosure!.uses.singleUse != nil)
+        if !newClosure!.type.isTrivial(in: newAi.parentFunction)
+          && !newClosure!.uses.singleUse!.endsLifetime
+        {
+          if ai.parentFunction.hasOwnership {
+            newBuilder.createDestroyValue(operand: newClosure!)
+          } else {
+            newBuilder.createReleaseValue(operand: newClosure!)
+          }
+        }
+      }
+    } else {
+      var newArgs = [Value]()
+      for op in ai.argumentOperands {
+        newArgs.append(op.value)
+      }
+      let newAi = builder.createApply(
+        function: result, ai.substitutionMap, arguments: newArgs)
+      ai.replace(with: newAi, context)
+    }
+
+  case let dvi as DestroyValueInst:
+    var needDestroyValue = true
+    for closureInfo in closureInfoArray {
+      if closureInfo.idxInEnumPayload == resultIdx {
+        needDestroyValue = false
+      }
+    }
+    if needDestroyValue {
+      let builder = Builder(before: dvi, context)
+      if dvi.parentFunction.hasOwnership {
+        builder.createDestroyValue(operand: result)
+      } else {
+        builder.createReleaseValue(operand: result)
+      }
+    }
+    dvi.parentBlock.eraseInstruction(dvi)
+
+  case let sri as StrongReleaseInst:
+    var needDestroyValue = true
+    for closureInfo in closureInfoArray {
+      if closureInfo.idxInEnumPayload == resultIdx {
+        needDestroyValue = false
+      }
+    }
+    if needDestroyValue {
+      let builder = Builder(before: sri, context)
+      builder.createStrongRelease(operand: result)
+    }
+    sri.parentBlock.eraseInstruction(sri)
+
+  case let tei as TupleExtractInst:
+    let builder = Builder(before: tei, context)
+    let newTei = builder.createTupleExtract(tuple: tei.tuple, elementIndex: tei.fieldIndex)
+    tei.replace(with: newTei, context)
+
+  case let uedi as UncheckedEnumDataInst:
+    let builder = Builder(before: uedi, context)
+    let newUedi = builder.createUncheckedEnumData(
+      enum: result, caseIndex: uedi.caseIndex,
+      resultType: result.type.bridged.getEnumCasePayload(
+        uedi.caseIndex, uedi.parentFunction.bridged
+      ).type)
+    uedi.replace(with: newUedi, context)
+
+  case let sei as SwitchEnumInst:
+    let builder = Builder(before: sei, context)
+    let newSEI = builder.createSwitchEnum(
+      enum: result, cases: getEnumCasesForSwitchEnumInst(sei))
+    newSEI.parentBlock.eraseInstruction(sei)
+
+    if newSEI.operands[0].value.type.isOptional {
+      assert(newSEI.parentBlock.successors.count == 2)
+      var succSome = BasicBlock?(nil)
+      let cases = getEnumCasesForSwitchEnumInst(newSEI)
+      for (caseIdx, bb) in cases {
+        if newSEI.operands[0].value.type.getEnumTypeCaseName(caseIdx: caseIdx) == "none" {
+          assert(bb.arguments.count == 0)
+          continue
+        }
+        succSome = bb
+        break
+      }
+      let succ = succSome!
+      let newArg = specializeOptionalBBArgInPullback(
+        succ.bridged, newSEI.operands[0].value.type.bridged
+      )
+      .argument
+      for argUse in newArg.uses {
+        rewriteUsesOfPayloadItem(
+          use: argUse, resultIdx: resultIdx, closureInfoArray: closureInfoArray,
+          result: newArg /*result*/, useTei: useTei, context: context)
+      }
+    }
+
+  default:
+    assert(false)
+  }
+}
+
+private func getEnumCasesForSwitchEnumInst(_ sei: SwitchEnumInst) -> [(Int, BasicBlock)] {
+  var enumCases = [(Int, BasicBlock)]()
+  for i in 0...sei.bridged.SwitchEnumInst_getNumCases() {
+    let bbForCase = sei.getUniqueSuccessor(forCaseIndex: i)
+    if bbForCase != nil {
+      enumCases.append((i, bbForCase!))
+    }
+  }
+  return enumCases
+}
+
+extension BasicBlock {
+  func eraseInstruction(_ inst: Instruction) {
+    self.bridged.eraseInstruction(inst.bridged)
   }
 }
 
@@ -1120,6 +1938,36 @@ extension Builder {
   }
 }
 
+typealias EnumDict = SpecializedBranchTracingEnumDict
+
+private func getSpecializedParametersCFG(
+  basedOn pullbackClosureInfo: PullbackClosureInfo, pb: Function, enumType: Type,
+  enumDict: EnumDict,
+  _ context: FunctionPassContext
+) -> [ParameterInfo] {
+  let applySiteCallee = pullbackClosureInfo.pullbackFn
+  var specializedParamInfoList: [ParameterInfo] = []
+  var foundBranchTracingEnumParam = false
+  var enumDictCopy = enumDict
+  // Start by adding all original parameters except for the closure parameters.
+  for paramInfo in applySiteCallee.convention.parameters {
+    // TODO: is this safe to perform such check?
+    if paramInfo.type != enumType.bridged.mapTypeOutOfContext().type.canonicalType {
+      specializedParamInfoList.append(paramInfo)
+      continue
+    }
+    assert(!foundBranchTracingEnumParam)
+    foundBranchTracingEnumParam = true
+    let newParamInfo = ParameterInfo(
+      type: enumDictCopy[enumType.bridged]!.mapTypeOutOfContext().type.canonicalType,
+      convention: paramInfo.convention,
+      options: paramInfo.options, hasLoweredAddresses: paramInfo.hasLoweredAddresses)
+    specializedParamInfoList.append(newParamInfo)
+  }
+  assert(foundBranchTracingEnumParam)
+  return specializedParamInfoList
+}
+
 extension FunctionConvention {
   fileprivate func getSpecializedParameters(basedOn pullbackClosureInfo: PullbackClosureInfo)
     -> [ParameterInfo]
@@ -1215,7 +2063,7 @@ extension PartialApplyInst {
     return false
   }
 
-  fileprivate var isPartialApplyOfThunk: Bool {
+  var isPartialApplyOfThunk: Bool {
     if self.numArguments == 1,
       let fun = self.referencedFunction,
       fun.thunkKind == .reabstractionThunk || fun.thunkKind == .thunk,
@@ -1246,6 +2094,22 @@ extension Instruction {
     case let pai as PartialApplyInst
     where pai.callee is FunctionRefInst && pai.hasOnlyInoutIndirectArguments:
       return pai
+    default:
+      return nil
+    }
+  }
+
+  fileprivate var asSupportedClosureFn: Function? {
+    switch self {
+    case let tttf as ThinToThickFunctionInst where tttf.callee is FunctionRefInst:
+      let fri = tttf.callee as! FunctionRefInst
+      return fri.referencedFunction
+    // TODO: figure out what to do with non-inout indirect arguments
+    // https://forums.swift.org/t/non-inout-indirect-types-not-supported-in-closure-specialization-optimization/70826
+    case let pai as PartialApplyInst
+    where pai.callee is FunctionRefInst && pai.hasOnlyInoutIndirectArguments:
+      let fri = pai.callee as! FunctionRefInst
+      return fri.referencedFunction
     default:
       return nil
     }
@@ -1390,6 +2254,7 @@ private struct ClosureArgDescriptor {
 private struct PullbackClosureInfo {
   let paiOfPullback: PartialApplyInst
   var closureArgDescriptors: [ClosureArgDescriptor] = []
+  var closureInfosCFG: [ClosureInfoCFG] = []
 
   init(paiOfPullback: PartialApplyInst) {
     self.paiOfPullback = paiOfPullback
@@ -1430,6 +2295,22 @@ private struct PullbackClosureInfo {
 
     return context.mangle(
       withClosureArguments: closureArgs, closureArgIndices: closureIndices,
+      from: pullbackFn)
+  }
+
+  func specializedCalleeNameCFG(vjp: Function, _ context: FunctionPassContext) -> String {
+    let paiOfPbInExitVjpBB = getPartialApplyOfPullbackInExitVJPBB(vjp: vjp)!
+    var argAndIdxInPbPAI = (arg: Value, idx: Int)?(nil)
+    for (argIdx, arg) in paiOfPbInExitVjpBB.arguments.enumerated() {
+      if arg.type.isBranchTracingEnum(vjp: vjp) {
+        assert(argAndIdxInPbPAI == nil)
+        argAndIdxInPbPAI = (arg: arg, idx: argIdx)
+      }
+    }
+    assert(argAndIdxInPbPAI != nil)
+
+    return context.mangle(
+      withBranchTracingEnum: argAndIdxInPbPAI!.arg, argIdx: argAndIdxInPbPAI!.idx,
       from: pullbackFn)
   }
 }
@@ -1474,4 +2355,92 @@ let rewrittenCallerBodyTest = FunctionTest("autodiff_closure_specialize_rewritte
 
   print("Rewritten caller body for: \(function.name):")
   print("\(function)\n")
+}
+
+func getEnumDict(function: Function, context: FunctionPassContext) -> EnumDict {
+  let pullbackClosureInfo = getPullbackClosureInfo(in: function, context)!
+  let enumTypeOfEntryBBArg = getEnumArgOfEntryPbBB(pullbackClosureInfo.pullbackFn.entryBlock, vjp: function)!.type
+
+  let vectorOfClosureInfoCFG = VectorOfBranchTracingEnumAndClosureInfo(
+    pullbackClosureInfo.closureInfosCFG.map {
+      BranchTracingEnumAndClosureInfo(
+        enumType: $0.enumTypeAndCase.enumType.bridged,
+        enumCaseIdx: $0.enumTypeAndCase.caseIdx,
+        closure: $0.closure.bridged,
+        idxInPayload: $0.idxInEnumPayload)
+    })
+
+  let enumDict =
+    autodiffSpecializeBranchTracingEnums(
+      /*topVjp: */function.bridged,
+      /*topEnum: */enumTypeOfEntryBBArg.bridged,
+      /*vectorOfClosureInfoCFG: */vectorOfClosureInfoCFG
+    )
+
+  return enumDict
+}
+
+let specializeBranchTracingEnums = FunctionTest("autodiff_specialize_branch_tracing_enums") {
+  function, arguments, context in
+  let enumDict = getEnumDict(function: function, context: context)
+
+  print("\(String(taking: getSpecializedBranchTracingEnumDictAsString(enumDict, function.bridged)))")
+}
+
+let specializeBTEArgInVjpBB = FunctionTest("autodiff_specialize_bte_arg_in_vjp_bb") {
+  function, arguments, context in
+  let enumDict = getEnumDict(function: function, context: context)
+  for bb in function.blocks {
+    guard let arg = getEnumArgOfVJPBB(bb) else {
+      continue
+    }
+    if enumDict[arg.type.bridged] == nil {
+      continue
+    }
+    let newArg = specializeBranchTracingEnumBBArgInVJP(arg.bridged, enumDict).argument
+    print("\(newArg)")
+    bb.eraseArgument(at: newArg.index, context)
+  }
+}
+
+let specializePayloadArgInPullbackBB = FunctionTest("autodiff_specialize_payload_arg_in_pb_bb") {
+  function, arguments, context in
+  let pullbackClosureInfo = getPullbackClosureInfo(in: function, context)!
+  let enumDict = getEnumDict(function: function, context: context)
+
+  for bb in pullbackClosureInfo.pullbackFn.blocks {
+    guard
+      let arg = getEnumPayloadArgOfPbBB(bb, vjp: function)
+    else {
+      continue
+    }
+
+    // If enum payload arg is present, we are not in entry block. At least one predecessor is present.
+    let predBBOpt = bb.predecessors.first
+    assert(predBBOpt != nil)
+    let predBB = predBBOpt!
+
+    var enumTypeOldOpt = Type?(nil)
+    var caseIdxOpt = Int?(nil)
+    let brInstOpt = predBB.terminator as? BranchInst
+    if brInstOpt != nil {
+      let brInst = brInstOpt!
+      let possibleUEDI = brInst.operands[arg.index].value.definingInstruction
+      let uedi = possibleUEDI as? UncheckedEnumDataInst
+      assert(uedi != nil)
+      enumTypeOldOpt = uedi!.`enum`.type
+      caseIdxOpt = uedi!.caseIndex
+    } else {
+      let sei = predBB.terminator as? SwitchEnumInst
+      assert(sei != nil)
+      enumTypeOldOpt = sei!.enumOp.type
+      caseIdxOpt = sei!.getUniqueCase(forSuccessor: bb)!
+    }
+
+    let enumType = enumDict[enumTypeOldOpt!.bridged]!
+    let newArg = specializePayloadTupleBBArgInPullback(
+        arg.bridged, enumType, caseIdxOpt!).argument
+    print("\(newArg)")
+    bb.eraseArgument(at: newArg.index, context)
+  }
 }
