@@ -602,20 +602,6 @@ convertCases(SILType enumTy, const void * _Nullable enumCases, SwiftInt numEnumC
   return convertedCases;
 }
 
-void BridgedAutoDiffClosureSpecializationHelper::appendToClosuresBuffer(
-    BridgedType enumType, SwiftInt caseIdx, BridgedInstruction closure,
-    SwiftInt idxInPayload) {
-  closuresBuffers[enumType][caseIdx].emplace_back(closure, idxInPayload);
-}
-
-void BridgedAutoDiffClosureSpecializationHelper::clearClosuresBuffer() {
-  closuresBuffers.clear();
-}
-
-void BridgedAutoDiffClosureSpecializationHelper::clearEnumDict() {
-  enumDict.clear();
-}
-
 std::vector<Type> getPredTypes(Type enumType) {
   std::vector<Type> ret;
   EnumDecl *ed = enumType->getEnumOrBoundGenericEnum();
@@ -685,7 +671,20 @@ std::vector<Type> getEnumQueue(BridgedType topEnum) {
 
 BranchTracingEnumDict
 BridgedAutoDiffClosureSpecializationHelper::rewriteAllEnums(
-    BridgedFunction topVjp, BridgedType topEnum) const {
+    BridgedFunction topVjp, BridgedType topEnum,
+    const VectorOfBridgedClosureInfoCFG &vectorOfClosureInfoCFG) const {
+  std::unordered_map<
+      BridgedType,
+      llvm::DenseMap<SwiftInt, llvm::SmallVector<
+                                   std::pair<BridgedInstruction, SwiftInt>, 8>>,
+      BridgedTypeHasher>
+      closuresBuffers;
+
+  for (const BridgedClosureInfoCFG &elem : vectorOfClosureInfoCFG) {
+    closuresBuffers[elem.enumType][elem.enumCaseIdx].emplace_back(
+        elem.closure, elem.idxInPayload);
+  }
+
   std::vector<Type> enumQueue = getEnumQueue(topEnum);
   BranchTracingEnumDict dict;
 
@@ -696,8 +695,8 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteAllEnums(
         remapType(getBranchingTraceEnumLoweredType(ed, topVjp.getFunction()),
                   topVjp.getFunction());
 
-    dict[BridgedType(silType)] =
-        rewriteBranchTracingEnum(BridgedType(silType), topVjp);
+    dict[BridgedType(silType)] = rewriteBranchTracingEnum(
+        BridgedType(silType), topVjp, closuresBuffers, dict);
   }
 
   return dict;
@@ -722,11 +721,18 @@ static GenericParamList *cloneGenericParameters(ASTContext &ctx,
 
 BridgedType
 BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
-    BridgedType enumType, BridgedFunction topVjp) const {
+    BridgedType enumType, BridgedFunction topVjp,
+    std::unordered_map<
+        BridgedType,
+        llvm::DenseMap<
+            SwiftInt,
+            llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>>,
+        BridgedTypeHasher> &closuresBuffers,
+    const BranchTracingEnumDict &dict) const {
   EnumDecl *oldED = enumType.unbridged().getEnumOrBoundGenericEnum();
   assert(oldED && "Expected valid enum type");
   // TODO: switch to contains() after transition to C++20
-  assert(enumDict.find(enumType.unbridged()) == enumDict.end());
+  assert(dict.find(enumType.unbridged()) == dict.end());
 
   SILModule &module = topVjp.getFunction()->getModule();
   ASTContext &astContext = oldED->getASTContext();
@@ -797,9 +803,10 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
         type = tt->getElementType(i);
         // TODO: make this less fragile
         for (const auto &[enumTypeOld, enumTypeNew] : enumDict) {
-          if (enumTypeOld.getDebugDescription() == "$" + type.getString()) {
+          if (enumTypeOld.unbridged().getDebugDescription() ==
+              "$" + type.getString()) {
             assert(i == 0);
-            type = enumTypeNew.getASTType();
+            type = enumTypeNew.unbridged().getASTType();
           }
         }
       }
@@ -835,8 +842,6 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
   SILType newEnumType =
       remapType(getBranchingTraceEnumLoweredType(ed, topVjp.getFunction()),
                 topVjp.getFunction());
-
-  enumDict[enumType.unbridged()] = newEnumType;
 
   return newEnumType;
 }
