@@ -20,18 +20,18 @@
 #include "swift/AST/Attr.h"
 #include "swift/AST/SemanticAttrs.h"
 #include "swift/Basic/Assertions.h"
-#include "swift/SIL/SILContext.h"
-#include "swift/SIL/SILCloner.h"
 #include "swift/SIL/MemAccessUtils.h"
 #include "swift/SIL/OwnershipUtils.h"
 #include "swift/SIL/ParseTestSpecification.h"
 #include "swift/SIL/SILBuilder.h"
+#include "swift/SIL/SILCloner.h"
+#include "swift/SIL/SILContext.h"
 #include "swift/SIL/SILGlobalVariable.h"
 #include "swift/SIL/SILNode.h"
 #include "swift/SIL/Test.h"
-#include <string>
 #include <cstring>
 #include <stdio.h>
+#include <string>
 
 using namespace swift;
 
@@ -59,6 +59,12 @@ SwiftMetatype SILNode::getSILNodeMetatype(SILNodeKind kind) {
   }
   return metatype;
 }
+
+struct SILTypeHasher {
+  unsigned operator()(const SILType &value) const {
+    return llvm::DenseMapInfo<SILType>::getHashValue(value);
+  }
+};
 
 //===----------------------------------------------------------------------===//
 //                          Class registration
@@ -167,6 +173,18 @@ BridgedBasicBlock BridgedTestArguments::takeBlock() const {
 BridgedFunction BridgedTestArguments::takeFunction() const {
   return {arguments->takeFunction()};
 }
+
+namespace {
+struct SpecializeCandidateInfo {
+  unsigned closureIdxInPayloadTuple;
+  llvm::SmallVector<SILValue, 8> capturedArgs;
+};
+
+using SpecializeCandidate =
+    llvm::DenseMap<SILInstruction *, SpecializeCandidateInfo>;
+using BranchTracingEnumCases = llvm::DenseMap<unsigned, SpecializeCandidate>;
+
+} // namespace
 
 //===----------------------------------------------------------------------===//
 //                                SILFunction
@@ -526,6 +544,60 @@ convertCases(SILType enumTy, const void * _Nullable enumCases, SwiftInt numEnumC
   }
   return convertedCases;
 }
+
+BridgedOwnedString BridgedType::getEnumTypeCaseName(SwiftInt caseIdx) const {
+  EnumDecl *ed = unbridged().getEnumOrBoundGenericEnum();
+  assert(ed != nullptr);
+  SwiftInt idx = 0;
+  // TODO use algorithm
+  for (EnumElementDecl *elem : ed->getAllElements()) {
+    if (idx == caseIdx)
+      return elem->getNameStr();
+    ++idx;
+  }
+  assert(false);
+}
+
+BridgedInstruction
+BridgedBuilder::createOptionalSome(BridgedValue value) const {
+  EnumElementDecl *someEltDecl =
+      unbridged().getASTContext().getOptionalSomeDecl();
+  EnumInst *optionalSome = unbridged().createEnum(
+      loc.getLoc().getLocation(), value.getSILValue(), someEltDecl,
+      SILType::getOptionalType(value.getType().unbridged()),
+      value.getSILValue()->getOwnershipKind());
+  return optionalSome;
+}
+
+BridgedInstruction
+BridgedBuilder::createOptionalNone(BridgedValueArray tupleElements) const {
+  EnumElementDecl *noneEltDecl =
+      unbridged().getASTContext().getOptionalNoneDecl();
+
+  llvm::SmallVector<swift::SILValue, 16> elementValues;
+  llvm::ArrayRef<swift::SILValue> values =
+      tupleElements.getValues(elementValues);
+  llvm::SmallVector<swift::TupleTypeElt, 16> tupleTyElts;
+  tupleTyElts.reserve(values.size());
+  for (const swift::SILValue &value : values) {
+    tupleTyElts.emplace_back(value->getType().getASTType());
+  }
+  swift::Type tupleTy =
+      swift::TupleType::get(tupleTyElts, unbridged().getASTContext());
+  swift::SILType silTupleTy =
+      swift::SILType::getPrimitiveObjectType(tupleTy->getCanonicalType());
+
+  EnumInst *optionalNone =
+      unbridged().createEnum(loc.getLoc().getLocation(), SILValue(),
+                             noneEltDecl, SILType::getOptionalType(silTupleTy));
+
+  return optionalNone;
+}
+
+BridgedType BridgedType::mapTypeOutOfContext() const {
+  return {unbridged().mapTypeOutOfContext()};
+}
+
 
 BridgedInstruction BridgedBuilder::createSwitchEnumInst(BridgedValue enumVal, OptionalBridgedBasicBlock defaultBlock,
                                         const void * _Nullable enumCases, SwiftInt numEnumCases) const {
