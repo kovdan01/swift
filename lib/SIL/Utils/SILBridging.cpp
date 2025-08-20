@@ -61,23 +61,11 @@ SwiftMetatype SILNode::getSILNodeMetatype(SILNodeKind kind) {
   return metatype;
 }
 
-static std::unordered_map<
-    BridgedType,
-    llvm::DenseMap<SwiftInt, llvm::SmallVector<
-                                 std::pair<BridgedInstruction, SwiftInt>, 8>>,
-    BridgedTypeHasher>
-    closuresBuffers;
-
-static llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
-    closuresBuffersForPb;
-
 struct SILTypeHasher {
   unsigned operator()(const SILType &value) const {
     return llvm::DenseMapInfo<SILType>::getHashValue(value);
   }
 };
-
-static std::unordered_map<SILType, SILType, SILTypeHasher> enumDict;
 
 //===----------------------------------------------------------------------===//
 //                          Class registration
@@ -234,8 +222,8 @@ static Type getPAICapturedArgTypes(const PartialApplyInst *pai,
   return TupleType::get(paramTuple, ctx);
 }
 
-BridgedArgument
-BridgedBasicBlock::recreateEnumBlockArgument(BridgedArgument arg) const {
+BridgedArgument BridgedBasicBlock::recreateEnumBlockArgument(
+    BridgedArgument arg, const BranchTracingEnumDict &dict) const {
   assert(!unbridged()->isEntry());
   swift::ValueOwnershipKind oldOwnership =
       arg.getArgument()->getOwnershipKind();
@@ -243,8 +231,8 @@ BridgedBasicBlock::recreateEnumBlockArgument(BridgedArgument arg) const {
   swift::SILArgument *oldArg = arg.getArgument();
   unsigned index = oldArg->getIndex();
   // TODO: switch to contains() after transition to C++20
-  assert(enumDict.find(oldArg->getType()) != enumDict.end());
-  SILType type = enumDict.at(oldArg->getType());
+  assert(dict.find(oldArg->getType()) != dict.end());
+  SILType type = dict.at(BridgedType(oldArg->getType())).unbridged();
   swift::SILPhiArgument *newArg =
       unbridged()->insertPhiArgument(index, type, oldOwnership);
   oldArg->replaceAllUsesWith(newArg);
@@ -283,8 +271,9 @@ BridgedArgument BridgedBasicBlock::recreateOptionalBlockArgument(
   return {newArg};
 }
 
-BridgedArgument
-BridgedBasicBlock::recreateTupleBlockArgument(BridgedArgument arg) const {
+BridgedArgument BridgedBasicBlock::recreateTupleBlockArgument(
+    BridgedArgument arg, const BranchTracingEnumDict &dict,
+    const VectorOfClosureAndIdxInPayload &closuresBuffersForPb) const {
   swift::SILBasicBlock *bb = unbridged();
   assert(!bb->isEntry());
   swift::SILArgument *oldArg = arg.getArgument();
@@ -295,10 +284,10 @@ BridgedBasicBlock::recreateTupleBlockArgument(BridgedArgument arg) const {
   for (unsigned i = 0; i < oldTupleTy->getNumElements(); ++i) {
     unsigned idxInClosuresBuffer = -1;
     for (unsigned j = 0; j < closuresBuffersForPb.size(); ++j) {
-      if (closuresBuffersForPb[j].second == i) {
+      if (closuresBuffersForPb[j].idxInPayload == i) {
         if (idxInClosuresBuffer != unsigned(-1)) {
-          assert(closuresBuffersForPb[j].first.unbridged() ==
-                 closuresBuffersForPb[idxInClosuresBuffer].first.unbridged());
+          assert(closuresBuffersForPb[j].closure.unbridged() ==
+                 closuresBuffersForPb[idxInClosuresBuffer].closure.unbridged());
         }
         idxInClosuresBuffer = j;
       }
@@ -306,10 +295,11 @@ BridgedBasicBlock::recreateTupleBlockArgument(BridgedArgument arg) const {
 
     if (idxInClosuresBuffer == unsigned(-1)) {
       Type type = oldTupleTy->getElementType(i);
-      for (const auto &[enumTypeOld, enumTypeNew] : enumDict) {
-        if (enumTypeOld.getDebugDescription() == "$" + type.getString()) {
+      for (const auto &[enumTypeOld, enumTypeNew] : dict) {
+        if (enumTypeOld.unbridged().getDebugDescription() ==
+            "$" + type.getString()) {
           assert(i == 0);
-          type = enumTypeNew.getASTType();
+          type = enumTypeNew.unbridged().getASTType();
         }
       }
       newTupleElTypes.emplace_back(type, oldTupleTy->getElement(i).getName());
@@ -318,12 +308,12 @@ BridgedBasicBlock::recreateTupleBlockArgument(BridgedArgument arg) const {
 
     CanType canType;
     if (auto *pai = dyn_cast<PartialApplyInst>(
-            closuresBuffersForPb[idxInClosuresBuffer].first.unbridged())) {
+            closuresBuffersForPb[idxInClosuresBuffer].closure.unbridged())) {
       canType = getPAICapturedArgTypes(pai, bb->getModule().getASTContext())
                     ->getCanonicalType();
     } else {
       assert(isa<ThinToThickFunctionInst>(
-          closuresBuffersForPb[idxInClosuresBuffer].first.unbridged()));
+          closuresBuffersForPb[idxInClosuresBuffer].closure.unbridged()));
       canType = TupleType::get({}, bb->getModule().getASTContext())
                     ->getCanonicalType();
     }
@@ -718,28 +708,6 @@ convertCases(SILType enumTy, const void * _Nullable enumCases, SwiftInt numEnumC
   return convertedCases;
 }
 
-void BridgedAutoDiffClosureSpecializationHelper::appendToClosuresBuffer(
-    BridgedType enumType, SwiftInt caseIdx, BridgedInstruction closure,
-    SwiftInt idxInPayload) {
-  closuresBuffers[enumType][caseIdx].emplace_back(closure, idxInPayload);
-}
-
-void BridgedAutoDiffClosureSpecializationHelper::appendToClosuresBufferForPb(
-    BridgedInstruction closure, SwiftInt idxInPayload) {
-  closuresBuffersForPb.emplace_back(closure, idxInPayload);
-}
-
-void BridgedAutoDiffClosureSpecializationHelper::clearClosuresBuffer() {
-  closuresBuffers.clear();
-}
-void BridgedAutoDiffClosureSpecializationHelper::clearClosuresBufferForPb() {
-  closuresBuffersForPb.clear();
-}
-
-void BridgedAutoDiffClosureSpecializationHelper::clearEnumDict() {
-  enumDict.clear();
-}
-
 std::vector<Type> getPredTypes(Type enumType) {
   std::vector<Type> ret;
   EnumDecl *ed = enumType->getEnumOrBoundGenericEnum();
@@ -809,7 +777,20 @@ std::vector<Type> getEnumQueue(BridgedType topEnum) {
 
 BranchTracingEnumDict
 BridgedAutoDiffClosureSpecializationHelper::rewriteAllEnums(
-    BridgedFunction topVjp, BridgedType topEnum) const {
+    BridgedFunction topVjp, BridgedType topEnum,
+    const VectorOfBridgedClosureInfoCFG &vectorOfClosureInfoCFG) const {
+  std::unordered_map<
+      BridgedType,
+      llvm::DenseMap<SwiftInt, llvm::SmallVector<
+                                   std::pair<BridgedInstruction, SwiftInt>, 8>>,
+      BridgedTypeHasher>
+      closuresBuffers;
+
+  for (const BridgedClosureInfoCFG &elem : vectorOfClosureInfoCFG) {
+    closuresBuffers[elem.enumType][elem.enumCaseIdx].emplace_back(
+        elem.closure, elem.idxInPayload);
+  }
+
   std::vector<Type> enumQueue = getEnumQueue(topEnum);
   BranchTracingEnumDict dict;
 
@@ -820,8 +801,8 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteAllEnums(
         remapType(getBranchingTraceEnumLoweredType(ed, topVjp.getFunction()),
                   topVjp.getFunction());
 
-    dict[BridgedType(silType)] =
-        rewriteBranchTracingEnum(BridgedType(silType), topVjp);
+    dict[BridgedType(silType)] = rewriteBranchTracingEnum(
+        BridgedType(silType), topVjp, closuresBuffers, dict);
   }
 
   return dict;
@@ -897,11 +878,18 @@ BridgedType BridgedType::mapTypeOutOfContext() const {
 
 BridgedType
 BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
-    BridgedType enumType, BridgedFunction topVjp) const {
+    BridgedType enumType, BridgedFunction topVjp,
+    std::unordered_map<
+        BridgedType,
+        llvm::DenseMap<
+            SwiftInt,
+            llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>>,
+        BridgedTypeHasher> &closuresBuffers,
+    const BranchTracingEnumDict &dict) const {
   EnumDecl *oldED = enumType.unbridged().getEnumOrBoundGenericEnum();
   assert(oldED && "Expected valid enum type");
   // TODO: switch to contains() after transition to C++20
-  assert(enumDict.find(enumType.unbridged()) == enumDict.end());
+  assert(dict.find(enumType.unbridged()) == dict.end());
 
   SILModule &module = topVjp.getFunction()->getModule();
   ASTContext &astContext = oldED->getASTContext();
@@ -971,10 +959,11 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
       } else {
         type = tt->getElementType(i);
         // TODO: make this less fragile
-        for (const auto &[enumTypeOld, enumTypeNew] : enumDict) {
-          if (enumTypeOld.getDebugDescription() == "$" + type.getString()) {
+        for (const auto &[enumTypeOld, enumTypeNew] : dict) {
+          if (enumTypeOld.unbridged().getDebugDescription() ==
+              "$" + type.getString()) {
             assert(i == 0);
-            type = enumTypeNew.getASTType();
+            type = enumTypeNew.unbridged().getASTType();
           }
         }
       }
@@ -1010,8 +999,6 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
   SILType newEnumType =
       remapType(getBranchingTraceEnumLoweredType(ed, topVjp.getFunction()),
                 topVjp.getFunction());
-
-  enumDict[enumType.unbridged()] = newEnumType;
 
   return newEnumType;
 }
