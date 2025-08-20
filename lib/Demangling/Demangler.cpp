@@ -3388,15 +3388,11 @@ NodePointer Demangler::demangleFunctionSpecialization() {
       case FunctionSigSpecializationParamKind::ConstantPropGlobal:
       case FunctionSigSpecializationParamKind::ConstantPropString:
       case FunctionSigSpecializationParamKind::ConstantPropKeyPath:
-      case FunctionSigSpecializationParamKind::ClosureProp:
-      case FunctionSigSpecializationParamKind::AutoDiffBranchTracingEnum: {
+      case FunctionSigSpecializationParamKind::ClosureProp: {
         size_t FixedChildren = Param->getNumChildren();
         while (NodePointer Ty = popNode(Node::Kind::Type)) {
           if (ParamKind != FunctionSigSpecializationParamKind::ClosureProp &&
-              ParamKind != FunctionSigSpecializationParamKind::
-                               AutoDiffBranchTracingEnum &&
-              ParamKind !=
-                  FunctionSigSpecializationParamKind::ConstantPropKeyPath)
+              ParamKind != FunctionSigSpecializationParamKind::ConstantPropKeyPath)
             return nullptr;
           Param = addChild(Param, Ty);
         }
@@ -3435,12 +3431,6 @@ NodePointer Demangler::demangleFuncSpecParam(Node::Kind Kind) {
       return addChild(Param, createNode(
         Node::Kind::FunctionSignatureSpecializationParamKind,
         uint64_t(FunctionSigSpecializationParamKind::ClosureProp)));
-    case 'b':
-      return addChild(
-          Param,
-          createNode(Node::Kind::FunctionSignatureSpecializationParamKind,
-                     uint64_t(FunctionSigSpecializationParamKind::
-                                  AutoDiffBranchTracingEnum)));
     case 'p': {
       switch (nextChar()) {
         case 'f':
