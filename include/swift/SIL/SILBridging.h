@@ -282,6 +282,8 @@ struct BridgedType {
   getTupleElementType(SwiftInt idx) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType getFunctionTypeWithNoEscape(bool withNoEscape) const;
   BRIDGED_INLINE BridgedArgumentConvention getCalleeConvention() const;
+  SWIFT_IMPORT_UNSAFE BridgedOwnedString
+  getEnumTypeCaseName(SwiftInt caseIdx) const;
 };
 
 // SIL Bridging
@@ -534,6 +536,7 @@ struct BridgedFunction {
   bool isTrapNoReturn() const;
   bool isConvertPointerToPointerArgument() const;
   bool isAutodiffVJP() const;
+  bool isAutodiffBranchTracingEnumValid(BridgedType enumType) const;
   SwiftInt specializationLevel() const;
   SWIFT_IMPORT_UNSAFE BridgedSubstitutionMap getMethodSubstitutions(BridgedSubstitutionMap contextSubs,
                                                                     BridgedCanType selfType) const;
