@@ -104,6 +104,7 @@ import Cxx
 import CxxStdlib
 import SIL
 import SILBridging
+import AutoDiffClosureSpecializationBridging
 
 private let verbose = false
 
@@ -2418,8 +2419,8 @@ extension SpecializationCloner {
               closureInfoArray.append(closureInfo)
               arrayOfClosureAndIdxInPayload.append(
                 ClosureAndIdxInPayload(
-                  closure: closureInfo.closure.bridged,
-                  idxInPayload: closureInfo.idxInEnumPayload))
+                  /*closure: */closureInfo.closure.bridged,
+                  /*idxInPayload: */closureInfo.idxInEnumPayload))
             }
           }
         }
