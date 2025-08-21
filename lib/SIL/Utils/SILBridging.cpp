@@ -662,7 +662,23 @@ std::vector<Type> getEnumQueue(BridgedType topEnum) {
   return enumQueue;
 }
 
-using BranchTracingEnumCaseIdx = SwiftInt;
+struct EnumTypeAndCaseIdx {
+  BridgedType enumType;
+  SwiftInt caseIdx;
+};
+
+inline bool operator==(const EnumTypeAndCaseIdx &lhs,
+                       const EnumTypeAndCaseIdx &rhs) {
+  return lhs.enumType == rhs.enumType && lhs.caseIdx == rhs.caseIdx;
+}
+
+struct EnumTypeAndCaseIdxHasher {
+  unsigned operator()(const EnumTypeAndCaseIdx &value) const {
+    return llvm::DenseMapInfo<std::pair<void *, SwiftInt>>::getHashValue(
+        std::pair<void *, SwiftInt>(value.enumType.opaqueValue, value.caseIdx));
+  }
+};
+
 struct ClosureAndIdxInPayload {
   ClosureAndIdxInPayload(BridgedInstruction closure, SwiftInt idxInPayload)
       : closure(closure), idxInPayload(idxInPayload) {}
@@ -672,11 +688,9 @@ struct ClosureAndIdxInPayload {
 
 static BridgedType autodiffSpecializeBranchTracingEnum(
     BridgedType enumType, BridgedFunction topVjp,
-    const std::unordered_map<
-        BridgedType,
-        llvm::DenseMap<BranchTracingEnumCaseIdx,
-                       llvm::SmallVector<ClosureAndIdxInPayload, 8>>,
-        BridgedTypeHasher> &closuresBuffers,
+    const std::unordered_map<EnumTypeAndCaseIdx,
+                             llvm::SmallVector<ClosureAndIdxInPayload, 8>,
+                             EnumTypeAndCaseIdxHasher> &closuresBuffers,
     const BranchTracingEnumDict &branchTracingEnumDict) {
   EnumDecl *oldED = enumType.unbridged().getEnumOrBoundGenericEnum();
   assert(oldED && "Expected valid enum type");
@@ -718,10 +732,9 @@ static BridgedType autodiffSpecializeBranchTracingEnum(
     const llvm::SmallVector<ClosureAndIdxInPayload, 8> *closuresBuffer =
         nullptr;
 
-    if (auto it1 = closuresBuffers.find(enumType); it1 != closuresBuffers.end()) {
-      if (auto it2 = it1->second.find(enumIdx); it2 != it1->second.end()) {
-        closuresBuffer = &it2->second;
-      }
+    if (auto it = closuresBuffers.find(EnumTypeAndCaseIdx{enumType, enumIdx});
+        it != closuresBuffers.end()) {
+      closuresBuffer = &it->second;
     }
 
     assert(oldEED->getParameterList()->size() == 1);
@@ -810,16 +823,14 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteAllEnums(
     BridgedFunction topVjp, BridgedType topEnum,
     const VectorOfBridgedClosureInfoCFG &vectorOfClosureInfoCFG) const {
 
-  std::unordered_map<
-      BridgedType,
-      llvm::DenseMap<BranchTracingEnumCaseIdx,
-                     llvm::SmallVector<ClosureAndIdxInPayload, 8>>,
-      BridgedTypeHasher>
+  std::unordered_map<EnumTypeAndCaseIdx,
+                     llvm::SmallVector<ClosureAndIdxInPayload, 8>,
+                     EnumTypeAndCaseIdxHasher>
       closuresBuffers;
 
   for (const BridgedClosureInfoCFG &elem : vectorOfClosureInfoCFG) {
-    closuresBuffers[elem.enumType][elem.enumCaseIdx].emplace_back(
-        elem.closure, elem.idxInPayload);
+    closuresBuffers[EnumTypeAndCaseIdx{elem.enumType, elem.enumCaseIdx}]
+        .emplace_back(elem.closure, elem.idxInPayload);
   }
 
   std::vector<Type> enumQueue = getEnumQueue(topEnum);
