@@ -1051,9 +1051,9 @@ private func getOrCreateSpecializedFunctionCFG(
   let closureInfos = pullbackClosureInfo.closureInfosCFG
   let enumTypeOfEntryBBArg = getEnumArgOfEntryPbBB(pb.entryBlock, vjp: vjp)!.type
 
-  let vectorOfClosureInfoCFG = VectorOfBridgedClosureInfoCFG(
+  let vectorOfClosureInfoCFG = VectorOfBranchTracingEnumAndClosureInfo(
     closureInfos.map {
-      BridgedClosureInfoCFG(
+      BranchTracingEnumAndClosureInfo(
         enumType: $0.enumTypeAndCase.enumType.bridged,
         enumCaseIdx: $0.enumTypeAndCase.caseIdx,
         closure: $0.closure.bridged,
@@ -1160,7 +1160,7 @@ private func rewriteApplyInstructionCFG(
     if enumDict[arg.type.bridged] == nil {
       continue
     }
-    recreateEnumBlockArgument(arg.bridged, enumDict)
+    specializeBranchTracingEnumBBArgInVJP(arg.bridged, enumDict)
   }
   let pai = pullbackClosureInfo.paiOfPullback as! PartialApplyInst
 
@@ -2260,7 +2260,7 @@ private func rewriteUsesOfPayloadItem(
         break
       }
       let succ = succSome!
-      let newArg = recreateOptionalBlockArgument(succ.bridged, newSEI.operands[0].value.type.bridged)
+      let newArg = specializeOptionalBBArgInPullback(succ.bridged, newSEI.operands[0].value.type.bridged)
         .argument
       for argUse in newArg.uses {
         rewriteUsesOfPayloadItem(
@@ -2423,8 +2423,8 @@ extension SpecializationCloner {
           }
         }
       }
-      logADCS(msg: "recreateTupleBlockArgument: \(bb.shortDescription)")
-      let newArg = recreateTupleBlockArgument(
+      logADCS(msg: "specializePayloadTupleBBArgInPullback: \(bb.shortDescription)")
+      let newArg = specializePayloadTupleBBArgInPullback(
         arg.bridged, enumDict, VectorOfClosureAndIdxInPayload(arrayOfClosureAndIdxInPayload)
       ).argument
 
@@ -2884,7 +2884,7 @@ extension Builder {
   }
 }
 
-typealias EnumDict = BranchTracingEnumDict
+typealias EnumDict = SpecializedBranchTracingEnumDict
 
 private func getSpecializedParametersCFG(
   basedOn pullbackClosureInfo: PullbackClosureInfo, pb: Function, enumType: Type,

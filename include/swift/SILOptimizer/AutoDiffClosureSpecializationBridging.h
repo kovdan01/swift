@@ -18,12 +18,10 @@
 SWIFT_BEGIN_NULLABILITY_ANNOTATIONS
 
 struct BridgedTypeHasher {
-  unsigned operator()(const BridgedType &value) const {
-    return llvm::DenseMapInfo<void *>::getHashValue(value.opaqueValue);
-  }
+  unsigned operator()(const BridgedType &value) const;
 };
 
-using BranchTracingEnumDict =
+using SpecializedBranchTracingEnumDict =
     std::unordered_map<BridgedType, BridgedType, BridgedTypeHasher>;
 
 struct ClosureAndIdxInPayload {
@@ -35,25 +33,28 @@ struct ClosureAndIdxInPayload {
 
 using VectorOfClosureAndIdxInPayload = std::vector<ClosureAndIdxInPayload>;
 
-struct BridgedClosureInfoCFG {
+struct BranchTracingEnumAndClosureInfo {
   BridgedType enumType;
   SwiftInt enumCaseIdx;
   BridgedInstruction closure;
   SwiftInt idxInPayload;
 };
 
-using VectorOfBridgedClosureInfoCFG = std::vector<BridgedClosureInfoCFG>;
+using VectorOfBranchTracingEnumAndClosureInfo =
+    std::vector<BranchTracingEnumAndClosureInfo>;
 
-SWIFT_IMPORT_UNSAFE BranchTracingEnumDict autodiffSpecializeBranchTracingEnums(
+SWIFT_IMPORT_UNSAFE SpecializedBranchTracingEnumDict
+autodiffSpecializeBranchTracingEnums(
     BridgedFunction topVjp, BridgedType topEnum,
-    const VectorOfBridgedClosureInfoCFG &vectorOfClosureInfoCFG);
+    const VectorOfBranchTracingEnumAndClosureInfo
+        &vectorOfBranchTracingEnumAndClosureInfo);
 
-SWIFT_IMPORT_UNSAFE BridgedArgument recreateEnumBlockArgument(
-    BridgedArgument arg, const BranchTracingEnumDict &dict);
-SWIFT_IMPORT_UNSAFE BridgedArgument recreateTupleBlockArgument(
-    BridgedArgument arg, const BranchTracingEnumDict &dict,
+SWIFT_IMPORT_UNSAFE BridgedArgument specializeBranchTracingEnumBBArgInVJP(
+    BridgedArgument arg, const SpecializedBranchTracingEnumDict &dict);
+SWIFT_IMPORT_UNSAFE BridgedArgument specializePayloadTupleBBArgInPullback(
+    BridgedArgument arg, const SpecializedBranchTracingEnumDict &dict,
     const VectorOfClosureAndIdxInPayload &closuresBuffersForPb);
-SWIFT_IMPORT_UNSAFE BridgedArgument recreateOptionalBlockArgument(
+SWIFT_IMPORT_UNSAFE BridgedArgument specializeOptionalBBArgInPullback(
     BridgedBasicBlock bbBridged, BridgedType optionalType);
 
 SWIFT_END_NULLABILITY_ANNOTATIONS

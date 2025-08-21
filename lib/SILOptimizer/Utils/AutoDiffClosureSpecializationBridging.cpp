@@ -21,7 +21,13 @@
 
 #include "llvm/ADT/STLExtras.h"
 
+#include "llvm/ADT/DenseMapInfo.h"
+
 using namespace swift;
+
+unsigned BridgedTypeHasher::operator()(const BridgedType &value) const {
+  return llvm::DenseMapInfo<void *>::getHashValue(value.opaqueValue);
+}
 
 static SILType getBranchingTraceEnumLoweredType(EnumDecl *ed,
                                                 SILFunction *vjp) {
@@ -31,7 +37,7 @@ static SILType getBranchingTraceEnumLoweredType(EnumDecl *ed,
 
 static Type getCapturedArgTypesForClosure(const SILInstruction *closure,
                                           ASTContext &ctx) {
-  SmallVector<TupleTypeElt, 4> paramTuple;
+  llvm::SmallVector<TupleTypeElt, 4> paramTuple;
 
   if (const auto *pai = dyn_cast<PartialApplyInst>(closure)) {
     paramTuple.reserve(pai->getArguments().size());
@@ -153,20 +159,106 @@ using BranchTracingEnumToClosuresDict =
 // NOTE: Branch tracing enum creation logic was adopted from
 // LinearMapInfo::createBranchingTraceDecl.
 static BridgedType autodiffSpecializeBranchTracingEnum(
-    BridgedType enumType, BridgedFunction topVjp,
+    BridgedType branchTracingEnumType, BridgedFunction bridgedTopVjp,
     const BranchTracingEnumToClosuresDict &branchTracingEnumToClosuresDict,
-    const BranchTracingEnumDict &branchTracingEnumDict) {
-  EnumDecl *oldED = enumType.unbridged().getEnumOrBoundGenericEnum();
+    const SpecializedBranchTracingEnumDict &branchTracingEnumDict) {
+  EnumDecl *oldED =
+      branchTracingEnumType.unbridged().getEnumOrBoundGenericEnum();
   assert(oldED && "Expected valid enum type");
   // TODO: switch to contains() after transition to C++20
-  assert(branchTracingEnumDict.find(enumType.unbridged()) ==
+  assert(branchTracingEnumDict.find(branchTracingEnumType) ==
          branchTracingEnumDict.end());
 
-  SILModule &module = topVjp.getFunction()->getModule();
+  SILModule &module = bridgedTopVjp.getFunction()->getModule();
   ASTContext &astContext = oldED->getASTContext();
 
+  std::string newEDNameStr = oldED->getNameStr().str() + "_spec";
+
+  llvm::SmallVector<ParameterList *, 8> newParameterLists;
+
+  for (EnumCaseDecl *oldECD : oldED->getAllCases()) {
+    assert(oldECD->getElements().size() == 1);
+    EnumElementDecl *oldEED = oldECD->getElements().front();
+
+    unsigned caseIdx = module.getCaseIndex(oldEED);
+
+    static llvm::SmallVector<ClosureAndIdxInPayload, 8>
+        emptyVectorOfClosureAndIdxInPayload = {};
+    auto vectorOfClosureAndIdxInPayloadIt =
+        branchTracingEnumToClosuresDict.find(
+            EnumTypeAndCaseIdx{branchTracingEnumType, caseIdx});
+    const llvm::SmallVector<ClosureAndIdxInPayload, 8>
+        &vectorOfClosureAndIdxInPayload =
+            (vectorOfClosureAndIdxInPayloadIt ==
+                     branchTracingEnumToClosuresDict.end()
+                 ? emptyVectorOfClosureAndIdxInPayload
+                 : vectorOfClosureAndIdxInPayloadIt->second);
+
+    assert(oldEED->getParameterList()->size() == 1);
+    ParamDecl &oldParamDecl = *oldEED->getParameterList()->front();
+
+    auto *oldPayloadTupleType =
+        cast<TupleType>(oldParamDecl.getInterfaceType().getPointer());
+    llvm::SmallVector<TupleTypeElt, 8> newPayloadTupleElementTypes;
+    newPayloadTupleElementTypes.reserve(oldPayloadTupleType->getNumElements());
+
+    std::string newECDNameSuffix;
+
+    for (unsigned idxInPayloadTuple = 0;
+         idxInPayloadTuple < oldPayloadTupleType->getNumElements();
+         ++idxInPayloadTuple) {
+      auto closureAndIdxInPayloadIt = llvm::find_if(
+          vectorOfClosureAndIdxInPayload,
+          [idxInPayloadTuple](
+              const ClosureAndIdxInPayload &closureAndIdxInPayload) {
+            return closureAndIdxInPayload.idxInPayload == idxInPayloadTuple;
+          });
+      Type type;
+      if (closureAndIdxInPayloadIt != vectorOfClosureAndIdxInPayload.end()) {
+        newECDNameSuffix += '_' + std::to_string(idxInPayloadTuple);
+        type = getCapturedArgTypesForClosure(
+            closureAndIdxInPayloadIt->closure.unbridged(), astContext);
+        // TODO: delete throwing function support
+        if (oldPayloadTupleType->getElementType(idxInPayloadTuple)
+                ->isOptional()) {
+          assert(idxInPayloadTuple + 1 ==
+                 oldPayloadTupleType->getNumElements());
+          type = OptionalType::get(type)->getCanonicalType();
+        }
+      } else {
+        type = oldPayloadTupleType->getElementType(idxInPayloadTuple);
+        // TODO
+        for (const auto &[enumTypeOld, enumTypeNew] : branchTracingEnumDict) {
+          if (enumTypeOld.unbridged()
+                  .getASTType()
+                  ->mapTypeOutOfContext()
+                  .getPointer() == type.getPointer()) {
+            assert(idxInPayloadTuple == 0);
+            type = enumTypeNew.unbridged().getASTType();
+          }
+        }
+      }
+      Identifier label =
+          oldPayloadTupleType->getElement(idxInPayloadTuple).getName();
+      newPayloadTupleElementTypes.emplace_back(type, label);
+    }
+
+    Type newTupleType = TupleType::get(newPayloadTupleElementTypes, astContext)
+                            ->mapTypeOutOfContext();
+
+    auto *newParamDecl = ParamDecl::cloneWithoutType(astContext, &oldParamDecl);
+    newParamDecl->setInterfaceType(newTupleType);
+
+    newParameterLists.emplace_back(
+        ParameterList::create(astContext, {newParamDecl}));
+
+    if (!newECDNameSuffix.empty())
+      newEDNameStr += '_' + oldEED->getNameStr().str() + newECDNameSuffix;
+  }
+
   CanGenericSignature genericSig = nullptr;
-  if (auto *derivativeFnGenEnv = topVjp.getFunction()->getGenericEnvironment())
+  if (auto *derivativeFnGenEnv =
+          bridgedTopVjp.getFunction()->getGenericEnvironment())
     genericSig =
         derivativeFnGenEnv->getGenericSignature().getCanonicalSignature();
   GenericParamList *genericParams = nullptr;
@@ -174,119 +266,61 @@ static BridgedType autodiffSpecializeBranchTracingEnum(
     genericParams = autodiff::cloneGenericParameters(
         astContext, oldED->getDeclContext(), genericSig);
 
-  // TODO: use better naming
-  Twine edNameStr = oldED->getNameStr() + "_specialized";
-  Identifier edName = astContext.getIdentifier(edNameStr.str());
+  Identifier newEDName = astContext.getIdentifier(newEDNameStr);
 
-  auto *ed = new (astContext) EnumDecl(
-      /*EnumLoc*/ SourceLoc(), /*Name*/ edName, /*NameLoc*/ SourceLoc(),
+  auto *newED = new (astContext) EnumDecl(
+      /*EnumLoc*/ SourceLoc(), /*Name*/ newEDName, /*NameLoc*/ SourceLoc(),
       /*Inherited*/ {}, /*GenericParams*/ genericParams,
       /*DC*/
       oldED->getDeclContext());
-  ed->setImplicit();
+  newED->setImplicit();
   if (genericSig)
-    ed->setGenericSignature(genericSig);
+    newED->setGenericSignature(genericSig);
 
-  for (EnumCaseDecl *oldECD : oldED->getAllCases()) {
-    assert(oldECD->getElements().size() == 1);
+  for (auto [idx, oldECD] : llvm::enumerate(oldED->getAllCases())) {
     EnumElementDecl *oldEED = oldECD->getElements().front();
-
-    unsigned enumIdx = module.getCaseIndex(oldEED);
-
-    static llvm::SmallVector<ClosureAndIdxInPayload, 8> emptyClosuresBuffer =
-        {};
-
-    auto it = branchTracingEnumToClosuresDict.find(
-        EnumTypeAndCaseIdx{enumType, enumIdx});
-    const llvm::SmallVector<ClosureAndIdxInPayload, 8> &closuresBuffer =
-        (it == branchTracingEnumToClosuresDict.end() ? emptyClosuresBuffer
-                                                     : it->second);
-
-    assert(oldEED->getParameterList()->size() == 1);
-    ParamDecl &oldParamDecl = *oldEED->getParameterList()->front();
-
-    auto *tt = cast<TupleType>(oldParamDecl.getInterfaceType().getPointer());
-    SmallVector<TupleTypeElt, 4> newElements;
-    newElements.reserve(tt->getNumElements());
-
-    for (unsigned idxInPayload = 0; idxInPayload < tt->getNumElements();
-         ++idxInPayload) {
-      auto it = llvm::find_if(
-          closuresBuffer,
-          [idxInPayload](const ClosureAndIdxInPayload &closureAndIdxInPayload) {
-            return closureAndIdxInPayload.idxInPayload == idxInPayload;
-          });
-      Type type;
-      if (it != closuresBuffer.end()) {
-        type =
-            getCapturedArgTypesForClosure(it->closure.unbridged(), astContext);
-        // TODO: delete throwing function support
-        if (tt->getElementType(idxInPayload)->isOptional()) {
-          assert(idxInPayload + 1 == tt->getNumElements());
-          type = OptionalType::get(type)->getCanonicalType();
-        }
-      } else {
-        type = tt->getElementType(idxInPayload);
-        for (const auto &[enumTypeOld, enumTypeNew] : branchTracingEnumDict) {
-          if (enumTypeOld.unbridged()
-                  .getASTType()
-                  ->mapTypeOutOfContext()
-                  .getPointer() == type.getPointer()) {
-            assert(idxInPayload == 0);
-            type = enumTypeNew.unbridged().getASTType();
-          }
-        }
-      }
-      Identifier label = tt->getElement(idxInPayload).getName();
-      newElements.emplace_back(type, label);
-    }
-
-    Type newTupleType =
-        TupleType::get(newElements, astContext)->mapTypeOutOfContext();
-
-    auto *newParamDecl = ParamDecl::cloneWithoutType(astContext, &oldParamDecl);
-    newParamDecl->setInterfaceType(newTupleType);
-
-    auto *newPL = ParameterList::create(astContext, {newParamDecl});
-
+    auto *newPL = newParameterLists[idx];
     auto *newEED = new (astContext) EnumElementDecl(
         /*IdentifierLoc*/ SourceLoc(),
         DeclName(astContext.getIdentifier(oldEED->getNameStr())), newPL,
-        SourceLoc(), /*RawValueExpr*/ nullptr, ed);
+        SourceLoc(), /*RawValueExpr*/ nullptr, newED);
     newEED->setImplicit();
     auto *newECD = EnumCaseDecl::create(
-        /*CaseLoc*/ SourceLoc(), {newEED}, ed);
+        /*CaseLoc*/ SourceLoc(), {newEED}, newED);
     newECD->setImplicit();
-    ed->addMember(newEED);
-    ed->addMember(newECD);
+    newED->addMember(newEED);
+    newED->addMember(newECD);
   }
 
-  ed->setAccess(AccessLevel::Public);
-  auto &file = autodiff::getSourceFile(topVjp.getFunction())
+  // MYTODO: is this correct?
+  newED->setAccess(AccessLevel::Public);
+  auto &file = autodiff::getSourceFile(bridgedTopVjp.getFunction())
                    .getOrCreateSynthesizedFile();
-  file.addTopLevelDecl(ed);
+  file.addTopLevelDecl(newED);
   file.getParentModule()->clearLookupCache();
 
-  SILType newEnumType =
-      remapType(getBranchingTraceEnumLoweredType(ed, topVjp.getFunction()),
-                topVjp.getFunction());
+  SILType newEnumType = remapType(
+      getBranchingTraceEnumLoweredType(newED, bridgedTopVjp.getFunction()),
+      bridgedTopVjp.getFunction());
 
   return newEnumType;
 }
 
-BranchTracingEnumDict autodiffSpecializeBranchTracingEnums(
+SpecializedBranchTracingEnumDict autodiffSpecializeBranchTracingEnums(
     BridgedFunction topVjp, BridgedType topEnum,
-    const VectorOfBridgedClosureInfoCFG &vectorOfClosureInfoCFG) {
+    const VectorOfBranchTracingEnumAndClosureInfo
+        &vectorOfBranchTracingEnumAndClosureInfo) {
 
   BranchTracingEnumToClosuresDict closuresBuffers;
 
-  for (const BridgedClosureInfoCFG &elem : vectorOfClosureInfoCFG) {
+  for (const BranchTracingEnumAndClosureInfo &elem :
+       vectorOfBranchTracingEnumAndClosureInfo) {
     closuresBuffers[EnumTypeAndCaseIdx{elem.enumType, elem.enumCaseIdx}]
         .emplace_back(elem.closure, elem.idxInPayload);
   }
 
   std::vector<Type> enumQueue = getEnumQueue(topEnum);
-  BranchTracingEnumDict dict;
+  SpecializedBranchTracingEnumDict dict;
 
   for (const Type &t : enumQueue) {
     EnumDecl *ed = t->getEnumOrBoundGenericEnum();
@@ -302,8 +336,8 @@ BranchTracingEnumDict autodiffSpecializeBranchTracingEnums(
   return dict;
 }
 
-BridgedArgument recreateEnumBlockArgument(BridgedArgument arg,
-                                          const BranchTracingEnumDict &dict) {
+BridgedArgument specializeBranchTracingEnumBBArgInVJP(
+    BridgedArgument arg, const SpecializedBranchTracingEnumDict &dict) {
   swift::ValueOwnershipKind oldOwnership =
       arg.getArgument()->getOwnershipKind();
 
@@ -321,8 +355,8 @@ BridgedArgument recreateEnumBlockArgument(BridgedArgument arg,
   return {newArg};
 }
 
-BridgedArgument recreateOptionalBlockArgument(BridgedBasicBlock bbBridged,
-                                              BridgedType optionalType) {
+BridgedArgument specializeOptionalBBArgInPullback(BridgedBasicBlock bbBridged,
+                                                  BridgedType optionalType) {
   swift::SILBasicBlock *bb = bbBridged.unbridged();
   assert(!bb->isEntry());
   SILArgument *oldArg = bb->getArgument(0);
@@ -352,8 +386,9 @@ BridgedArgument recreateOptionalBlockArgument(BridgedBasicBlock bbBridged,
   return {newArg};
 }
 
-BridgedArgument recreateTupleBlockArgument(
-    BridgedArgument arg, const BranchTracingEnumDict &branchTracingEnumDict,
+BridgedArgument specializePayloadTupleBBArgInPullback(
+    BridgedArgument arg,
+    const SpecializedBranchTracingEnumDict &branchTracingEnumDict,
     const VectorOfClosureAndIdxInPayload &closuresBuffersForPb) {
   swift::SILArgument *oldArg = arg.getArgument();
   unsigned argIdx = oldArg->getIndex();
