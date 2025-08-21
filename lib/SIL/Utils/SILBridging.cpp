@@ -183,16 +183,10 @@ BridgedFunction BridgedTestArguments::takeFunction() const {
   return {arguments->takeFunction()};
 }
 
-/// Returns the lowered SIL type of the branching trace enum associated with
-/// the given original block.
 static SILType getBranchingTraceEnumLoweredType(EnumDecl *ed,
                                                 SILFunction *vjp) {
-  auto traceDeclType = ed->getDeclaredInterfaceType()->getCanonicalType();
-  Lowering::AbstractionPattern pattern(
-      vjp->getLoweredFunctionType()->getSubstGenericSignature(), traceDeclType);
-  Lowering::TypeConverter typeConverter(*ed->getParentModule());
-  return typeConverter.getLoweredType(pattern, traceDeclType,
-                                      TypeExpansionContext::minimal());
+  return autodiff::getBranchingTraceEnumLoweredTypeImpl(ed, vjp,
+                                                        vjp->getModule().Types);
 }
 
 /// Remap any archetypes into the current function's context.
@@ -668,19 +662,27 @@ std::vector<Type> getEnumQueue(BridgedType topEnum) {
   return enumQueue;
 }
 
-static BridgedType rewriteBranchTracingEnum(
+using BranchTracingEnumCaseIdx = SwiftInt;
+struct ClosureAndIdxInPayload {
+  ClosureAndIdxInPayload(BridgedInstruction closure, SwiftInt idxInPayload)
+      : closure(closure), idxInPayload(idxInPayload) {}
+  BridgedInstruction closure;
+  SwiftInt idxInPayload;
+};
+
+static BridgedType autodiffSpecializeBranchTracingEnum(
     BridgedType enumType, BridgedFunction topVjp,
-    std::unordered_map<
+    const std::unordered_map<
         BridgedType,
-        llvm::DenseMap<
-            SwiftInt,
-            llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>>,
+        llvm::DenseMap<BranchTracingEnumCaseIdx,
+                       llvm::SmallVector<ClosureAndIdxInPayload, 8>>,
         BridgedTypeHasher> &closuresBuffers,
-    const BranchTracingEnumDict &dict) {
+    const BranchTracingEnumDict &branchTracingEnumDict) {
   EnumDecl *oldED = enumType.unbridged().getEnumOrBoundGenericEnum();
   assert(oldED && "Expected valid enum type");
   // TODO: switch to contains() after transition to C++20
-  assert(dict.find(enumType.unbridged()) == dict.end());
+  assert(branchTracingEnumDict.find(enumType.unbridged()) ==
+         branchTracingEnumDict.end());
 
   SILModule &module = topVjp.getFunction()->getModule();
   ASTContext &astContext = oldED->getASTContext();
@@ -713,16 +715,14 @@ static BridgedType rewriteBranchTracingEnum(
 
     unsigned enumIdx = module.getCaseIndex(oldEED);
 
-    llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
-        *closuresBuffer = nullptr;
+    const llvm::SmallVector<ClosureAndIdxInPayload, 8> *closuresBuffer =
+        nullptr;
 
     if (auto it1 = closuresBuffers.find(enumType); it1 != closuresBuffers.end()) {
       if (auto it2 = it1->second.find(enumIdx); it2 != it1->second.end()) {
         closuresBuffer = &it2->second;
       }
     }
-
-    //&closuresBuffers[enumType.unbridged()][enumIdx];
 
     assert(oldEED->getParameterList()->size() == 1);
     ParamDecl &oldParamDecl = *oldEED->getParameterList()->front();
@@ -736,21 +736,22 @@ static BridgedType rewriteBranchTracingEnum(
       unsigned idxInClosuresBuffer = -1;
       if (closuresBuffer != nullptr) {
         for (unsigned j = 0; j < closuresBuffer->size(); ++j) {
-          if ((*closuresBuffer)[j].second == i) {
-            assert(idxInClosuresBuffer == unsigned(-1) ||
-                   (*closuresBuffer)[j].first.unbridged() ==
-                       (*closuresBuffer)[idxInClosuresBuffer].first.unbridged());
+          if ((*closuresBuffer)[j].idxInPayload == i) {
+            assert(
+                idxInClosuresBuffer == unsigned(-1) ||
+                (*closuresBuffer)[j].closure.unbridged() ==
+                    (*closuresBuffer)[idxInClosuresBuffer].closure.unbridged());
             idxInClosuresBuffer = j;
           }
         }
       }
       if (idxInClosuresBuffer != unsigned(-1)) {
         if (const auto *PAI = dyn_cast<PartialApplyInst>(
-                (*closuresBuffer)[idxInClosuresBuffer].first.unbridged())) {
+                (*closuresBuffer)[idxInClosuresBuffer].closure.unbridged())) {
           type = getPAICapturedArgTypes(PAI, astContext);
         } else {
           assert(isa<ThinToThickFunctionInst>(
-              (*closuresBuffer)[idxInClosuresBuffer].first.unbridged()));
+              (*closuresBuffer)[idxInClosuresBuffer].closure.unbridged()));
           type = TupleType::get({}, astContext);
         }
         if (tt->getElementType(i)->isOptional()) {
@@ -760,7 +761,7 @@ static BridgedType rewriteBranchTracingEnum(
       } else {
         type = tt->getElementType(i);
         // TODO: make this less fragile
-        for (const auto &[enumTypeOld, enumTypeNew] : dict) {
+        for (const auto &[enumTypeOld, enumTypeNew] : branchTracingEnumDict) {
           if (enumTypeOld.unbridged().getDebugDescription() ==
               "$" + type.getString()) {
             assert(i == 0);
@@ -808,10 +809,11 @@ BranchTracingEnumDict
 BridgedAutoDiffClosureSpecializationHelper::rewriteAllEnums(
     BridgedFunction topVjp, BridgedType topEnum,
     const VectorOfBridgedClosureInfoCFG &vectorOfClosureInfoCFG) const {
+
   std::unordered_map<
       BridgedType,
-      llvm::DenseMap<SwiftInt, llvm::SmallVector<
-                                   std::pair<BridgedInstruction, SwiftInt>, 8>>,
+      llvm::DenseMap<BranchTracingEnumCaseIdx,
+                     llvm::SmallVector<ClosureAndIdxInPayload, 8>>,
       BridgedTypeHasher>
       closuresBuffers;
 
@@ -830,7 +832,7 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteAllEnums(
         remapType(getBranchingTraceEnumLoweredType(ed, topVjp.getFunction()),
                   topVjp.getFunction());
 
-    dict[BridgedType(silType)] = rewriteBranchTracingEnum(
+    dict[BridgedType(silType)] = autodiffSpecializeBranchTracingEnum(
         BridgedType(silType), topVjp, closuresBuffers, dict);
   }
 
