@@ -2418,8 +2418,8 @@ extension SpecializationCloner {
               closureInfoArray.append(closureInfo)
               arrayOfClosureAndIdxInPayload.append(
                 ClosureAndIdxInPayload(
-                  closure: closureInfo.closure.bridged,
-                  idxInPayload: closureInfo.idxInEnumPayload))
+                  /*closure: */closureInfo.closure.bridged,
+                  /*idxInPayload: */closureInfo.idxInEnumPayload))
             }
           }
         }
