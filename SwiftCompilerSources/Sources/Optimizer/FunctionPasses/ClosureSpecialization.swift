@@ -104,6 +104,7 @@ import Cxx
 import CxxStdlib
 import SIL
 import SILBridging
+import AutoDiffClosureSpecializationBridging
 
 private let verbose = false
 
@@ -1050,7 +1051,6 @@ private func getOrCreateSpecializedFunctionCFG(
   let closureInfos = pullbackClosureInfo.closureInfosCFG
   let enumTypeOfEntryBBArg = getEnumArgOfEntryPbBB(pb.entryBlock, vjp: vjp)!.type
 
-  var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
   let vectorOfClosureInfoCFG = VectorOfBridgedClosureInfoCFG(
     closureInfos.map {
       BridgedClosureInfoCFG(
@@ -1061,7 +1061,7 @@ private func getOrCreateSpecializedFunctionCFG(
     })
 
   enumDict =
-    adcsHelper.rewriteAllEnums(
+    autodiffSpecializeBranchTracingEnums(
       /*topVjp: */pullbackClosureInfo.paiOfPullback.parentFunction.bridged,
       /*topEnum: */enumTypeOfEntryBBArg.bridged,
       /*vectorOfClosureInfoCFG: */vectorOfClosureInfoCFG
@@ -1160,7 +1160,7 @@ private func rewriteApplyInstructionCFG(
     if enumDict[arg.type.bridged] == nil {
       continue
     }
-    bb.bridged.recreateEnumBlockArgument(arg.bridged, enumDict)
+    recreateEnumBlockArgument(arg.bridged, enumDict)
   }
   let pai = pullbackClosureInfo.paiOfPullback as! PartialApplyInst
 
@@ -2260,7 +2260,7 @@ private func rewriteUsesOfPayloadItem(
         break
       }
       let succ = succSome!
-      let newArg = succ.bridged.recreateOptionalBlockArgument(newSEI.operands[0].value.type.bridged)
+      let newArg = recreateOptionalBlockArgument(succ.bridged, newSEI.operands[0].value.type.bridged)
         .argument
       for argUse in newArg.uses {
         rewriteUsesOfPayloadItem(
@@ -2402,7 +2402,6 @@ extension SpecializationCloner {
       }
 
       var closureInfoArray = [ClosureInfoCFG]()
-      var adcsHelper = BridgedAutoDiffClosureSpecializationHelper()
       var arrayOfClosureAndIdxInPayload = [ClosureAndIdxInPayload]()
       if tiInVjp != nil {
         for (opIdx, op) in tiInVjp!.operands.enumerated() {
@@ -2418,14 +2417,14 @@ extension SpecializationCloner {
               closureInfoArray.append(closureInfo)
               arrayOfClosureAndIdxInPayload.append(
                 ClosureAndIdxInPayload(
-                  closure: closureInfo.closure.bridged,
-                  idxInPayload: closureInfo.idxInEnumPayload))
+                  /*closure: */closureInfo.closure.bridged,
+                  /*idxInPayload: */closureInfo.idxInEnumPayload))
             }
           }
         }
       }
       logADCS(msg: "recreateTupleBlockArgument: \(bb.shortDescription)")
-      let newArg = bb.bridged.recreateTupleBlockArgument(
+      let newArg = recreateTupleBlockArgument(
         arg.bridged, enumDict, VectorOfClosureAndIdxInPayload(arrayOfClosureAndIdxInPayload)
       ).argument
 

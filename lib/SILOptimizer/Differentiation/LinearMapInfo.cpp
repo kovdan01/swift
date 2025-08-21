@@ -33,9 +33,7 @@ namespace autodiff {
 // Local helpers
 //===----------------------------------------------------------------------===//
 
-/// Clone the generic parameters of the given generic signature and return a new
-/// `GenericParamList`.
-static GenericParamList *cloneGenericParameters(ASTContext &ctx,
+GenericParamList *cloneGenericParameters(ASTContext &ctx,
                                                 DeclContext *dc,
                                                 CanGenericSignature sig) {
   SmallVector<GenericTypeParamDecl *, 2> clonedParams;
