@@ -1185,21 +1185,6 @@ inline bool operator==(const BridgedType &lhs, const BridgedType &rhs) {
   return lhs.opaqueValue == rhs.opaqueValue;
 }
 
-struct BridgedClosureInfoCFG {
-  BridgedType enumType;
-  SwiftInt enumCaseIdx;
-  BridgedInstruction closure;
-  SwiftInt idxInPayload;
-};
-
-using VectorOfBridgedClosureInfoCFG = std::vector<BridgedClosureInfoCFG>;
-
-struct BridgedAutoDiffClosureSpecializationHelper {
-  SWIFT_IMPORT_UNSAFE BranchTracingEnumDict rewriteAllEnums(
-      BridgedFunction topVjp, BridgedType topEnum,
-      const VectorOfBridgedClosureInfoCFG &vectorOfClosureInfoCFG) const;
-};
-
 struct BridgedBuilder{
 
   enum class InsertAt {

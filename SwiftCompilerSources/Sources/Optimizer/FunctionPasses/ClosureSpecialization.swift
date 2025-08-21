@@ -104,6 +104,7 @@ import Cxx
 import CxxStdlib
 import SIL
 import SILBridging
+import AutoDiffClosureSpecializationBridging
 
 private let verbose = false
 
