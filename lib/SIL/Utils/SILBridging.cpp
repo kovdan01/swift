@@ -30,6 +30,7 @@
 #include "swift/SIL/SILGlobalVariable.h"
 #include "swift/SIL/SILNode.h"
 #include "swift/SIL/Test.h"
+#include "swift/SILOptimizer/Differentiation/ADContext.h"
 #include "swift/SILOptimizer/Differentiation/LinearMapInfo.h"
 #include <string>
 #include <cstring>
@@ -189,6 +190,7 @@ static SILType getBranchingTraceEnumLoweredType(EnumDecl *ed,
                                                         vjp->getModule().Types);
 }
 
+// TODO: can we use LinearMapInfo::remapTypeInDerivative?
 /// Remap any archetypes into the current function's context.
 SILType remapType(SILType ty, SILFunction *foo) {
   if (ty.hasArchetype())
@@ -202,17 +204,6 @@ SILType remapType(SILType ty, SILFunction *foo) {
   if (foo->getGenericEnvironment())
     return foo->mapTypeIntoContext(remappedSILType);
   return remappedSILType;
-}
-
-static SourceFile &getSourceFile(SILFunction *f) {
-  if (f->hasLocation())
-    if (auto *declContext = f->getLocation().getAsDeclContext())
-      if (auto *parentSourceFile = declContext->getParentSourceFile())
-        return *parentSourceFile;
-  for (auto *file : f->getModule().getSwiftModule()->getFiles())
-    if (auto *sourceFile = dyn_cast<SourceFile>(file))
-      return *sourceFile;
-  llvm_unreachable("Could not resolve SourceFile from SILFunction");
 }
 
 static Type getPAICapturedArgTypes(const PartialApplyInst *pai,
@@ -686,11 +677,14 @@ struct ClosureAndIdxInPayload {
   SwiftInt idxInPayload;
 };
 
+using BranchTracingEnumToClosuresDict = std::unordered_map<EnumTypeAndCaseIdx,
+                   llvm::SmallVector<ClosureAndIdxInPayload, 8>,
+                                                           EnumTypeAndCaseIdxHasher>;
+
+// NOTE: Branch tracing enum creation logic was adopted from LinearMapInfo::createBranchingTraceDecl.
 static BridgedType autodiffSpecializeBranchTracingEnum(
     BridgedType enumType, BridgedFunction topVjp,
-    const std::unordered_map<EnumTypeAndCaseIdx,
-                             llvm::SmallVector<ClosureAndIdxInPayload, 8>,
-                             EnumTypeAndCaseIdxHasher> &closuresBuffers,
+    const BranchTracingEnumToClosuresDict &closuresBuffers,
     const BranchTracingEnumDict &branchTracingEnumDict) {
   EnumDecl *oldED = enumType.unbridged().getEnumOrBoundGenericEnum();
   assert(oldED && "Expected valid enum type");
@@ -744,12 +738,13 @@ static BridgedType autodiffSpecializeBranchTracingEnum(
     SmallVector<TupleTypeElt, 4> newElements;
     newElements.reserve(tt->getNumElements());
 
-    for (unsigned i = 0; i < tt->getNumElements(); ++i) {
+    for (unsigned idxInPayload = 0; idxInPayload < tt->getNumElements(); ++idxInPayload) {
       Type type;
       unsigned idxInClosuresBuffer = -1;
       if (closuresBuffer != nullptr) {
+        // TODO: change to algorithm function
         for (unsigned j = 0; j < closuresBuffer->size(); ++j) {
-          if ((*closuresBuffer)[j].idxInPayload == i) {
+          if ((*closuresBuffer)[j].idxInPayload == idxInPayload) {
             assert(
                 idxInClosuresBuffer == unsigned(-1) ||
                 (*closuresBuffer)[j].closure.unbridged() ==
@@ -767,22 +762,22 @@ static BridgedType autodiffSpecializeBranchTracingEnum(
               (*closuresBuffer)[idxInClosuresBuffer].closure.unbridged()));
           type = TupleType::get({}, astContext);
         }
-        if (tt->getElementType(i)->isOptional()) {
-          assert(i + 1 == tt->getNumElements());
+        if (tt->getElementType(idxInPayload)->isOptional()) {
+          assert(idxInPayload + 1 == tt->getNumElements());
           type = OptionalType::get(type)->getCanonicalType();
         }
       } else {
-        type = tt->getElementType(i);
+        type = tt->getElementType(idxInPayload);
         // TODO: make this less fragile
         for (const auto &[enumTypeOld, enumTypeNew] : branchTracingEnumDict) {
           if (enumTypeOld.unbridged().getDebugDescription() ==
               "$" + type.getString()) {
-            assert(i == 0);
+            assert(idxInPayload == 0);
             type = enumTypeNew.unbridged().getASTType();
           }
         }
       }
-      Identifier label = tt->getElement(i).getName();
+      Identifier label = tt->getElement(idxInPayload).getName();
       newElements.emplace_back(type, label);
     }
 
@@ -807,7 +802,7 @@ static BridgedType autodiffSpecializeBranchTracingEnum(
   }
 
   ed->setAccess(AccessLevel::Public);
-  auto &file = getSourceFile(topVjp.getFunction()).getOrCreateSynthesizedFile();
+  auto &file = autodiff::getSourceFile(topVjp.getFunction()).getOrCreateSynthesizedFile();
   file.addTopLevelDecl(ed);
   file.getParentModule()->clearLookupCache();
 
@@ -823,9 +818,7 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteAllEnums(
     BridgedFunction topVjp, BridgedType topEnum,
     const VectorOfBridgedClosureInfoCFG &vectorOfClosureInfoCFG) const {
 
-  std::unordered_map<EnumTypeAndCaseIdx,
-                     llvm::SmallVector<ClosureAndIdxInPayload, 8>,
-                     EnumTypeAndCaseIdxHasher>
+  BranchTracingEnumToClosuresDict
       closuresBuffers;
 
   for (const BridgedClosureInfoCFG &elem : vectorOfClosureInfoCFG) {
