@@ -60,7 +60,8 @@ ADContext::ADContext(SILModuleTransform &transform)
     : transform(transform), module(*transform.getModule()),
       passManager(*transform.getPassManager()) {}
 
-SourceFile &getSourceFile(SILFunction *f) {
+/// Get the source file for the given `SILFunction`.
+static SourceFile &getSourceFile(SILFunction *f) {
   if (f->hasLocation())
     if (auto *declContext = f->getLocation().getAsDeclContext())
       if (auto *parentSourceFile = declContext->getParentSourceFile())

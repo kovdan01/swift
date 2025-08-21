@@ -30,19 +30,6 @@ class SILLoopInfo;
 
 namespace autodiff {
 
-inline SILType
-getBranchingTraceEnumLoweredTypeImpl(EnumDecl *traceDecl,
-                                     SILFunction *derivative,
-                                     Lowering::TypeConverter &typeConverter) {
-  auto traceDeclType =
-      traceDecl->getDeclaredInterfaceType()->getCanonicalType();
-  Lowering::AbstractionPattern pattern(
-      derivative->getLoweredFunctionType()->getSubstGenericSignature(),
-      traceDeclType);
-  return typeConverter.getLoweredType(pattern, traceDeclType,
-                                      TypeExpansionContext::minimal());
-}
-
 class ADContext;
 
 /// Linear map struct and branching trace enum information for an original
@@ -174,8 +161,13 @@ public:
   /// the given original block.
   SILType getBranchingTraceEnumLoweredType(SILBasicBlock *origBB) const {
     auto *traceDecl = getBranchingTraceDecl(origBB);
-    return getBranchingTraceEnumLoweredTypeImpl(traceDecl, derivative,
-                                                typeConverter);
+    auto traceDeclType =
+        traceDecl->getDeclaredInterfaceType()->getCanonicalType();
+    Lowering::AbstractionPattern pattern(
+        derivative->getLoweredFunctionType()->getSubstGenericSignature(),
+        traceDeclType);
+    return typeConverter.getLoweredType(pattern, traceDeclType,
+                                        TypeExpansionContext::minimal());
   }
 
   /// Returns the enum element in the given successor block's branching trace
@@ -206,12 +198,6 @@ public:
     return heapAllocatedContext;
   }
 };
-
-/// Clone the generic parameters of the given generic signature and return a new
-/// `GenericParamList`.
-GenericParamList *cloneGenericParameters(ASTContext &ctx,
-                                         DeclContext *dc,
-                                         CanGenericSignature sig);
 
 } // end namespace autodiff
 } // end namespace swift
