@@ -2364,14 +2364,14 @@ extension SpecializationCloner {
       let predBBOpt = bb.predecessors.first
       assert(predBBOpt != nil)
       let predBB = predBBOpt!
-      var argIdx = -1
-      for (i, a) in bb.arguments.enumerated() {
-        if a == arg {
-          argIdx = i
-          break
-        }
-      }
-      assert(argIdx != -1)
+//      var argIdx = -1
+//      for (i, a) in bb.arguments.enumerated() {
+//        if a == arg {
+//          argIdx = i
+//          break
+//        }
+//      }
+//      assert(argIdx != -1)
 
       let enumToPayload = findEnumsAndPayloadsInVjp(
         vjp: pullbackClosureInfo.paiOfPullback.parentFunction)
@@ -2381,23 +2381,15 @@ extension SpecializationCloner {
       var newArgOpt = Argument?(nil)
       if brInstOpt != nil {
         let brInst = brInstOpt!
-        let possibleUEDI = brInst.operands[argIdx].value.definingInstruction
+        let possibleUEDI = brInst.operands[arg.index].value.definingInstruction
         let uedi = possibleUEDI as? UncheckedEnumDataInst
         assert(uedi != nil)
         let enumType = uedi!.`enum`.type
         let caseIdx = uedi!.caseIndex
 
-        logADCS(msg: "AAAAAAA 00")
-        logADCS(msg: "\(enumType)")
-        logADCS(msg: "AAAAAAA 01")
-        logADCS(msg: "\(caseIdx)")
-        logADCS(msg: "AAAAAAA 02")
-
         logADCS(msg: "specializePayloadTupleBBArgInPullback: \(bb.shortDescription)")
         newArgOpt = specializePayloadTupleBBArgInPullback(
-          arg.bridged, enumType.bridged, caseIdx)
-        .argument
-
+          arg.bridged, enumType.bridged, caseIdx).argument
 
         for (enumInst, payload) in enumToPayload {
           if enumDict[enumInst.type.bridged] == enumType.bridged && enumInst.caseIndex == caseIdx {
@@ -2410,18 +2402,10 @@ extension SpecializationCloner {
         assert(sei != nil)
         let enumType = sei!.enumOp.type
         let caseIdx = sei!.getUniqueCase(forSuccessor: bb)!
-        logADCS(msg: "AAAAAAA 10")
-        logADCS(msg: "\(enumType)")
-        logADCS(msg: "AAAAAAA 11")
-        logADCS(msg: "\(caseIdx)")
-        logADCS(msg: "AAAAAAA 12")
-
 
         logADCS(msg: "specializePayloadTupleBBArgInPullback: \(bb.shortDescription)")
         newArgOpt = specializePayloadTupleBBArgInPullback(
-          arg.bridged, enumType.bridged, caseIdx)
-        .argument
-
+          arg.bridged, enumType.bridged, caseIdx).argument
 
         for (enumInst, payload) in enumToPayload {
           if enumDict[enumInst.type.bridged] == enumType.bridged && enumInst.caseIndex == caseIdx {
@@ -2430,7 +2414,6 @@ extension SpecializationCloner {
           }
         }
       }
-
 
       let newArg = newArgOpt!
       replaceBBArg(arg.bridged, newArg.bridged)
@@ -2457,11 +2440,6 @@ extension SpecializationCloner {
           }
         }
       }
-//      logADCS(msg: "specializePayloadTupleBBArgInPullback: \(bb.shortDescription)")
-//      let newArg = specializePayloadTupleBBArgInPullback(
-//        arg.bridged, enumDict, VectorOfClosureAndIdxInPayload(arrayOfClosureAndIdxInPayload)
-//      ).argument
-      //replaceBBArg(arg.bridged, newArg)
 
       if newArg.uses.count == 0 {
         continue
@@ -3363,25 +3341,6 @@ func getEnumDict(function: Function, context: FunctionPassContext) -> EnumDict {
 
 let specializeBranchTracingEnums = FunctionTest("autodiff_specialize_branch_tracing_enums") {
   function, arguments, context in
-//  let pullbackClosureInfo = getPullbackClosureInfo(in: function, context)!
-//  let enumTypeOfEntryBBArg = getEnumArgOfEntryPbBB(pullbackClosureInfo.pullbackFn.entryBlock, vjp: function)!.type
-//
-//  let vectorOfClosureInfoCFG = VectorOfBranchTracingEnumAndClosureInfo(
-//    pullbackClosureInfo.closureInfosCFG.map {
-//      BranchTracingEnumAndClosureInfo(
-//        enumType: $0.enumTypeAndCase.enumType.bridged,
-//        enumCaseIdx: $0.enumTypeAndCase.caseIdx,
-//        closure: $0.closure.bridged,
-//        idxInPayload: $0.idxInEnumPayload)
-//    })
-//
-//  let enumDict =
-//    autodiffSpecializeBranchTracingEnums(
-//      /*topVjp: */function.bridged,
-//      /*topEnum: */enumTypeOfEntryBBArg.bridged,
-//      /*vectorOfClosureInfoCFG: */vectorOfClosureInfoCFG
-//    )
-
   let enumDict = getEnumDict(function: function, context: context)
 
   print("\(String(taking: getSpecializedBranchTracingEnumDictAsString(enumDict, function.bridged)))")
@@ -3389,25 +3348,6 @@ let specializeBranchTracingEnums = FunctionTest("autodiff_specialize_branch_trac
 
 let specializeBTEArgInVjpBB = FunctionTest("autodiff_specialize_bte_arg_in_vjp_bb") {
   function, arguments, context in
-//  let pullbackClosureInfo = getPullbackClosureInfo(in: function, context)!
-//  let enumTypeOfEntryBBArg = getEnumArgOfEntryPbBB(pullbackClosureInfo.pullbackFn.entryBlock, vjp: function)!.type
-//
-//  let vectorOfClosureInfoCFG = VectorOfBranchTracingEnumAndClosureInfo(
-//    pullbackClosureInfo.closureInfosCFG.map {
-//      BranchTracingEnumAndClosureInfo(
-//        enumType: $0.enumTypeAndCase.enumType.bridged,
-//        enumCaseIdx: $0.enumTypeAndCase.caseIdx,
-//        closure: $0.closure.bridged,
-//        idxInPayload: $0.idxInEnumPayload)
-//    })
-//
-//  let enumDict =
-//    autodiffSpecializeBranchTracingEnums(
-//      /*topVjp: */function.bridged,
-//      /*topEnum: */enumTypeOfEntryBBArg.bridged,
-//      /*vectorOfClosureInfoCFG: */vectorOfClosureInfoCFG
-//    )
-
   let enumDict = getEnumDict(function: function, context: context)
   for bb in function.blocks {
     guard let arg = getEnumArgOfVJPBB(bb) else {
@@ -3429,86 +3369,37 @@ let specializePayloadArgInPullbackBB = FunctionTest("autodiff_specialize_payload
 
   for bb in pullbackClosureInfo.pullbackFn.blocks {
     guard
-      let arg = getEnumPayloadArgOfPbBB(bb, vjp: pullbackClosureInfo.paiOfPullback.parentFunction)
+      let arg = getEnumPayloadArgOfPbBB(bb, vjp: function)
     else {
       continue
     }
 
-    // MYTODO: can we assume that at least one pred is present?
+    // If enum payload arg is present, we are not in entry block. At least one predecessor is present.
     let predBBOpt = bb.predecessors.first
     assert(predBBOpt != nil)
     let predBB = predBBOpt!
-    var argIdx = -1
-    for (i, a) in bb.arguments.enumerated() {
-      if a == arg {
-        argIdx = i
-        break
-      }
-    }
-    assert(argIdx != -1)
 
-    let enumToPayload = findEnumsAndPayloadsInVjp(
-      vjp: pullbackClosureInfo.paiOfPullback.parentFunction)
-
+    var enumTypeOldOpt = Type?(nil)
+    var caseIdxOpt = Int?(nil)
     let brInstOpt = predBB.terminator as? BranchInst
-    var tiInVjp = TupleInst?(nil)
-    var newArgOpt = Argument?(nil)
     if brInstOpt != nil {
       let brInst = brInstOpt!
-      let possibleUEDI = brInst.operands[argIdx].value.definingInstruction
+      let possibleUEDI = brInst.operands[arg.index].value.definingInstruction
       let uedi = possibleUEDI as? UncheckedEnumDataInst
       assert(uedi != nil)
-      let enumTypeOld = uedi!.`enum`.type
-      let enumType = enumDict[enumTypeOld.bridged]!
-      let caseIdx = uedi!.caseIndex
-
-      logADCS(msg: "AAAAAAA 00")
-      logADCS(msg: "\(enumType)")
-      logADCS(msg: "AAAAAAA 01")
-      logADCS(msg: "\(caseIdx)")
-      logADCS(msg: "AAAAAAA 02")
-
-      logADCS(msg: "specializePayloadTupleBBArgInPullback: \(bb.shortDescription)")
-      newArgOpt = specializePayloadTupleBBArgInPullback(
-        arg.bridged, enumType, caseIdx)
-      .argument
-
+      enumTypeOldOpt = uedi!.`enum`.type
+      caseIdxOpt = uedi!.caseIndex
     } else {
       let sei = predBB.terminator as? SwitchEnumInst
       assert(sei != nil)
-      let enumTypeOld = sei!.enumOp.type
-      let enumType = enumDict[enumTypeOld.bridged]!
-      let caseIdx = sei!.getUniqueCase(forSuccessor: bb)!
-      logADCS(msg: "AAAAAAA 10")
-      logADCS(msg: "\(enumType)")
-      logADCS(msg: "AAAAAAA 11")
-      logADCS(msg: "\(caseIdx)")
-      logADCS(msg: "AAAAAAA 12")
-
-
-      logADCS(msg: "specializePayloadTupleBBArgInPullback: \(bb.shortDescription)")
-      newArgOpt = specializePayloadTupleBBArgInPullback(
-        arg.bridged, enumType, caseIdx)
-      .argument
-
-
+      enumTypeOldOpt = sei!.enumOp.type
+      caseIdxOpt = sei!.getUniqueCase(forSuccessor: bb)!
     }
 
-    let newArg = newArgOpt!
+    let enumType = enumDict[enumTypeOldOpt!.bridged]!
+    let newArg = specializePayloadTupleBBArgInPullback(
+        arg.bridged, enumType, caseIdxOpt!).argument
     print("\(newArg)")
     bb.eraseArgument(at: newArg.index, context)
-
   }
-
-//  for bb in function.blocks {
-//    guard let arg = getEnumArgOfVJPBB(bb) else {
-//      continue
-//    }
-//    if enumDict[arg.type.bridged] == nil {
-//      continue
-//    }
-//    let newArg = specializeBranchTracingEnumBBArgInVJP(arg.bridged, enumDict).argument
-//    print("\(newArg)")
-//    bb.eraseArgument(at: newArg.index, context)
-//  }
 }
