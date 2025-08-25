@@ -17,6 +17,7 @@
 #include "swift/SILOptimizer/Differentiation/ADContext.h"
 #include "swift/SILOptimizer/Differentiation/LinearMapInfo.h"
 #include "llvm/ADT/DenseMapInfo.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
 
 using namespace swift;
@@ -24,6 +25,13 @@ using namespace swift;
 unsigned BridgedTypeHasher::operator()(const BridgedType &value) const {
   return llvm::DenseMapInfo<void *>::getHashValue(value.opaqueValue);
 }
+
+bool operator==(const BridgedType &lhs, const BridgedType &rhs) {
+  return lhs.opaqueValue == rhs.opaqueValue;
+}
+
+ClosureAndIdxInPayload::ClosureAndIdxInPayload(BridgedInstruction closure, SwiftInt idxInPayload)
+    : closure(closure), idxInPayload(idxInPayload) {}
 
 static SILType getBranchingTraceEnumLoweredType(EnumDecl *ed,
                                                 SILFunction &vjp) {
@@ -127,10 +135,6 @@ llvm::SmallVector<Type, 8> getBranchTracingEnumQueue(BridgedType topBTEType) {
   return bteQueue;
 }
 
-bool operator==(const BridgedType &lhs, const BridgedType &rhs) {
-  return lhs.opaqueValue == rhs.opaqueValue;
-}
-
 struct EnumTypeAndCaseIdx {
   BridgedType enumType;
   SwiftInt caseIdx;
@@ -198,6 +202,8 @@ static BridgedType autodiffSpecializeBranchTracingEnum(
     for (unsigned idxInPayloadTuple = 0;
          idxInPayloadTuple < oldPayloadTupleType->getNumElements();
          ++idxInPayloadTuple) {
+      Identifier label =
+          oldPayloadTupleType->getElement(idxInPayloadTuple).getName();
       auto closureAndIdxInPayloadIt = llvm::find_if(
           closureAndIdxList,
           [idxInPayloadTuple](
@@ -220,19 +226,18 @@ static BridgedType autodiffSpecializeBranchTracingEnum(
       } else {
         newPayloadTupleEltType =
             oldPayloadTupleType->getElementType(idxInPayloadTuple);
-        // TODO
-        for (const auto &[enumTypeOld, enumTypeNew] : specBTEDict) {
-          if (enumTypeOld.unbridged()
-                  .getASTType()
-                  ->mapTypeOutOfContext()
-                  .getPointer() == newPayloadTupleEltType.getPointer()) {
-            assert(idxInPayloadTuple == 0);
-            newPayloadTupleEltType = enumTypeNew.unbridged().getASTType();
+        if (idxInPayloadTuple == 0) {
+          EnumDecl *predED = newPayloadTupleEltType->getEnumOrBoundGenericEnum();
+          if (predED != nullptr) {
+            assert(label.str() == "predecessor");
+            auto predBTEType = remapType(getBranchingTraceEnumLoweredType(predED, topVjp), topVjp);
+            auto specPredBTETypeIt = specBTEDict.find(predBTEType);
+            assert(specPredBTETypeIt != specBTEDict.end());
+            newPayloadTupleEltType = specPredBTETypeIt->second.unbridged().getASTType();
           }
         }
       }
-      Identifier label =
-          oldPayloadTupleType->getElement(idxInPayloadTuple).getName();
+
       newPayloadTupleElementTypes.emplace_back(newPayloadTupleEltType, label);
     }
 
@@ -276,15 +281,14 @@ static BridgedType autodiffSpecializeBranchTracingEnum(
         DeclName(astContext.getIdentifier(oldEED->getNameStr())), newPL,
         SourceLoc(), /*RawValueExpr*/ nullptr, newED);
     newEED->setImplicit();
-    auto *newECD = EnumCaseDecl::create(
-        /*CaseLoc*/ SourceLoc(), {newEED}, newED);
-    newECD->setImplicit();
     newED->addMember(newEED);
-    newED->addMember(newECD);
   }
 
-  // MYTODO: is this correct?
+  // TODO: Copying access level from oldED causes crashes for some reason.
+  //       Use Public unconditionally as for now.
+  // TODO: Do we need to copy FrozenAttr and UsableFromInlineAttr from oldED?
   newED->setAccess(AccessLevel::Public);
+
   auto &file = autodiff::getSourceFile(&topVjp).getOrCreateSynthesizedFile();
   file.addTopLevelDecl(newED);
   file.getParentModule()->clearLookupCache();
@@ -432,4 +436,26 @@ BridgedArgument specializePayloadTupleBBArgInPullback(
   bb->eraseArgument(argIdx + 1);
 
   return {newArg};
+}
+
+BridgedOwnedString getSpecializedBranchTracingEnumDictAsString(const SpecializedBranchTracingEnumDict &specBTEDict, BridgedFunction topVjp) {
+  llvm::SmallVector<BridgedType, 8> keys;
+  keys.reserve(specBTEDict.size());
+  for (const auto &[key, _] : specBTEDict)
+    keys.emplace_back(key);
+  llvm::sort(keys, [](const BridgedType &lhs, const BridgedType &rhs){ return lhs.unbridged().getAsString() < rhs.unbridged().getAsString(); });
+
+  std::string str;
+  llvm::raw_string_ostream out(str);
+  out << "Specialized branch tracing enum dict for VJP " << topVjp.getFunction()->getName() << " contains " << specBTEDict.size() << " elements:\n";
+  for (const auto &[idx, key] : llvm::enumerate(keys)) {
+    out << "non-specialized BTE " << idx << ": ";
+    key.unbridged().getEnumOrBoundGenericEnum()->print(out);
+    out << '\n';
+    out << "specialized BTE " << idx << ": ";
+    specBTEDict.at(key).unbridged().getEnumOrBoundGenericEnum()->print(out);
+    out << '\n';
+  }
+
+  return BridgedOwnedString(/*stringToCopy=*/StringRef(str));
 }

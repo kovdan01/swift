@@ -3304,3 +3304,28 @@ let rewrittenCallerBodyTest = FunctionTest("autodiff_closure_specialize_rewritte
   print("Rewritten caller body for: \(function.name):")
   print("\(function)\n")
 }
+
+let specializeBranchTracingEnums = FunctionTest("autodiff_specialize_branch_tracing_enums") {
+  function, arguments, context in
+  let pullbackClosureInfo = getPullbackClosureInfo(in: function, context)!
+  let enumTypeOfEntryBBArg = getEnumArgOfEntryPbBB(pullbackClosureInfo.pullbackFn.entryBlock, vjp: function)!.type
+
+  let vectorOfClosureInfoCFG = VectorOfBranchTracingEnumAndClosureInfo(
+    pullbackClosureInfo.closureInfosCFG.map {
+      BranchTracingEnumAndClosureInfo(
+        enumType: $0.enumTypeAndCase.enumType.bridged,
+        enumCaseIdx: $0.enumTypeAndCase.caseIdx,
+        closure: $0.closure.bridged,
+        idxInPayload: $0.idxInEnumPayload)
+    })
+
+  let enumDict =
+    autodiffSpecializeBranchTracingEnums(
+      /*topVjp: */function.bridged,
+      /*topEnum: */enumTypeOfEntryBBArg.bridged,
+      /*vectorOfClosureInfoCFG: */vectorOfClosureInfoCFG
+    )
+
+  print("\(String(taking: getSpecializedBranchTracingEnumDictAsString(enumDict, function.bridged)))")
+}
+

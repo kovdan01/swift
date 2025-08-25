@@ -23,14 +23,13 @@ struct BridgedTypeHasher {
   unsigned operator()(const BridgedType &value) const;
 };
 
-bool operator==(const BridgedType &lhs, const BridgedType &rhs);
+SWIFT_IMPORT_UNSAFE bool operator==(const BridgedType &lhs, const BridgedType &rhs);
 
 using SpecializedBranchTracingEnumDict =
     std::unordered_map<BridgedType, BridgedType, BridgedTypeHasher>;
 
 struct ClosureAndIdxInPayload {
-  ClosureAndIdxInPayload(BridgedInstruction closure, SwiftInt idxInPayload)
-      : closure(closure), idxInPayload(idxInPayload) {}
+  SWIFT_IMPORT_UNSAFE ClosureAndIdxInPayload(BridgedInstruction closure, SwiftInt idxInPayload);
   BridgedInstruction closure;
   SwiftInt idxInPayload;
 };
@@ -60,6 +59,8 @@ SWIFT_IMPORT_UNSAFE BridgedArgument specializePayloadTupleBBArgInPullback(
     const VectorOfClosureAndIdxInPayload &closuresBuffersForPb);
 SWIFT_IMPORT_UNSAFE BridgedArgument specializeOptionalBBArgInPullback(
     BridgedBasicBlock bbBridged, BridgedType optionalType);
+
+SWIFT_IMPORT_UNSAFE BridgedOwnedString getSpecializedBranchTracingEnumDictAsString(const SpecializedBranchTracingEnumDict &specBTEDict, BridgedFunction topVjp);
 
 SWIFT_END_NULLABILITY_ANNOTATIONS
 

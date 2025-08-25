@@ -53,6 +53,7 @@ public func registerOptimizerTests() {
     localVariableReachingAssignmentsTest,
     rangeOverlapsPathTest,
     rewrittenCallerBodyTest,
+    specializeBranchTracingEnums,
     specializedFunctionSignatureAndBodyTest,
     variableIntroducerTest
   )
