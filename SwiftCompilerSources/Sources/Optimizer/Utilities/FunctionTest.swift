@@ -54,6 +54,8 @@ public func registerOptimizerTests() {
     rangeOverlapsPathTest,
     rewrittenCallerBodyTest,
     specializeBranchTracingEnums,
+    specializeBTEArgInVjpBB,
+    specializePayloadArgInPullbackBB,
     specializedFunctionSignatureAndBodyTest,
     variableIntroducerTest
   )

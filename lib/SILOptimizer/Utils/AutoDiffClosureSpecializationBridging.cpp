@@ -10,6 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "swift/SIL/SILBasicBlock.h"
+#include "swift/SIL/SILInstruction.h"
 #define DEBUG_TYPE "autodiff-closure-specialization-bridging"
 
 #include "swift/SILOptimizer/AutoDiffClosureSpecializationBridging.h"
@@ -343,9 +345,20 @@ BridgedArgument specializeBranchTracingEnumBBArgInVJP(
   SILType type = dict.at(BridgedType(oldArg->getType())).unbridged();
   swift::SILPhiArgument *newArg =
       bb->insertPhiArgument(index, type, oldOwnership);
-  oldArg->replaceAllUsesWith(newArg);
-  bb->eraseArgument(index + 1);
+  // oldArg->replaceAllUsesWith(newArg);
+  // bb->eraseArgument(index + 1);
   return {newArg};
+}
+
+void replaceBBArg(
+    BridgedArgument oldArg, BridgedArgument newArg) {
+  SILArgument *oldSILArg = oldArg.getArgument();
+  SILBasicBlock *bb = oldSILArg->getParentBlock();
+  SILArgument *newSILArg = newArg.getArgument();
+
+  unsigned index = oldSILArg->getIndex();
+  oldSILArg->replaceAllUsesWith(newSILArg);
+  bb->eraseArgument(index);
 }
 
 BridgedArgument specializeOptionalBBArgInPullback(BridgedBasicBlock bbBridged,
@@ -379,64 +392,138 @@ BridgedArgument specializeOptionalBBArgInPullback(BridgedBasicBlock bbBridged,
   return {newArg};
 }
 
+inline SILType
+getPayloadLoweredTypeImpl(CanType ty,
+                                     SILFunction *derivative,
+                                     Lowering::TypeConverter &typeConverter) {
+  Lowering::AbstractionPattern pattern(
+      derivative->getLoweredFunctionType()->getSubstGenericSignature(),
+      ty);
+  return typeConverter.getLoweredType(pattern, ty,
+                                      TypeExpansionContext::minimal());
+}
+
 BridgedArgument specializePayloadTupleBBArgInPullback(
     BridgedArgument arg,
-    const SpecializedBranchTracingEnumDict &branchTracingEnumDict,
-    const VectorOfClosureAndIdxInPayload &closuresBuffersForPb) {
+    BridgedType enumType,
+    SwiftInt caseIdx
+    /*const VectorOfClosureAndIdxInPayload &closuresBuffersForPb*/) {
   swift::SILArgument *oldArg = arg.getArgument();
   unsigned argIdx = oldArg->getIndex();
   swift::SILBasicBlock *bb = oldArg->getParentBlock();
   assert(!bb->isEntry());
-  ASTContext &astContext = bb->getModule().getASTContext();
-  auto *oldTupleTy =
-      llvm::cast<swift::TupleType>(oldArg->getType().getASTType().getPointer());
-  llvm::SmallVector<swift::TupleTypeElt, 8> newTupleElTypes;
-  for (unsigned idxInPayload = 0; idxInPayload < oldTupleTy->getNumElements();
-       ++idxInPayload) {
-    auto it = llvm::find_if(
-        closuresBuffersForPb,
-        [idxInPayload](const ClosureAndIdxInPayload &closureAndIdxInPayload) {
-          return closureAndIdxInPayload.idxInPayload == idxInPayload;
-        });
+  SILModule &silModule = bb->getModule();
+  
+  
 
-    if (it == closuresBuffersForPb.end()) {
-      Type type = oldTupleTy->getElementType(idxInPayload);
-      for (const auto &[enumTypeOld, enumTypeNew] : branchTracingEnumDict) {
-        if (enumTypeOld.unbridged().getASTType().getPointer() ==
-            type.getPointer()) {
-          assert(idxInPayload == 0);
-          type = enumTypeNew.unbridged().getASTType();
-        }
-      }
-      newTupleElTypes.emplace_back(
-          type, oldTupleTy->getElement(idxInPayload).getName());
+  SILType newEnumType = enumType.unbridged();//branchTracingEnumDict.at(enumType).unbridged();
+  EnumDecl *newED = newEnumType.getEnumOrBoundGenericEnum();
+  assert(newED != nullptr);
+  // EnumDecl *oldED = oldArg->getType().getEnumOrBoundGenericEnum();
+  // assert(oldED != nullptr);
+
+  CanType newPayloadTupleTy;
+  for (EnumElementDecl *newEED : newED->getAllElements()) {
+    // assert(oldECD->getElements().size() == 1);
+    // EnumElementDecl *oldEED = oldECD->getElements().front();
+    unsigned currentCaseIdx = silModule.getCaseIndex(newEED);
+    if (currentCaseIdx != caseIdx)
       continue;
-    }
 
-    CanType canType =
-        getCapturedArgTypesTupleForClosure(it->closure.unbridged(), astContext)
-            ->getCanonicalType();
-
-    // TODO: delete throwing function support
-    if (oldTupleTy->getElementType(idxInPayload)->isOptional()) {
-      assert(idxInPayload + 1 == oldTupleTy->getNumElements());
-      canType = OptionalType::get(canType)->getCanonicalType();
-    }
-    newTupleElTypes.emplace_back(canType);
+    newPayloadTupleTy = newEED->getPayloadInterfaceType()->getCanonicalType();    
   }
-  auto newTupleTy = swift::SILType::getFromOpaqueValue(
-      swift::TupleType::get(newTupleElTypes, astContext));
+
+  assert(newPayloadTupleTy != CanType());
+
+  SILType newPayloadTupleSILTy = remapType(getPayloadLoweredTypeImpl(newPayloadTupleTy, bb->getFunction(), silModule.Types), *bb->getFunction());  
+
+  // auto *oldTupleTy =
+  //     llvm::cast<swift::TupleType>(oldArg->getType().getASTType().getPointer());
+
+
+  // assert(!bb->getPredecessorBlocks().empty());
+  // SILBasicBlock *predBB = *bb->getPredecessorBlocks().begin();
+  // if (const auto *sei = dyn_cast<SwitchEnumInst>(predBB->getTerminator())) {
+  //   //sei->getCase(unsigned int i)
+  // } else {
+  //   const auto *bi= dyn_cast<BranchInst>(predBB->getTerminator());
+  //   assert(bi != nullptr);
+
+  // }
+
+
+  // auto newTupleTy = swift::SILType::getFromOpaqueValue(
+  //     swift::TupleType::get(newTupleElTypes, astContext));
 
   swift::ValueOwnershipKind oldOwnership =
       bb->getArgument(argIdx)->getOwnershipKind();
 
   swift::SILPhiArgument *newArg =
-      bb->insertPhiArgument(argIdx, newTupleTy, oldOwnership);
-  oldArg->replaceAllUsesWith(newArg);
-  bb->eraseArgument(argIdx + 1);
+      bb->insertPhiArgument(argIdx, newPayloadTupleSILTy, oldOwnership);
+  // oldArg->replaceAllUsesWith(newArg);
+  // bb->eraseArgument(argIdx + 1);
 
   return {newArg};
 }
+
+// BridgedArgument specializePayloadTupleBBArgInPullbackOld(
+//     BridgedArgument arg,
+//     const SpecializedBranchTracingEnumDict &branchTracingEnumDict,
+//     const VectorOfClosureAndIdxInPayload &closuresBuffersForPb) {
+//   swift::SILArgument *oldArg = arg.getArgument();
+//   unsigned argIdx = oldArg->getIndex();
+//   swift::SILBasicBlock *bb = oldArg->getParentBlock();
+//   assert(!bb->isEntry());
+//   ASTContext &astContext = bb->getModule().getASTContext();
+//   auto *oldTupleTy =
+//       llvm::cast<swift::TupleType>(oldArg->getType().getASTType().getPointer());
+//   llvm::SmallVector<swift::TupleTypeElt, 8> newTupleElTypes;
+//   for (unsigned idxInPayload = 0; idxInPayload < oldTupleTy->getNumElements();
+//        ++idxInPayload) {
+//     auto it = llvm::find_if(
+//         closuresBuffersForPb,
+//         [idxInPayload](const ClosureAndIdxInPayload &closureAndIdxInPayload) {
+//           return closureAndIdxInPayload.idxInPayload == idxInPayload;
+//         });
+
+//     if (it == closuresBuffersForPb.end()) {
+//       Type type = oldTupleTy->getElementType(idxInPayload);
+//       for (const auto &[enumTypeOld, enumTypeNew] : branchTracingEnumDict) {
+//         if (enumTypeOld.unbridged().getASTType().getPointer() ==
+//             type.getPointer()) {
+//           assert(idxInPayload == 0);
+//           type = enumTypeNew.unbridged().getASTType();
+//         }
+//       }
+//       newTupleElTypes.emplace_back(
+//           type, oldTupleTy->getElement(idxInPayload).getName());
+//       continue;
+//     }
+
+//     CanType canType =
+//         getCapturedArgTypesTupleForClosure(it->closure.unbridged(), astContext)
+//             ->getCanonicalType();
+
+//     // TODO: delete throwing function support
+//     if (oldTupleTy->getElementType(idxInPayload)->isOptional()) {
+//       assert(idxInPayload + 1 == oldTupleTy->getNumElements());
+//       canType = OptionalType::get(canType)->getCanonicalType();
+//     }
+//     newTupleElTypes.emplace_back(canType);
+//   }
+//   auto newTupleTy = swift::SILType::getFromOpaqueValue(
+//       swift::TupleType::get(newTupleElTypes, astContext));
+
+//   swift::ValueOwnershipKind oldOwnership =
+//       bb->getArgument(argIdx)->getOwnershipKind();
+
+//   swift::SILPhiArgument *newArg =
+//       bb->insertPhiArgument(argIdx, newTupleTy, oldOwnership);
+//   oldArg->replaceAllUsesWith(newArg);
+//   bb->eraseArgument(argIdx + 1);
+
+//   return {newArg};
+// }
 
 BridgedOwnedString getSpecializedBranchTracingEnumDictAsString(const SpecializedBranchTracingEnumDict &specBTEDict, BridgedFunction topVjp) {
   llvm::SmallVector<BridgedType, 8> keys;
@@ -454,6 +541,21 @@ BridgedOwnedString getSpecializedBranchTracingEnumDictAsString(const Specialized
     out << '\n';
     out << "specialized BTE " << idx << ": ";
     specBTEDict.at(key).unbridged().getEnumOrBoundGenericEnum()->print(out);
+    out << '\n';
+  }
+
+  return BridgedOwnedString(/*stringToCopy=*/StringRef(str));
+}
+
+BridgedOwnedString getBBArgsAsString(BridgedBasicBlock bb) {
+  std::string str;
+  llvm::raw_string_ostream out(str);
+
+  SILBasicBlock *silBB = bb.unbridged();
+  silBB->print(out);
+  out << '\n';
+  for (const SILArgument *arg : silBB->getArguments()) {
+    arg->print(out);
     out << '\n';
   }
 

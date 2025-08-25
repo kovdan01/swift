@@ -54,13 +54,25 @@ autodiffSpecializeBranchTracingEnums(
 
 SWIFT_IMPORT_UNSAFE BridgedArgument specializeBranchTracingEnumBBArgInVJP(
     BridgedArgument arg, const SpecializedBranchTracingEnumDict &dict);
+// SWIFT_IMPORT_UNSAFE BridgedArgument specializePayloadTupleBBArgInPullback(
+//     BridgedArgument arg, const SpecializedBranchTracingEnumDict &dict,
+//     const VectorOfClosureAndIdxInPayload &closuresBuffersForPb);
+
 SWIFT_IMPORT_UNSAFE BridgedArgument specializePayloadTupleBBArgInPullback(
-    BridgedArgument arg, const SpecializedBranchTracingEnumDict &dict,
-    const VectorOfClosureAndIdxInPayload &closuresBuffersForPb);
+    BridgedArgument arg,
+    BridgedType enumType,
+    SwiftInt caseIdx
+    /*const VectorOfClosureAndIdxInPayload &closuresBuffersForPb*/);
+
 SWIFT_IMPORT_UNSAFE BridgedArgument specializeOptionalBBArgInPullback(
     BridgedBasicBlock bbBridged, BridgedType optionalType);
 
 SWIFT_IMPORT_UNSAFE BridgedOwnedString getSpecializedBranchTracingEnumDictAsString(const SpecializedBranchTracingEnumDict &specBTEDict, BridgedFunction topVjp);
+
+SWIFT_IMPORT_UNSAFE BridgedOwnedString getBBArgsAsString(BridgedBasicBlock bb);
+
+SWIFT_IMPORT_UNSAFE void replaceBBArg(
+    BridgedArgument oldArg, BridgedArgument newArg);
 
 SWIFT_END_NULLABILITY_ANNOTATIONS
 
