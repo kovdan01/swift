@@ -226,37 +226,6 @@ BridgedBasicBlock::recreateEnumBlockArgument(BridgedArgument arg) const {
 }
 
 BridgedArgument
-BridgedBasicBlock::recreateOptionalBlockArgument(BridgedType optionalType) const {
-  swift::SILBasicBlock *bb = unbridged();
-  assert(!bb->isEntry());
-  SILArgument *oldArg = bb->getArgument(0);
-
-  SILModule &module = bb->getFunction()->getModule();
-
-  SILType silType = optionalType.unbridged();
-  assert(silType.getASTType()->isOptional());
-
-  swift::ValueOwnershipKind oldOwnership =
-      bb->getArgument(0)->getOwnershipKind();
-
-  CanType type = silType.getASTType()->getOptionalObjectType()->getCanonicalType();
-  Lowering::AbstractionPattern pattern(bb->getFunction()
-                                           ->getLoweredFunctionType()
-                                           ->getSubstGenericSignature(),
-                                       type);
-  SILType loweredType = module.Types.getLoweredType(
-      pattern, type, TypeExpansionContext::minimal());
-
-  swift::SILPhiArgument *newArg =
-      bb->insertPhiArgument(0, loweredType, oldOwnership);
-
-  oldArg->replaceAllUsesWith(newArg);
-  eraseArgument(1);
-
-  return {newArg};
-}
-
-BridgedArgument
 BridgedBasicBlock::recreateTupleBlockArgument(BridgedArgument arg) const {
   swift::SILBasicBlock *bb = unbridged();
   assert(!bb->isEntry());
@@ -289,22 +258,16 @@ BridgedBasicBlock::recreateTupleBlockArgument(BridgedArgument arg) const {
       continue;
     }
 
-    CanType canType;
     if (auto *pai = dyn_cast<PartialApplyInst>(
             closuresBuffersForPb[idxInClosuresBuffer].first.unbridged())) {
-      canType =
-          getPAICapturedArgTypes(pai, bb->getModule().getASTContext())->getCanonicalType();
+      newTupleElTypes.emplace_back(
+          getPAICapturedArgTypes(pai, bb->getModule().getASTContext()));
     } else {
       assert(isa<ThinToThickFunctionInst>(
           closuresBuffersForPb[idxInClosuresBuffer].first.unbridged()));
-      canType =
-          TupleType::get({}, bb->getModule().getASTContext())->getCanonicalType();
+      newTupleElTypes.emplace_back(
+          TupleType::get({}, bb->getModule().getASTContext()));
     }
-    if (oldTupleTy->getElementType(i)->isOptional()) {
-      assert(i + 1 == oldTupleTy->getNumElements());
-      canType = OptionalType::get(canType)->getCanonicalType();
-    }
-    newTupleElTypes.emplace_back(canType);
   }
   auto newTupleTy = swift::SILType::getFromOpaqueValue(
       swift::TupleType::get(newTupleElTypes, bb->getModule().getASTContext()));
@@ -818,47 +781,6 @@ BridgedType SILBridging_enumDictGetByKey(const BranchTracingEnumDict &dict,
   return BridgedType();
 }
 
-BridgedOwnedString
-BridgedType::getEnumTypeCaseName(SwiftInt caseIdx) const {
-  EnumDecl *ed = unbridged().getEnumOrBoundGenericEnum();
-  SwiftInt idx = 0;
-  for (EnumElementDecl *elem : ed->getAllElements()) {
-    if (idx == caseIdx)
-      return elem->getNameStr();
-    ++idx;
-  }
-  assert(false);
-}
-
-BridgedInstruction BridgedBuilder::createOptionalSome(BridgedValue value) const {
-  EnumElementDecl *someEltDecl = unbridged().getASTContext().getOptionalSomeDecl();
-  EnumInst *optionalSome = unbridged().createEnum(loc.getLoc().getLocation(), value.getSILValue(), someEltDecl,
-                                          SILType::getOptionalType(value.getType().unbridged()),
-                                    value.getSILValue()->getOwnershipKind());
-  return optionalSome;
-}
-
-BridgedInstruction BridgedBuilder::createOptionalNone(BridgedValueArray tupleElements) const {
-  EnumElementDecl *noneEltDecl = unbridged().getASTContext().getOptionalNoneDecl();
-
-  llvm::SmallVector<swift::SILValue, 16> elementValues;
-  llvm::ArrayRef<swift::SILValue> values = tupleElements.getValues(elementValues);
-  llvm::SmallVector<swift::TupleTypeElt, 16> tupleTyElts;
-  tupleTyElts.reserve(values.size());
-  for (const swift::SILValue &value : values) {
-    tupleTyElts.emplace_back(value->getType().getASTType());
-  }
-  swift::Type tupleTy =
-      swift::TupleType::get(tupleTyElts, unbridged().getASTContext());
-  swift::SILType silTupleTy =
-      swift::SILType::getPrimitiveObjectType(tupleTy->getCanonicalType());
-
-  EnumInst *optionalNone = unbridged().createEnum(loc.getLoc().getLocation(), SILValue(), noneEltDecl,
-                                                  SILType::getOptionalType(silTupleTy));
-
-  return optionalNone;
-}
-
 // MYTODO: copied from LinearMapInfo.cpp. Is this needed?
 /// Clone the generic parameters of the given generic signature and return a new
 /// `GenericParamList`.
@@ -944,10 +866,6 @@ BridgedAutoDiffClosureSpecializationHelper::rewriteBranchTracingEnum(
           assert(isa<ThinToThickFunctionInst>(
               (*closuresBuffer)[idxInClosuresBuffer].first.unbridged()));
           type = TupleType::get({}, astContext);
-        }
-        if (tt->getElementType(i)->isOptional()) {
-          assert(i + 1 == tt->getNumElements());
-          type = OptionalType::get(type)->getCanonicalType();
         }
       } else {
         type = tt->getElementType(i);
