@@ -13,8 +13,9 @@
 #include "swift/SILOptimizer/OptimizerBridging.h"
 #include "../../IRGen/IRGenModule.h"
 #include "swift/AST/SemanticAttrs.h"
+#include "swift/Demangling/ManglingMacros.h"
 #include "swift/SIL/DynamicCasts.h"
-#include "swift/SIL/OSSALifetimeCompletion.h"
+#include "swift/SIL/OSSACompleteLifetime.h"
 #include "swift/SIL/SILCloner.h"
 #include "swift/SIL/Test.h"
 #include "swift/SILOptimizer/Analysis/Analysis.h"
@@ -436,9 +437,9 @@ bool BridgedPassContext::completeLifetime(BridgedValue value) const {
   SILFunction *f = v->getFunction();
   DeadEndBlocks *deb = invocation->getPassManager()->getAnalysis<DeadEndBlocksAnalysis>()->get(f);
   DominanceInfo *domInfo = invocation->getPassManager()->getAnalysis<DominanceAnalysis>()->get(f);
-  OSSALifetimeCompletion completion(f, domInfo, *deb);
+  OSSACompleteLifetime completion(f, domInfo, *deb);
   auto result = completion.completeOSSALifetime(
-      v, OSSALifetimeCompletion::Boundary::Availability);
+      v, OSSACompleteLifetime::Boundary::Availability);
   return result == LifetimeCompletion::WasCompleted;
 }
 
@@ -543,41 +544,97 @@ bool BridgedFunction::isAutodiffVJP() const {
       getFunction(), swift::AutoDiffFunctionComponent::VJP);
 }
 
-bool BridgedFunction::isAutodiffBranchTracingEnumValid(
-    BridgedType enumType) const {
-  assert(isAutodiffVJP());
+// bool BridgedFunction::isAutodiffBranchTracingEnumValid(
+//     BridgedType enumType) const {
+//   assert(isAutodiffVJP());
 
-  std::string enumTypeStr = enumType.unbridged().getDebugDescription();
-  std::size_t idx = enumTypeStr.find("__Pred__");
-  if (idx == std::string::npos)
+//   std::string enumTypeStr = enumType.unbridged().getDebugDescription();
+//   std::size_t idx = enumTypeStr.find("__Pred__");
+//   if (idx == std::string::npos)
+//     return false;
+
+//   for (; idx != 0; --idx) {
+//     if (enumTypeStr[idx - 1] < '0' || enumTypeStr[idx - 1] > '9')
+//       break;
+//   }
+
+//   // MYTODO: proper checks
+//   assert(std::isdigit(enumTypeStr[idx]));
+//   assert(!std::isdigit(enumTypeStr[idx - 1]));
+//   assert(idx >= 3 + 6);
+
+//   if (std::string_view(enumTypeStr.data() + idx - 3, 3) != "_bb")
+//     return false;
+
+//   assert(std::string_view(enumTypeStr.data(), 8) == "$_AD__$s");
+
+//   llvm::StringRef enumOrigFuncName =
+//       std::string_view(enumTypeStr.data() + 6 + 2, idx - 3 - 6 - 2);
+
+//   Demangle::Context Ctx;
+//   if (auto *root = Ctx.demangleSymbolAsNode(getFunction()->getName())) {
+//     if (auto *node = root->findByKind(Demangle::Node::Kind::Function, 3)) {
+//       if (mangleNode(node).result() == enumOrigFuncName) {
+//         return true;
+//       }
+//     }
+//   }
+
+//   return false;
+// }
+
+// See also ASTMangler::mangleAutoDiffGeneratedDeclaration.
+bool BridgedType::isAutodiffBranchTracingEnumInVJP(BridgedFunction vjp) const {
+  assert(vjp.isAutodiffVJP());
+  EnumDecl *ed = unbridged().getEnumOrBoundGenericEnum();
+  if (ed == nullptr)
     return false;
 
-  for (; idx != 0; --idx) {
-    if (enumTypeStr[idx - 1] < '0' || enumTypeStr[idx - 1] > '9')
-      break;
-  }
-
-  // MYTODO: proper checks
-  assert(std::isdigit(enumTypeStr[idx]));
-  assert(!std::isdigit(enumTypeStr[idx - 1]));
-  assert(idx >= 3 + 6);
-
-  if (std::string_view(enumTypeStr.data() + idx - 3, 3) != "_bb")
+  llvm::StringRef edName = ed->getNameStr();
+  if (!edName.starts_with("_AD__"))
+    return false;
+  if (!llvm::StringRef(edName.data() + 5, edName.size() - 5)
+           .starts_with(MANGLING_PREFIX_STR))
     return false;
 
-  assert(std::string_view(enumTypeStr.data(), 8) == "$_AD__$s");
+         // At this point, we know that the type is indeed a branch tracing enum.
+         // Now we need to ensure that it is the enum related to the given VJP.
+
+  std::size_t idx = edName.rfind("__Pred__");
+  assert(idx != std::string::npos);
+
+         // Before "__Pred__", we have "_bbX", where X is a number.
+         // The loop calculates the start position of X.
+  for (; idx != 0 && std::isdigit(edName[idx - 1]); --idx)
+    ;
+
+  assert(std::isdigit(edName[idx]));
+  assert(!std::isdigit(edName[idx - 1]));
+
+         // The branch tracing enum decl name has the following components:
+         // 1) "_AD__";
+         // 2) MANGLING_PREFIX;
+         // 3) original function name;
+         // 4) "_bb";
+         // 5) X at position idx (see above);
+         // 6) the rest of the enum decl name.
+         // Thus, "_AD__", MANGLING_PREFIX and "_bb" must have total length less than
+         // idx.
+  std::size_t manglingPrefixSize = std::strlen(MANGLING_PREFIX_STR);
+  assert(idx > 5 + manglingPrefixSize + 3);
+  assert(std::string_view(edName.data() + idx - 3, 3) == "_bb");
+  assert(std::string_view(edName.data(), 5 + manglingPrefixSize) == "_AD__$s");
 
   llvm::StringRef enumOrigFuncName =
-      std::string_view(enumTypeStr.data() + 6 + 2, idx - 3 - 6 - 2);
+      std::string_view(edName.data() + 5 + manglingPrefixSize,
+                       idx - (5 + manglingPrefixSize + 3));
 
   Demangle::Context Ctx;
-  if (auto *root = Ctx.demangleSymbolAsNode(getFunction()->getName())) {
-    if (auto *node = root->findByKind(Demangle::Node::Kind::Function, 3)) {
-      if (mangleNode(node).result() == enumOrigFuncName) {
+  if (auto *root = Ctx.demangleSymbolAsNode(vjp.getFunction()->getName()))
+    if (auto *node =
+        root->findByKind(Demangle::Node::Kind::Function, /*maxDepth=*/3))
+      if (mangleNode(node).result() == enumOrigFuncName)
         return true;
-      }
-    }
-  }
 
   return false;
 }

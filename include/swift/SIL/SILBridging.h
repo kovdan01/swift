@@ -266,6 +266,8 @@ struct BridgedType {
   BRIDGED_INLINE bool isExactSuperclassOf(BridgedType t) const;
   BRIDGED_INLINE bool isMarkedAsImmortal() const;
   BRIDGED_INLINE bool isAddressableForDeps(BridgedFunction f) const;
+  SWIFT_IMPORT_UNSAFE bool
+  isAutodiffBranchTracingEnumInVJP(BridgedFunction vjp) const;
   BRIDGED_INLINE SWIFT_IMPORT_UNSAFE BridgedASTType getRawLayoutSubstitutedLikeType() const;
   BRIDGED_INLINE SWIFT_IMPORT_UNSAFE BridgedASTType getRawLayoutSubstitutedCountType() const;
   BRIDGED_INLINE SwiftInt getCaseIdxOfEnumType(BridgedStringRef name) const;
@@ -289,9 +291,9 @@ struct BridgedType {
   BRIDGED_INLINE BridgedArgumentConvention getCalleeConvention() const;
 };
 
-inline bool operator==(const BridgedType &lhs, const BridgedType &rhs) {
-  return lhs.opaqueValue == rhs.opaqueValue;
-}
+// inline bool operator==(const BridgedType &lhs, const BridgedType &rhs) {
+//   return lhs.opaqueValue == rhs.opaqueValue;
+// }
 
 // SIL Bridging
 
@@ -543,7 +545,7 @@ struct BridgedFunction {
   bool isTrapNoReturn() const;
   bool isConvertPointerToPointerArgument() const;
   bool isAutodiffVJP() const;
-  bool isAutodiffBranchTracingEnumValid(BridgedType enumType) const;
+  //bool isAutodiffBranchTracingEnumValid(BridgedType enumType) const;
   SwiftInt specializationLevel() const;
   SWIFT_IMPORT_UNSAFE BridgedSubstitutionMap getMethodSubstitutions(BridgedSubstitutionMap contextSubs,
                                                                     BridgedCanType selfType) const;
@@ -967,10 +969,10 @@ struct BridgedBasicBlock {
   BRIDGED_INLINE SwiftInt getNumArguments() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument getArgument(SwiftInt index) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument addBlockArgument(BridgedType type, BridgedValue::Ownership ownership) const;
-  SWIFT_IMPORT_UNSAFE BridgedArgument
-  recreateEnumBlockArgument(BridgedArgument arg) const;
-  SWIFT_IMPORT_UNSAFE BridgedArgument
-  recreateTupleBlockArgument(BridgedArgument arg) const;
+  // SWIFT_IMPORT_UNSAFE BridgedArgument
+  // recreateEnumBlockArgument(BridgedArgument arg) const;
+  // SWIFT_IMPORT_UNSAFE BridgedArgument
+  // recreateTupleBlockArgument(BridgedArgument arg) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument addFunctionArgument(BridgedType type) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument insertFunctionArgument(SwiftInt atPosition, BridgedType type,
                                                                             BridgedValue::Ownership ownership,
@@ -1160,35 +1162,35 @@ struct OptionalBridgedDefaultWitnessTable {
   const swift::SILDefaultWitnessTable * _Nullable table;
 };
 
-struct BridgedTypeHasher {
-  unsigned operator()(const BridgedType &value) const {
-    return llvm::DenseMapInfo<void *>::getHashValue(value.opaqueValue);
-  }
-};
+// struct BridgedTypeHasher {
+//   unsigned operator()(const BridgedType &value) const {
+//     return llvm::DenseMapInfo<void *>::getHashValue(value.opaqueValue);
+//   }
+// };
 
-using BranchTracingEnumDict =
-    std::unordered_map<BridgedType, BridgedType, BridgedTypeHasher>;
+// using BranchTracingEnumDict =
+//     std::unordered_map<BridgedType, BridgedType, BridgedTypeHasher>;
 
-BridgedType SILBridging_enumDictGetByKey(const BranchTracingEnumDict &dict,
-                                         BridgedType key);
+// BridgedType SILBridging_enumDictGetByKey(const BranchTracingEnumDict &dict,
+//                                          BridgedType key);
 
-struct BridgedAutoDiffClosureSpecializationHelper {
-  SWIFT_IMPORT_UNSAFE void appendToClosuresBuffer(BridgedType enumType,
-                                                  SwiftInt caseIdx,
-                                                  BridgedInstruction closure,
-                                                  SwiftInt idxInPayload);
-  SWIFT_IMPORT_UNSAFE void
-  appendToClosuresBufferForPb(BridgedInstruction closure,
-                              SwiftInt idxInPayload);
-  SWIFT_IMPORT_UNSAFE void clearClosuresBuffer();
-  SWIFT_IMPORT_UNSAFE void clearClosuresBufferForPb();
-  SWIFT_IMPORT_UNSAFE void clearEnumDict();
-  SWIFT_IMPORT_UNSAFE BridgedType
-  rewriteBranchTracingEnum(BridgedType enumType, BridgedFunction topVjp) const;
+// struct BridgedAutoDiffClosureSpecializationHelper {
+//   SWIFT_IMPORT_UNSAFE void appendToClosuresBuffer(BridgedType enumType,
+//                                                   SwiftInt caseIdx,
+//                                                   BridgedInstruction closure,
+//                                                   SwiftInt idxInPayload);
+//   SWIFT_IMPORT_UNSAFE void
+//   appendToClosuresBufferForPb(BridgedInstruction closure,
+//                               SwiftInt idxInPayload);
+//   SWIFT_IMPORT_UNSAFE void clearClosuresBuffer();
+//   SWIFT_IMPORT_UNSAFE void clearClosuresBufferForPb();
+//   SWIFT_IMPORT_UNSAFE void clearEnumDict();
+//   SWIFT_IMPORT_UNSAFE BridgedType
+//   rewriteBranchTracingEnum(BridgedType enumType, BridgedFunction topVjp) const;
 
-  SWIFT_IMPORT_UNSAFE BranchTracingEnumDict
-  rewriteAllEnums(BridgedFunction topVjp, BridgedType topEnum) const;
-};
+//   SWIFT_IMPORT_UNSAFE BranchTracingEnumDict
+//   rewriteAllEnums(BridgedFunction topVjp, BridgedType topEnum) const;
+// };
 
 struct BridgedBuilder{
 
@@ -1503,9 +1505,9 @@ struct BridgedContext {
                                                           SwiftInt paramCount,
                                                           bool hasSelfParam,
                                                           BridgedFunction fromFunc) const;
-  SWIFT_IMPORT_UNSAFE BridgedGlobalVar
-  createGlobalVariable(BridgedStringRef name, BridgedType type,
-                       BridgedLinkage linkage, bool isLet) const;
+  SWIFT_IMPORT_UNSAFE BridgedGlobalVar createGlobalVariable(BridgedStringRef name, BridgedType type,
+                                                            BridgedLinkage linkage, bool isLet,
+                                                            bool markedAsUsed) const;
   void moveFunctionBody(BridgedFunction sourceFunc, BridgedFunction destFunc) const;
 
   // Function-local SIL modifications

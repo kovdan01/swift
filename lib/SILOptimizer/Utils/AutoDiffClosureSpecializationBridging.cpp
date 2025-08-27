@@ -320,6 +320,9 @@ SpecializedBranchTracingEnumDict autodiffSpecializeBranchTracingEnums(
     dict[BridgedType(silType)] = autodiffSpecializeBranchTracingEnum(
         BridgedType(silType), silTopVJP, bteCaseToClosureListDict, dict);
   }
+  llvm::errs() << "XXXXXX enumDict 03 BEGIN\n";
+  llvm::errs() << getSpecializedBranchTracingEnumDictAsString(dict).unbridgedRef() << "\n";
+  llvm::errs() << "XXXXXX enumDict 03 END\n";
 
   return dict;
 }
@@ -378,6 +381,7 @@ BridgedArgument specializePayloadTupleBBArgInPullback(BridgedArgument arg,
 
 BridgedOwnedString getSpecializedBranchTracingEnumDictAsString(
     const SpecializedBranchTracingEnumDict &specBTEDict) {
+  llvm::errs() << "YYYYYY specBTEDict.size() = " << specBTEDict.size() << "\n";
   llvm::SmallVector<BridgedType, 8> keys;
   keys.reserve(specBTEDict.size());
   for (const auto &[key, _] : specBTEDict)
@@ -385,6 +389,8 @@ BridgedOwnedString getSpecializedBranchTracingEnumDictAsString(
   llvm::sort(keys, [](const BridgedType &lhs, const BridgedType &rhs) {
     return lhs.unbridged().getAsString() < rhs.unbridged().getAsString();
   });
+
+  llvm::errs() << "YYYYYY keys.size() = " << keys.size() << "\n";
 
   std::string str;
   llvm::raw_string_ostream out(str);
@@ -398,4 +404,9 @@ BridgedOwnedString getSpecializedBranchTracingEnumDictAsString(
   }
 
   return BridgedOwnedString(/*stringToCopy=*/StringRef(str));
+}
+
+void replaceBBArg(BridgedArgument oldArg, BridgedArgument newArg) {
+  oldArg.getArgument()->replaceAllUsesWith(newArg.getArgument());
+  oldArg.getParent().eraseArgument(oldArg.getArgument()->getIndex());
 }
