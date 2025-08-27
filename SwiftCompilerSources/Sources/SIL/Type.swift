@@ -330,5 +330,5 @@ extension Type: DiagnosticArgument {
 
 extension BridgedType {
   public var type: Type { Type(bridged: self) }
-  var typeOrNil: Type? { isNull() ? nil : type }
+  public var typeOrNil: Type? { isNull() ? nil : type }
 }
