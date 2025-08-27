@@ -1191,8 +1191,11 @@ static ManagedValue emitBuiltinTypeTrait(SILGenFunction &SGF,
 
 static ManagedValue emitBuiltinAutoDiffApplyDerivativeFunction(
     AutoDiffDerivativeFunctionKind kind, unsigned arity,
-    SILGenFunction &SGF, SILLocation loc, SubstitutionMap substitutions,
-    ArrayRef<ManagedValue> args, SGFContext C) {
+    bool throws, SILGenFunction &SGF, SILLocation loc,
+    SubstitutionMap substitutions, ArrayRef<ManagedValue> args, SGFContext C) {
+  // FIXME(https://github.com/apple/swift/issues/54259): Support throwing functions.
+  assert(!throws && "Throwing functions are not yet supported");
+
   auto origFnVal = args[0];
   SmallVector<SILValue, 2> origFnArgVals;
   for (auto& arg : args.drop_front(1))
@@ -1210,8 +1213,7 @@ static ManagedValue emitBuiltinAutoDiffApplyDerivativeFunction(
   origFnVal = SGF.B.createBeginBorrow(loc, origFnVal);
   SILValue derivativeFn = SGF.B.createDifferentiableFunctionExtract(
       loc, kind, origFnVal.getValue());
-  SILType derivativeType = derivativeFn->getType();
-  auto derivativeFnType = derivativeType.castTo<SILFunctionType>();
+  auto derivativeFnType = derivativeFn->getType().castTo<SILFunctionType>();
   assert(derivativeFnType->getNumResults() == 2);
   assert(derivativeFnType->getNumParameters() == origFnArgVals.size());
 
@@ -1238,10 +1240,8 @@ static ManagedValue emitBuiltinAutoDiffApplyDerivativeFunction(
     applyArgs.push_back(SGF.B.createTupleElementAddr(loc, indResBuffer, 0));
     for (auto origFnArgVal : origFnArgVals)
       applyArgs.push_back(origFnArgVal);
-    auto differential =
-      SGF.emitApplyWithRethrow(loc,
-                               derivativeFn, derivativeType,
-                               SubstitutionMap(), applyArgs);
+    auto differential = SGF.B.createApply(loc, derivativeFn, SubstitutionMap(),
+                                          applyArgs);
 
     derivativeFn = SILValue();
 
@@ -1253,10 +1253,8 @@ static ManagedValue emitBuiltinAutoDiffApplyDerivativeFunction(
   }
 
   // Do the apply for the direct result case.
-  auto resultTuple =
-    SGF.emitApplyWithRethrow(loc,
-                             derivativeFn, derivativeType,
-                             SubstitutionMap(), origFnArgVals);
+  auto resultTuple = SGF.B.createApply(
+      loc, derivativeFn, SubstitutionMap(), origFnArgVals);
 
   derivativeFn = SILValue();
 
@@ -1326,7 +1324,7 @@ static ManagedValue emitBuiltinApplyDerivative(
       builtinName, kind, arity, throws);
   assert(successfullyParsed);
   return emitBuiltinAutoDiffApplyDerivativeFunction(
-      kind, arity, SGF, loc, substitutions, args, C);
+      kind, arity, throws, SGF, loc, substitutions, args, C);
 }
 
 static ManagedValue emitBuiltinApplyTranspose(

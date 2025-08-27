@@ -144,15 +144,14 @@ void LinearMapInfo::populateBranchingTraceDecl(SILBasicBlock *originalBB,
       heapAllocatedContext = true;
       decl->setInterfaceType(astCtx.TheRawPointerType);
     } else { // Otherwise the payload is the linear map tuple.
-      auto *linearMapTupleTy = getLinearMapTupleType(predBB);
+      auto *linearMapStructTy = getLinearMapTupleType(predBB);
       // Do not create entries for unreachable predecessors
-      if (!linearMapTupleTy)
+      if (!linearMapStructTy)
         continue;
-
-      auto canLinearMapTupleTy = linearMapTupleTy->getCanonicalType();
+      auto canLinearMapStructTy = linearMapStructTy->getCanonicalType();
       decl->setInterfaceType(
-          canLinearMapTupleTy->hasArchetype()
-              ? canLinearMapTupleTy->mapTypeOutOfContext() : canLinearMapTupleTy);
+          canLinearMapStructTy->hasArchetype()
+              ? canLinearMapStructTy->mapTypeOutOfContext() : canLinearMapStructTy);
     }
     // Create enum element and enum case declarations.
     auto *paramList = ParameterList::create(astCtx, {decl});
@@ -184,7 +183,6 @@ Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
   auto hasActiveResults = llvm::any_of(allResults, [&](SILValue res) {
     return activityInfo.isActive(res, config);
   });
-
   bool hasActiveSemanticResultArgument = false;
   bool hasActiveArguments = false;
   auto numIndirectResults = fai.getNumIndirectSILResults();
@@ -313,11 +311,10 @@ Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
         params, silFnTy->getAllResultsInterfaceType().getASTType(), info);
   }
 
-  Type resultType = astFnTy->hasArchetype() ? astFnTy->mapTypeOutOfContext() : astFnTy;
-  if (fai.getKind() == FullApplySiteKind::TryApplyInst)
-    resultType = resultType->wrapInOptionalType();
+  if (astFnTy->hasArchetype())
+    return astFnTy->mapTypeOutOfContext();
 
-  return resultType;
+  return astFnTy;
 }
 
 void LinearMapInfo::generateDifferentiationDataStructures(
