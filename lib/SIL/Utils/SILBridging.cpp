@@ -20,8 +20,8 @@
 #include "swift/AST/Attr.h"
 #include "swift/AST/SemanticAttrs.h"
 #include "swift/Basic/Assertions.h"
-#include "swift/SIL/SILContext.h"
 #include "swift/SIL/SILCloner.h"
+#include "swift/SIL/SILContext.h"
 #include "swift/SIL/MemAccessUtils.h"
 #include "swift/SIL/OwnershipUtils.h"
 #include "swift/SIL/ParseTestSpecification.h"
@@ -653,7 +653,8 @@ createEmptyFunction(BridgedStringRef name,
   return {context->createEmptyFunction(name.unbridged(), params, hasSelfParam, fromFunc.getFunction())};
 }
 
-BridgedGlobalVar BridgedContext::createGlobalVariable(BridgedStringRef name, BridgedType type,
+BridgedGlobalVar BridgedContext::createGlobalVariable(BridgedStringRef name,
+                                                      BridgedType type,
                                                       BridgedLinkage linkage,
                                                       bool isLet,
                                                       bool markedAsUsed) const {
