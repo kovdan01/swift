@@ -18,20 +18,21 @@
 #endif
 
 #include "swift/AST/Attr.h"
+#include "swift/AST/ParameterList.h"
 #include "swift/AST/SemanticAttrs.h"
 #include "swift/Basic/Assertions.h"
-#include "swift/SIL/SILContext.h"
-#include "swift/SIL/SILCloner.h"
 #include "swift/SIL/MemAccessUtils.h"
 #include "swift/SIL/OwnershipUtils.h"
 #include "swift/SIL/ParseTestSpecification.h"
 #include "swift/SIL/SILBuilder.h"
+#include "swift/SIL/SILCloner.h"
+#include "swift/SIL/SILContext.h"
 #include "swift/SIL/SILGlobalVariable.h"
 #include "swift/SIL/SILNode.h"
 #include "swift/SIL/Test.h"
-#include <string>
 #include <cstring>
 #include <stdio.h>
+#include <string>
 
 using namespace swift;
 
@@ -59,6 +60,25 @@ SwiftMetatype SILNode::getSILNodeMetatype(SILNodeKind kind) {
   }
   return metatype;
 }
+
+// static std::unordered_map<
+//     BridgedType,
+//     llvm::DenseMap<SwiftInt, llvm::SmallVector<
+//                                  std::pair<BridgedInstruction, SwiftInt>,
+//                                  8>>,
+//     BridgedTypeHasher>
+//     closuresBuffers;
+
+// static llvm::SmallVector<std::pair<BridgedInstruction, SwiftInt>, 8>
+//     closuresBuffersForPb;
+
+// struct SILTypeHasher {
+//   unsigned operator()(const SILType &value) const {
+//     return llvm::DenseMapInfo<SILType>::getHashValue(value);
+//   }
+// };
+
+// static std::unordered_map<SILType, SILType, SILTypeHasher> enumDict;
 
 //===----------------------------------------------------------------------===//
 //                          Class registration
@@ -167,6 +187,18 @@ BridgedBasicBlock BridgedTestArguments::takeBlock() const {
 BridgedFunction BridgedTestArguments::takeFunction() const {
   return {arguments->takeFunction()};
 }
+
+namespace {
+struct SpecializeCandidateInfo {
+  unsigned closureIdxInPayloadTuple;
+  llvm::SmallVector<SILValue, 8> capturedArgs;
+};
+
+using SpecializeCandidate =
+    llvm::DenseMap<SILInstruction *, SpecializeCandidateInfo>;
+using BranchTracingEnumCases = llvm::DenseMap<unsigned, SpecializeCandidate>;
+
+} // namespace
 
 //===----------------------------------------------------------------------===//
 //                                SILFunction
@@ -527,6 +559,95 @@ convertCases(SILType enumTy, const void * _Nullable enumCases, SwiftInt numEnumC
   return convertedCases;
 }
 
+// void BridgedAutoDiffClosureSpecializationHelper::appendToClosuresBuffer(
+//     BridgedType enumType, SwiftInt caseIdx, BridgedInstruction closure,
+//     SwiftInt idxInPayload) {
+//   closuresBuffers[enumType][caseIdx].emplace_back(closure, idxInPayload);
+// }
+
+// void BridgedAutoDiffClosureSpecializationHelper::appendToClosuresBufferForPb(
+//     BridgedInstruction closure, SwiftInt idxInPayload) {
+//   closuresBuffersForPb.emplace_back(closure, idxInPayload);
+// }
+
+// void BridgedAutoDiffClosureSpecializationHelper::clearClosuresBuffer() {
+//   closuresBuffers.clear();
+// }
+// void BridgedAutoDiffClosureSpecializationHelper::clearClosuresBufferForPb() {
+//   closuresBuffersForPb.clear();
+// }
+
+// void BridgedAutoDiffClosureSpecializationHelper::clearEnumDict() {
+//   enumDict.clear();
+// }
+
+std::vector<Type> getPredTypes(Type enumType) {
+  std::vector<Type> ret;
+  EnumDecl *ed = enumType->getEnumOrBoundGenericEnum();
+  for (EnumCaseDecl *ecd : ed->getAllCases()) {
+    assert(ecd->getElements().size() == 1);
+    EnumElementDecl *oldEED = ecd->getElements().front();
+
+    assert(oldEED->getParameterList()->size() == 1);
+    ParamDecl &oldParamDecl = *oldEED->getParameterList()->front();
+
+    auto *tt = cast<TupleType>(oldParamDecl.getInterfaceType().getPointer());
+
+    if (tt->getNumElements() > 0 && !tt->getElement(0).getName().empty()) {
+      assert(tt->getElement(0).getName().is("predecessor"));
+      ret.emplace_back(tt->getElement(0).getType());
+    }
+  }
+  return ret;
+}
+
+void helper(llvm::DenseMap<Type, std::vector<Type>> &predTypes,
+            const Type &currentEnumType) {
+  assert(currentEnumType->isCanonical());
+  std::vector<Type> currentPredTypes = getPredTypes(currentEnumType);
+  predTypes[currentEnumType] = currentPredTypes;
+  for (const Type &t : currentPredTypes) {
+    if (!predTypes.contains(t)) {
+      helper(predTypes, t);
+    }
+  }
+}
+
+std::vector<Type> getEnumQueue(BridgedType topEnum) {
+  llvm::DenseMap<Type, std::vector<Type>> predTypes;
+  helper(predTypes, topEnum.unbridged().getASTType());
+
+  std::vector<Type> enumQueue;
+  std::size_t totalEnums = predTypes.size();
+  for (std::size_t i = 0; i < totalEnums; ++i) {
+    for (const auto &[enumType, currentPreds] : predTypes) {
+      if (!currentPreds.empty())
+        continue;
+      TypeBase *enumTypePointer = enumType.getPointer();
+      assert(std::find_if(enumQueue.begin(), enumQueue.end(),
+                          [enumTypePointer](const Type &val) {
+                            return enumTypePointer == val.getPointer();
+                          }) == enumQueue.end());
+      enumQueue.emplace_back(enumType);
+      break;
+    }
+    assert(enumQueue.size() == i + 1);
+    predTypes.erase(enumQueue.back());
+    for (auto &[enumType, _] : predTypes) {
+      std::vector<Type> &currentPredTypes = predTypes.find(enumType)->second;
+      auto it = std::find_if(currentPredTypes.begin(), currentPredTypes.end(),
+                             [&enumQueue](const Type &val) {
+                               return enumQueue.back().getPointer() ==
+                                      val.getPointer();
+                             });
+      if (it != currentPredTypes.end())
+        currentPredTypes.erase(it);
+    }
+  }
+
+  return enumQueue;
+}
+
 BridgedInstruction BridgedBuilder::createSwitchEnumInst(BridgedValue enumVal, OptionalBridgedBasicBlock defaultBlock,
                                         const void * _Nullable enumCases, SwiftInt numEnumCases) const {
   return {unbridged().createSwitchEnum(regularLoc(),
@@ -653,7 +774,8 @@ createEmptyFunction(BridgedStringRef name,
   return {context->createEmptyFunction(name.unbridged(), params, hasSelfParam, fromFunc.getFunction())};
 }
 
-BridgedGlobalVar BridgedContext::createGlobalVariable(BridgedStringRef name, BridgedType type,
+BridgedGlobalVar BridgedContext::createGlobalVariable(BridgedStringRef name,
+                                                      BridgedType type,
                                                       BridgedLinkage linkage,
                                                       bool isLet,
                                                       bool markedAsUsed) const {
