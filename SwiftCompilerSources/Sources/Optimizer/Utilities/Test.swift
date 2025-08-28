@@ -161,6 +161,7 @@ public func registerOptimizerTests() {
     forwardingDefUseTest,
     forwardingUseDefTest,
     getPullbackClosureInfoTest,
+    getPullbackClosureInfoMultiBBTest,
     interiorLivenessTest,
     lifetimeDependenceRootTest,
     lifetimeDependenceScopeTest,
@@ -171,6 +172,9 @@ public func registerOptimizerTests() {
     parseTestSpecificationTest,
     rangeOverlapsPathTest,
     rewrittenCallerBodyTest,
+    specializeBranchTracingEnums,
+    specializeBTEArgInVjpBB,
+    specializePayloadArgInPullbackBB,
     specializedFunctionSignatureAndBodyTest,
     variableIntroducerTest
   )
