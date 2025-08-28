@@ -25,6 +25,8 @@
 #include "swift/SIL/SILWitnessTable.h"
 #endif
 
+#include <unordered_map>
+
 SWIFT_BEGIN_NULLABILITY_ANNOTATIONS
 
 struct BridgedInstruction;
@@ -231,6 +233,7 @@ BridgedYieldInfoArray SILFunctionType_getYields(BridgedCanType);
 SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedLifetimeDependenceInfoArray
 SILFunctionType_getLifetimeDependencies(BridgedCanType);
 
+BRIDGED_INLINE bool SILType_equalEnums(BridgedCanType, BridgedCanType);
 
 struct BridgedType {
   void * _Nullable opaqueValue;
@@ -279,12 +282,18 @@ struct BridgedType {
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE EnumElementIterator getFirstEnumCaseIterator() const;
   BRIDGED_INLINE bool isEndCaseIterator(EnumElementIterator i) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType getEnumCasePayload(EnumElementIterator i, BridgedFunction f) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType
+  getEnumCasePayload(SwiftInt caseIndex, BridgedFunction f) const;
   BRIDGED_INLINE SwiftInt getNumTupleElements() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType
   getTupleElementType(SwiftInt idx) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType getFunctionTypeWithNoEscape(bool withNoEscape) const;
   BRIDGED_INLINE BridgedArgumentConvention getCalleeConvention() const;
 };
+
+// inline bool operator==(const BridgedType &lhs, const BridgedType &rhs) {
+//   return lhs.opaqueValue == rhs.opaqueValue;
+// }
 
 // SIL Bridging
 
@@ -536,6 +545,7 @@ struct BridgedFunction {
   bool isTrapNoReturn() const;
   bool isConvertPointerToPointerArgument() const;
   bool isAutodiffVJP() const;
+  // bool isAutodiffBranchTracingEnumValid(BridgedType enumType) const;
   SwiftInt specializationLevel() const;
   SWIFT_IMPORT_UNSAFE BridgedSubstitutionMap getMethodSubstitutions(BridgedSubstitutionMap contextSubs,
                                                                     BridgedCanType selfType) const;
@@ -598,8 +608,6 @@ struct BridgedGlobalVar {
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedStringRef getName() const;
   BRIDGED_INLINE bool isLet() const;
   BRIDGED_INLINE void setLet(bool value) const;
-  BRIDGED_INLINE bool markedAsUsed() const;
-  BRIDGED_INLINE void setMarkedAsUsed(bool value) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType getType() const;
   BRIDGED_INLINE BridgedLinkage getLinkage() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE swift::SourceLoc getSourceLocation() const;
@@ -679,6 +687,9 @@ struct BridgedInstruction {
   bool maySynchronize() const;
   bool mayBeDeinitBarrierNotConsideringSideEffects() const;
   BRIDGED_INLINE bool shouldBeForwarding() const;
+
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedSubstitutionMap
+  getSubstitutionMap() const;
 
   // =========================================================================//
   //                   Generalized instruction subclasses
@@ -815,6 +826,8 @@ struct BridgedInstruction {
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedBasicBlock BranchInst_getTargetBlock() const;
   BRIDGED_INLINE SwiftInt SwitchEnumInst_getNumCases() const;
   BRIDGED_INLINE SwiftInt SwitchEnumInst_getCaseIndex(SwiftInt idx) const;
+  BRIDGED_INLINE OptionalBridgedBasicBlock
+  SwitchEnumInst_getSuccessorForDefault() const;
   BRIDGED_INLINE SwiftInt StoreInst_getStoreOwnership() const;
   BRIDGED_INLINE SwiftInt AssignInst_getAssignOwnership() const;
   BRIDGED_INLINE MarkDependenceKind MarkDependenceInst_dependenceKind() const;
@@ -956,6 +969,10 @@ struct BridgedBasicBlock {
   BRIDGED_INLINE SwiftInt getNumArguments() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument getArgument(SwiftInt index) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument addBlockArgument(BridgedType type, BridgedValue::Ownership ownership) const;
+  // SWIFT_IMPORT_UNSAFE BridgedArgument
+  // recreateEnumBlockArgument(BridgedArgument arg) const;
+  // SWIFT_IMPORT_UNSAFE BridgedArgument
+  // recreateTupleBlockArgument(BridgedArgument arg) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument addFunctionArgument(BridgedType type) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedArgument insertFunctionArgument(SwiftInt atPosition, BridgedType type,
                                                                             BridgedValue::Ownership ownership,
@@ -964,6 +981,7 @@ struct BridgedBasicBlock {
   BRIDGED_INLINE void moveAllInstructionsToBegin(BridgedBasicBlock dest) const;
   BRIDGED_INLINE void moveAllInstructionsToEnd(BridgedBasicBlock dest) const;
   BRIDGED_INLINE void moveArgumentsTo(BridgedBasicBlock dest) const;
+  BRIDGED_INLINE void eraseInstruction(BridgedInstruction inst) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE OptionalBridgedSuccessor getFirstPred() const;
 };
 
@@ -1144,6 +1162,37 @@ struct OptionalBridgedDefaultWitnessTable {
   const swift::SILDefaultWitnessTable * _Nullable table;
 };
 
+// struct BridgedTypeHasher {
+//   unsigned operator()(const BridgedType &value) const {
+//     return llvm::DenseMapInfo<void *>::getHashValue(value.opaqueValue);
+//   }
+// };
+
+// using BranchTracingEnumDict =
+//     std::unordered_map<BridgedType, BridgedType, BridgedTypeHasher>;
+
+// BridgedType SILBridging_enumDictGetByKey(const BranchTracingEnumDict &dict,
+//                                          BridgedType key);
+
+// struct BridgedAutoDiffClosureSpecializationHelper {
+//   SWIFT_IMPORT_UNSAFE void appendToClosuresBuffer(BridgedType enumType,
+//                                                   SwiftInt caseIdx,
+//                                                   BridgedInstruction closure,
+//                                                   SwiftInt idxInPayload);
+//   SWIFT_IMPORT_UNSAFE void
+//   appendToClosuresBufferForPb(BridgedInstruction closure,
+//                               SwiftInt idxInPayload);
+//   SWIFT_IMPORT_UNSAFE void clearClosuresBuffer();
+//   SWIFT_IMPORT_UNSAFE void clearClosuresBufferForPb();
+//   SWIFT_IMPORT_UNSAFE void clearEnumDict();
+//   SWIFT_IMPORT_UNSAFE BridgedType
+//   rewriteBranchTracingEnum(BridgedType enumType, BridgedFunction topVjp)
+//   const;
+
+//   SWIFT_IMPORT_UNSAFE BranchTracingEnumDict
+//   rewriteAllEnums(BridgedFunction topVjp, BridgedType topEnum) const;
+// };
+
 struct BridgedBuilder{
 
   enum class InsertAt {
@@ -1301,6 +1350,11 @@ struct BridgedBuilder{
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createDestructureStruct(BridgedValue str) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTuple(BridgedType type,
                                                                     BridgedValueArray elements) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
+  createTuple(BridgedValueArray elements) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
+  createPayloadTupleForBranchTracingEnum(BridgedValueArray elements,
+                                         BridgedType tupleWithLabels) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleExtract(BridgedValue str,
                                                                            SwiftInt elementIndex) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleElementAddr(BridgedValue addr,

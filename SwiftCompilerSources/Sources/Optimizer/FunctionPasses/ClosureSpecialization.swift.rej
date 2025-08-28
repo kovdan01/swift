@@ -1,0 +1,274 @@
+--- SwiftCompilerSources/Sources/Optimizer/FunctionPasses/ClosureSpecialization.swift
++++ SwiftCompilerSources/Sources/Optimizer/FunctionPasses/ClosureSpecialization.swift
+@@ -1386,124 +2303,199 @@ private func updatePullbackClosureInfo(
+     intermediateClosureArgDescriptorData: intermediateClosureArgDescriptorData, context)
+ }
+ 
+-typealias BTEPayloadArgOfPbBBWithBTETypeAndCase = (arg: Argument, enumTypeAndCase: EnumTypeAndCase)
+-
+-// If the pullback's basic block has a single argument which is a payload tuple of the
+-// branch tracing enum corresponding to the given VJP, return this argument and any valid combination
+-// of a branch tracing enum type and its case index having the same payload tuple type as the argument.
+-private func getBTEPayloadArgOfPbBBWithBTETypeAndCase(_ bb: BasicBlock, vjp: Function)
+-  -> BTEPayloadArgOfPbBBWithBTETypeAndCase?
+-{
+-  guard let predBB = bb.predecessors.first else {
+-    return nil
+-  }
+-  guard let arg = bb.arguments.singleElement else {
+-    return nil
+-  }
+-  if !arg.type.isTuple {
+-    return nil
++private func getEnumArgOfEntryPbBB(_ bb: BasicBlock, vjp: Function) -> Argument? {
++  assert(bb.parentFunction.entryBlock == bb)
++  var argOpt = Argument?(nil)
++  for arg in bb.arguments {
++    if arg.type.isBranchTracingEnumIn(vjp: vjp) {
++      if argOpt != nil {
++        return nil
++      }
++      argOpt = arg
++    }
+   }
++  return argOpt
++}
+ 
+-  if let bi = predBB.terminator as? BranchInst {
+-    guard let uedi = bi.operands[arg.index].value.definingInstruction as? UncheckedEnumDataInst
+-    else {
+-      return nil
++private func getEnumArgOfVJPBB(_ bb: BasicBlock) -> Argument? {
++  var argOpt = Argument?(nil)
++  for arg in bb.arguments {
++    if arg.type.isBranchTracingEnumIn(vjp: bb.parentFunction) {
++      if argOpt != nil {
++        return nil
++      }
++      argOpt = arg
++    }
++  }
++  return argOpt
++}
++
++private func getEnumPayloadArgOfPbBB(_ bb: BasicBlock, vjp: Function) -> Argument? {
++  var argOpt = Argument?(nil)
++  for (argIdx, arg) in bb.arguments.enumerated() {
++    if !arg.type.isTuple {
++      continue
+     }
+-    let enumType = uedi.`enum`.type
+-    if !enumType.isBranchTracingEnumIn(vjp: vjp) {
+-      return nil
++
++    let predBBOpt = bb.predecessors.first
++    if predBBOpt == nil {
++      continue
+     }
++    let predBB = predBBOpt!
+ 
+-    return BTEPayloadArgOfPbBBWithBTETypeAndCase(
+-      arg: arg,
+-      enumTypeAndCase: (
+-        enumType: enumType,
+-        caseIdx: uedi.caseIndex
+-      )
+-    )
+-  }
++    let brInstOpt = predBB.terminator as? BranchInst
++    let seInstOpt = predBB.terminator as? SwitchEnumInst
++    if brInstOpt == nil && seInstOpt == nil {
++      continue
++    }
++    if brInstOpt != nil {
++      let brInst = brInstOpt!
++      let possibleUEDI = brInst.operands[argIdx].value.definingInstruction
++      let uedi = possibleUEDI as? UncheckedEnumDataInst
++      if uedi == nil {
++        continue
++      }
++      let enumType = uedi!.`enum`.type
++      if !enumType.isBranchTracingEnumIn(vjp: vjp) {
++        continue
++      }
++    } else {
++      assert(seInstOpt != nil)
++      let enumType = seInstOpt!.enumOp.type
++      if !enumType.isBranchTracingEnumIn(vjp: vjp) {
++        continue
++      }
++    }
+ 
+-  if let sei = predBB.terminator as? SwitchEnumInst {
+-    let enumType = sei.enumOp.type
+-    if !enumType.isBranchTracingEnumIn(vjp: vjp) {
++    if argOpt != nil {
+       return nil
+     }
+-    return BTEPayloadArgOfPbBBWithBTETypeAndCase(
+-      arg: arg,
+-      enumTypeAndCase: (
+-        enumType: enumType,
+-        caseIdx: sei.getUniqueCase(forSuccessor: bb)!
+-      )
+-    )
++    argOpt = arg
+   }
+-
+-  return nil
++  return argOpt
+ }
+ 
+-extension PartialApplyInst {
+-  func isSubsetThunk() -> Bool {
+-    if self.argumentOperands.singleElement == nil {
+-      return false
++extension BasicBlockList {
++  var count: Int {
++    var n = 0
++    for _ in self {
++      n += 1
+     }
+-    guard let desc = self.referencedFunction?.description else {
+-      return false
++    return n
++  }
++}
++
++extension UseList {
++  var count: Int {
++    var n = 0
++    for _ in self {
++      n += 1
+     }
+-    // TODO: do not rely on description which is intended for debug purposes.
+-    return desc.starts(
+-      with: "// autodiff subset parameters thunk for")
++    return n
+   }
+ }
+ 
+-private func handleNonAppliesMultiBB(
++private func handleNonAppliesCFG(
+   for rootClosure: SingleValueInstruction,
+   _ context: FunctionPassContext
+ )
+-  -> [ClosureInfoMultiBB]
++  -> [ClosureInfoCFG]
+ {
+-  let vjp = rootClosure.parentFunction
+-  var closureInfoArr = [ClosureInfoMultiBB]()
++  let enumToPayload: [EnumInst: TupleInst] = findEnumsAndPayloadsInVjp(
++    vjp: rootClosure.parentFunction)
++  var closureInfoArr = [ClosureInfoCFG]()
+ 
+   var closure = rootClosure
+-  var subsetThunk = PartialApplyInst?(nil)
++  var subsetThunkOpt = PartialApplyInst?(nil)
+   if rootClosure.uses.singleElement != nil {
+-    if let pai = closure.uses.singleElement!.instruction as? PartialApplyInst {
+-      if pai.isSubsetThunk() {
+-        subsetThunk = pai
+-        closure = pai
++    let tiOpt = rootClosure.uses.singleElement!.instruction as? TupleInst
++    if tiOpt == nil || !enumToPayload.values.contains(tiOpt!) {
++      logADCS(
++        msg: "handleNonAppliesCFG: root closure has single use, checking if it's a subset thunk")
++      let maybeSubsetThunkOpt = closure.uses.singleElement!.instruction as? PartialApplyInst
++      if maybeSubsetThunkOpt != nil && maybeSubsetThunkOpt!.argumentOperands.count == 1
++        && maybeSubsetThunkOpt!.referencedFunction != nil
++        && maybeSubsetThunkOpt!.referencedFunction!.description.starts(
++          with: "// autodiff subset parameters thunk for")
++      {
++        logADCS(msg: "handleNonAppliesCFG: subset thunk detected:")
++        logADCS(msg: "  pai: \(maybeSubsetThunkOpt!)")
++        logADCS(msg: "  fri: \(maybeSubsetThunkOpt!.referencedFunction!)")
++        subsetThunkOpt = maybeSubsetThunkOpt
++        closure = subsetThunkOpt!
++      } else {
++        if maybeSubsetThunkOpt != nil {
++          logADCS(
++            msg:
++              "handleNonAppliesCFG: not a subset thunk:")
++          logADCS(msg: "  argumentOperands.count = \(maybeSubsetThunkOpt!.argumentOperands.count)")
++          logADCS(msg: "  referencedFunction = \(maybeSubsetThunkOpt!.referencedFunction)")
++        } else {
++          logADCS(
++            msg:
++              "handleNonAppliesCFG: not a subset thunk, unexpected instruction type: \(closure.uses.singleElement!.instruction)"
++          )
++        }
+       }
+     }
+   }
+ 
+   for use in closure.uses {
+     guard let ti = use.instruction as? TupleInst else {
+-      // Unexpected use of closure, return nothing
++      let paiOfPbInExitVjpBB = getPartialApplyOfPullbackInExitVJPBB(
++        vjp: rootClosure.parentFunction)!
++      let paiOpt = rootClosure as? PartialApplyInst
++      assert(paiOpt != paiOfPbInExitVjpBB)
++      logADCS(msg: "handleNonAppliesCFG: unexpected use of closure")
++      logADCS(msg: "handleNonAppliesCFG:   root closure: " + rootClosure.description)
++      logADCS(msg: "handleNonAppliesCFG:   closure: " + closure.description)
++      logADCS(msg: "handleNonAppliesCFG:   use.instruction: " + use.instruction.description)
++      logADCS(
++        msg: "handleNonAppliesCFG:   root closure use count: " + String(rootClosure.uses.count))
++      logADCS(msg: "handleNonAppliesCFG:   parent block of use begin")
++      logADCS(msg: "handleNonAppliesCFG:   " + use.instruction.parentBlock.description)
++      logADCS(msg: "handleNonAppliesCFG:   parent block of use end")
+       return []
+     }
+     for tiUse in ti.uses {
+       guard let ei = tiUse.instruction as? EnumInst else {
+-        // Unexpected use of payload tuple, return nothing
++        let paiOfPbInExitVjpBB = getPartialApplyOfPullbackInExitVJPBB(
++          vjp: rootClosure.parentFunction)!
++        let paiOpt = rootClosure as? PartialApplyInst
++        assert(paiOpt != paiOfPbInExitVjpBB)
++        logADCS(msg: "handleNonAppliesCFG: unexpected use of tuple")
++        logADCS(msg: "handleNonAppliesCFG:   root closure: " + rootClosure.description)
++        logADCS(msg: "handleNonAppliesCFG:   closure.uses.count: " + String(closure.uses.count))
++        logADCS(msg: "handleNonAppliesCFG:   tuple: " + ti.description)
++        logADCS(msg: "handleNonAppliesCFG:   tiUse.instruction: " + tiUse.instruction.description)
+         return []
+       }
+-      if !ei.type.isBranchTracingEnumIn(vjp: vjp) {
+-        // Unexpected use of payload tuple, return nothing
++      if !ei.type.isBranchTracingEnumIn(vjp: rootClosure.parentFunction) {
++        logADCS(msg: "handleNonAppliesCFG: unexpected enum type:" + ei.type.description)
+         return []
+       }
++      assert(enumToPayload[ei] == ti)
+       var capturedArgs = [Value]()
+-      if let pai = rootClosure as? PartialApplyInst {
+-        capturedArgs = pai.argumentOperands.map { $0.value }
++      let paiOpt = rootClosure as? PartialApplyInst
++      if paiOpt != nil {
++        for argOp in paiOpt!.argumentOperands {
++          capturedArgs.append(argOp.value)
++        }
+       }
+       let enumTypeAndCase = EnumTypeAndCase(enumType: ei.type, caseIdx: ei.caseIndex)
+       closureInfoArr.append(
+-        ClosureInfoMultiBB(
++        ClosureInfoCFG(
+           closure: rootClosure,
+-          capturedArgs: capturedArgs,
+-          subsetThunk: subsetThunk,
+-          payloadTuple: ti,
++          subsetThunk: subsetThunkOpt,
+           idxInPayload: use.index,
+-          enumTypeAndCase: enumTypeAndCase
++          capturedArgs: capturedArgs,
++          enumTypeAndCase: enumTypeAndCase, payloadTuple: ti
+         ))
+     }
+   }
++  if closureInfoArr.count == 0 {
++    logADCS(msg: "handleNonAppliesCFG: returning empty closure info array")
++  }
+   return closureInfoArr
+ }
+ 

@@ -116,6 +116,7 @@ enum class FunctionSigSpecializationParamKind : unsigned {
   BoxToStack = 7,
   InOutToOut = 8,
   ConstantPropKeyPath = 9,
+  AutoDiffBranchTracingEnum = 10,
 
   // Option Set Flags use bits 6-31. This gives us 26 bits to use for option
   // flags.
@@ -968,7 +969,7 @@ protected:
 
   void printImplFunctionType(NodePointer fn, unsigned depth);
 
-  virtual void printGenericSignature(NodePointer Node, unsigned depth);
+  void printGenericSignature(NodePointer Node, unsigned depth);
 
   void printFunctionSigSpecializationParams(NodePointer Node, unsigned depth);
 
