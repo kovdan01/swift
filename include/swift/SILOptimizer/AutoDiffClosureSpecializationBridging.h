@@ -64,6 +64,9 @@ SWIFT_IMPORT_UNSAFE BridgedOwnedString
 getSpecializedBranchTracingEnumDictAsString(
     const SpecializedBranchTracingEnumDict &specBTEDict);
 
+SWIFT_IMPORT_UNSAFE void replaceBBArg(BridgedArgument oldArg,
+                                      BridgedArgument newArg);
+
 SWIFT_END_NULLABILITY_ANNOTATIONS
 
 #endif
