@@ -4903,9 +4903,11 @@ AnyFunctionType::getAutoDiffDerivativeFunctionLinearMapType(
     LookupConformanceFn lookupConformance, bool makeSelfParamFirst) {
   auto &ctx = getASTContext();
   // Error if differentiability parameter indices are empty.
-  if (parameterIndices->isEmpty())
+  if (parameterIndices->isEmpty()) {
+    llvm::errs() << "BBBBBB 00\n";
     return llvm::make_error<DerivativeFunctionTypeError>(
         this, DerivativeFunctionTypeError::Kind::NoDifferentiabilityParameters);
+  }
 
   // Get differentiability parameters.
   SmallVector<AnyFunctionType::Param, 8> diffParams;
@@ -4961,14 +4963,19 @@ AnyFunctionType::getAutoDiffDerivativeFunctionLinearMapType(
     for (auto i : range(diffParams.size())) {
       auto diffParam = diffParams[i];
       auto paramType = diffParam.getPlainType();
+      if (diffParam.isAutoClosure()) {
+        paramType = paramType->getAs<AnyFunctionType>()->getResult();
+      }
       auto paramTan = paramType->getAutoDiffTangentSpace(lookupConformance);
       // Error if parameter has no tangent space.
-      if (!paramTan)
+      if (!paramTan) {
+        llvm::errs() << "BBBBBB 01\n";
         return llvm::make_error<DerivativeFunctionTypeError>(
             this,
             DerivativeFunctionTypeError::Kind::
                 NonDifferentiableDifferentiabilityParameter,
             DerivativeFunctionTypeError::TypeAndIndex(paramType, i));
+      }
 
       differentialParams.push_back(AnyFunctionType::Param(
           paramTan->getType(), Identifier(), diffParam.getParameterFlags()));

@@ -5794,11 +5794,14 @@ static bool conformsToDifferentiable(Type type,
   auto *differentiableProto =
       ctx.getProtocol(KnownProtocolKind::Differentiable);
   auto conf = checkConformance(type, differentiableProto);
-  if (conf.isInvalid())
+  if (conf.isInvalid()) {
+    llvm::errs() << "EEEEEE 00\n";
     return false;
+  }
   if (!tangentVectorEqualsSelf)
     return true;
   auto tanType = conf.getTypeWitnessByName(ctx.Id_TangentVector);
+  llvm::errs() << "EEEEEE 01\n";
   return type->isEqual(tanType);
 }
 
@@ -5825,8 +5828,10 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
     else
       paramType = AFD->mapTypeIntoContext(paramType);
     // Return false for existential types.
-    if (paramType->isExistentialType())
+    if (paramType->isExistentialType()) {
+      llvm::errs() << "DDDDDD 00\n";
       return false;
+    }
     // Return true if the type conforms to `Differentiable`.
     return conformsToDifferentiable(paramType);
   };
@@ -5839,8 +5844,25 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
   if (auto resultFnType = functionType->getResult()->getAs<AnyFunctionType>())
     for (auto &param : resultFnType->getParams())
       allParamTypes.push_back(param.getPlainType());
-  for (auto &param : functionType->getParams())
-    allParamTypes.push_back(param.getPlainType());
+  for (auto &param : functionType->getParams()) {
+    if (param.isAutoClosure()) {
+      allParamTypes.push_back(param.getPlainType()->getAs<AnyFunctionType>()->getResult());
+    } else {
+      allParamTypes.push_back(param.getPlainType());
+    }
+  }
+
+  llvm::errs() << "allParamTypes BEGIN\n";
+  for (const auto &[idx, param] : llvm::enumerate(allParamTypes)) {
+    llvm::errs() << idx << ": " << param << "\n";
+    if (auto *aft = param->getAs<AnyFunctionType>()) {
+      llvm::errs() << idx << " (AnyFunctionType): ";
+      aft->dump(llvm::errs());
+      aft->getResult();
+      llvm::errs() << "\n";
+    }
+  }
+  llvm::errs() << "allParamTypes END\n";
 
   // Set differentiability parameters.
   for (unsigned i : range(parameterBits.size()))
@@ -5899,9 +5921,11 @@ static IndexSubset *computeDifferentiabilityParameters(
 
   // If parsed differentiability parameters are empty, infer parameter indices
   // from the function type.
-  if (parsedDiffParams.empty())
+  if (parsedDiffParams.empty()) {
+    llvm::errs() << "CCCCCC 01\n";
     return TypeChecker::inferDifferentiabilityParameters(function,
                                                          derivativeGenEnv);
+  }
 
   // Otherwise, build parameter indices from parsed differentiability
   // parameters.
@@ -5970,6 +5994,7 @@ static IndexSubset *computeDifferentiabilityParameters(
     }
     }
   }
+  llvm::errs() << "CCCCCC 00\n";
   return IndexSubset::get(ctx, parameterBits);
 }
 
@@ -6531,12 +6556,17 @@ bool resolveDifferentiableAttrDifferentiabilityParameters(
   // parsed attributes.
   auto parsedDiffParams = attr->getParsedParameters();
 
+  llvm::errs() << "AAAAA 00 " << original->getNameStr() << "\n";
+
   diffParamIndices = computeDifferentiabilityParameters(
       parsedDiffParams, original, derivativeGenEnv, attr->getLocation());
+  llvm::errs() << "AAAAA 01\n";
   if (!diffParamIndices) {
+    llvm::errs() << "AAAAA 02\n";
     attr->setInvalid();
     return true;
   }
+  llvm::errs() << "AAAAA 03\n";
 
   // Check if differentiability parameter indices are valid.
   // Do this by compute the expected differential type and checking whether
@@ -6547,6 +6577,7 @@ bool resolveDifferentiableAttrDifferentiabilityParameters(
           LookUpConformanceInModule(),
           /*makeSelfParamFirst*/ true);
 
+  llvm::errs() << "AAAAA 04\n";
   // Helper for diagnosing derivative function type errors.
   auto errorHandler = [&](const DerivativeFunctionTypeError &error) {
     attr->setInvalid();
@@ -6582,10 +6613,13 @@ bool resolveDifferentiableAttrDifferentiabilityParameters(
   };
   // Diagnose any derivative function type errors.
   if (!expectedLinearMapTypeOrError) {
+    llvm::errs() << "AAAAA 05\n";
     auto error = expectedLinearMapTypeOrError.takeError();
     handleAllErrors(std::move(error), errorHandler);
+    llvm::errs() << "AAAAA 06\n";
     return true;
   }
+  llvm::errs() << "AAAAA 07\n";
 
   return false;
 }
