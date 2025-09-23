@@ -1278,17 +1278,13 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
     }
   }
 
-  llvm::errs() << "HHHHHH 00\n";
   if (pullbackInfo.hasHeapAllocatedContext()) {
-    llvm::errs() << "HHHHHH 01\n";
     // Accept a `AutoDiffLinarMapContext` heap object if there are loops.
     pbParams.push_back({
       getASTContext().TheNativeObjectType,
       ParameterConvention::Direct_Guaranteed
     });
-    llvm::errs() << "HHHHHH 02\n";
   } else {
-    llvm::errs() << "HHHHHH 03\n";
     // Accept a pullback tuple in the pullback parameter list. This is the
     // returned pullback's closure context.
     auto *origExit = &*original->findReturnBB();
@@ -1297,36 +1293,21 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
     for (Type eltTy : pbTupleType->getElementTypes())
       pbParams.emplace_back(CanType(eltTy), ParameterConvention::Direct_Owned);
   }
-  llvm::errs() << "HHHHHH 04\n";
 
   // Add pullback results for the requested wrt parameters.
   for (auto i : config.parameterIndices->getIndices()) {
-    llvm::errs() << "HHHHHH 05\n";
     auto origParam = origParams[i];
-    if (origParam.isAutoDiffSemanticResult()) {
-      llvm::errs() << "HHHHHH 06\n";
+    if (origParam.isAutoDiffSemanticResult())
       continue;
-    }
-    llvm::errs() << "HHHHHH 07\n";
     origParam = origParam.getWithInterfaceType(
         origParam.getInterfaceType()->getReducedType(witnessCanGenSig));
-    Type paramType = origParam.getInterfaceType();
-    llvm::errs() << "HHHHHH 08 " << paramType << "\n";
-    if (auto *sft = paramType->getAs<SILFunctionType>()) {
-      llvm::errs() << "HHHHHH 10\n";
-      paramType = sft->getResults().front().getInterfaceType();
-      llvm::errs() << "HHHHHH 11 " << paramType << "\n";
-    }
-    llvm::errs() << "HHHHHH 12\n";
     adjResults.push_back(getTangentResultInfoForOriginalParameter(
-        paramType
+        origParam.getInterfaceType()
             ->getAutoDiffTangentSpace(lookupConformance)
             ->getType()
             ->getReducedType(witnessCanGenSig),
         origParam.getConvention()));
-    llvm::errs() << "HHHHHH 09\n";
   }
-  llvm::errs() << "HHHHHH 10\n";
 
   Mangle::DifferentiationMangler mangler(getASTContext());
   auto pbName = mangler.mangleLinearMap(
