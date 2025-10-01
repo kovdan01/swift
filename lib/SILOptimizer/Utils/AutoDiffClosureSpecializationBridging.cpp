@@ -36,11 +36,26 @@ ClosureAndIdxInPayload::ClosureAndIdxInPayload(BridgedInstruction closure,
                                                SwiftInt idxInPayload)
     : closure(closure), idxInPayload(idxInPayload) {}
 
-static SILType getBranchingTraceEnumLoweredType(EnumDecl *ed,
-                                                SILFunction &vjp) {
+static SILType getBranchingTraceEnumLoweredTypeImpl(EnumDecl *ed,
+                                                    SILFunction &vjp) {
   return autodiff::getLoweredTypeImpl(
       ed->getDeclaredInterfaceType()->getCanonicalType(), &vjp,
       vjp.getModule().Types);
+}
+
+BridgedType getBranchingTraceEnumLoweredTypeImpl(BridgedEnumDecl ed,
+                                                    BridgedFunction vjp) {
+  return getBranchingTraceEnumLoweredTypeImpl(ed.unbridged(), vjp.getFunction());
+}
+
+BridgedType getBranchingTraceEnumLoweredType(BridgedDeclObj ed,
+                                             BridgedFunction vjp) {
+  return getBranchingTraceEnumLoweredTypeImpl(ed.getAs<EnumDecl>(), *vjp.getFunction());
+}
+
+BridgedNullableGenericParamList cloneGenericParameters(BridgedASTContext ctx, BridgedDeclContext dc,
+                                                                           BridgedCanGenericSignature sig) {
+  return autodiff::cloneGenericParameters(ctx.unbridged(), dc.unbridged(), sig.unbridged());
 }
 
 static Type getCapturedArgTypesTupleForClosure(const SILInstruction *closure,
@@ -162,6 +177,10 @@ using BTECaseToClosureListDict =
                        llvm::SmallVector<ClosureAndIdxInPayload, 8>,
                        EnumTypeAndCaseIdxHasher>;
 
+BridgedSourceFile autodiffGetSourceFile(BridgedFunction f) {
+  return {&autodiff::getSourceFile(f.getFunction())};
+}
+
 // NOTE: Branch tracing enum creation logic was adopted from
 // LinearMapInfo::createBranchingTraceDecl.
 static BridgedType autodiffSpecializeBranchTracingEnum(
@@ -228,7 +247,7 @@ static BridgedType autodiffSpecializeBranchTracingEnum(
                   newPayloadTupleEltType->getEnumOrBoundGenericEnum()) {
             assert(label.str() == "predecessor");
             SILType predBTEType = remapType(
-                getBranchingTraceEnumLoweredType(predED, topVJP), topVJP);
+                getBranchingTraceEnumLoweredTypeImpl(predED, topVJP), topVJP);
             newPayloadTupleEltType =
                 specBTEDict.at(predBTEType).unbridged().getASTType();
           }
@@ -288,7 +307,7 @@ static BridgedType autodiffSpecializeBranchTracingEnum(
   file.getParentModule()->clearLookupCache();
 
   SILType newEnumType =
-      remapType(getBranchingTraceEnumLoweredType(newED, topVJP), topVJP);
+      remapType(getBranchingTraceEnumLoweredTypeImpl(newED, topVJP), topVJP);
 
   return newEnumType;
 }
@@ -315,7 +334,7 @@ SpecializedBranchTracingEnumDict autodiffSpecializeBranchTracingEnums(
     EnumDecl *ed = t->getEnumOrBoundGenericEnum();
 
     SILType silType =
-        remapType(getBranchingTraceEnumLoweredType(ed, silTopVJP), silTopVJP);
+        remapType(getBranchingTraceEnumLoweredTypeImpl(ed, silTopVJP), silTopVJP);
 
     dict[BridgedType(silType)] = autodiffSpecializeBranchTracingEnum(
         BridgedType(silType), silTopVJP, bteCaseToClosureListDict, dict);

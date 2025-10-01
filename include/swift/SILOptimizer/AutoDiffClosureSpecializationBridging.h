@@ -64,6 +64,17 @@ SWIFT_IMPORT_UNSAFE BridgedOwnedString
 getSpecializedBranchTracingEnumDictAsString(
     const SpecializedBranchTracingEnumDict &specBTEDict);
 
+SWIFT_IMPORT_UNSAFE BridgedType getBranchingTraceEnumLoweredType(BridgedDeclObj ed,
+                                             BridgedFunction vjp);
+
+SWIFT_IMPORT_UNSAFE BridgedNullableGenericParamList cloneGenericParameters(BridgedASTContext ctx, BridgedDeclContext dc,
+                                                        BridgedCanGenericSignature sig);
+
+SWIFT_IMPORT_UNSAFE BridgedSourceFile autodiffGetSourceFile(BridgedFunction f);
+
+SWIFT_IMPORT_UNSAFE BridgedType getBranchingTraceEnumLoweredTypeImpl(BridgedEnumDecl ed,
+                                                 BridgedFunction vjp);
+
 SWIFT_END_NULLABILITY_ANNOTATIONS
 
 #endif

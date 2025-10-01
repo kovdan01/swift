@@ -437,12 +437,21 @@ BridgedType BridgedType::getEnumCasePayload(EnumElementIterator i, BridgedFuncti
   return swift::SILType();
 }
 
+BridgedDeclObj BridgedType::getEnumElementDecl(EnumElementIterator i) const {
+  swift::EnumElementDecl *elt = *unbridge(i);
+  return {elt};
+}
+
 SwiftInt BridgedType::getNumTupleElements() const {
   return unbridged().getNumTupleElements();
 }
 
 BridgedType BridgedType::getTupleElementType(SwiftInt idx) const {
   return unbridged().getTupleElementType(idx);
+}
+
+BridgedStringRef BridgedType::getTupleElementLabel(SwiftInt idx) const {
+  return llvm::cast<swift::TupleType>(unbridged().getASTType().getPointer())->getElement(idx).getName().str();
 }
 
 BridgedType BridgedType::getFunctionTypeWithNoEscape(bool withNoEscape) const {
@@ -454,6 +463,21 @@ BridgedType BridgedType::getFunctionTypeWithNoEscape(bool withNoEscape) const {
 BridgedArgumentConvention BridgedType::getCalleeConvention() const {
   auto fnType = unbridged().getAs<swift::SILFunctionType>();
   return getArgumentConvention(fnType->getCalleeConvention());
+}
+
+BridgedCanType BridgedType::getRemappedType(BridgedFunction function) const {
+  return unbridged().getASTType()->getReducedType(function.getFunction()->getLoweredFunctionType()->getSubstGenericSignature());
+}
+
+BridgedType BridgedType::mapTypeOutOfContext() const {
+  return unbridged().mapTypeOutOfContext();
+}
+
+BridgedType SILType_getPrimitiveType(BridgedCanType t, SwiftInt silValueCategory) {
+  assert(silValueCategory == static_cast<SwiftInt>(swift::SILValueCategory::Address) ||
+         silValueCategory == static_cast<SwiftInt>(swift::SILValueCategory::Object));
+  swift::SILValueCategory category = static_cast<swift::SILValueCategory>(silValueCategory);
+  return swift::SILType::getPrimitiveType(t.unbridged(), category);
 }
 
 //===----------------------------------------------------------------------===//
@@ -725,6 +749,10 @@ BridgedASTType BridgedFunction::mapTypeIntoContext(BridgedASTType ty) const {
   return {getFunction()->mapTypeIntoContext(ty.unbridged()).getPointer()};
 }
 
+BridgedType BridgedFunction::mapSILTypeIntoContext(BridgedType ty) const {
+  return {getFunction()->mapTypeIntoContext(ty.unbridged())};
+}
+
 OptionalBridgedBasicBlock BridgedFunction::getFirstBlock() const {
   return {getFunction()->empty() ? nullptr : getFunction()->getEntryBlock()};
 }
@@ -918,6 +946,10 @@ BridgedFunction::OptionalSourceFileKind BridgedFunction::getSourceFileKind() con
       return (OptionalSourceFileKind)sourceFile->Kind;
   }
   return OptionalSourceFileKind::None;
+}
+
+bool BridgedFunction::hasGenericEnvironment() const {
+  return getFunction()->getGenericEnvironment() != nullptr;
 }
 
 //===----------------------------------------------------------------------===//
@@ -2889,6 +2921,15 @@ BridgedASTType BridgedContext::getTupleType(BridgedArrayRef elementTypes) const 
   llvm::SmallVector<swift::TupleTypeElt, 8> elements;
   for (auto bridgedElmtTy :  elementTypes.unbridged<BridgedASTType>()) {
     elements.push_back(bridgedElmtTy.unbridged());
+  }
+  return {swift::TupleType::get(elements, context->getModule()->getASTContext())};
+}
+
+BridgedASTType BridgedContext::getTupleTypeWithLabels(BridgedArrayRef elementTypes, BridgedArrayRef labels) const {
+  llvm::SmallVector<swift::TupleTypeElt, 8> elements;
+  swift::ASTContext &astContext = context->getModule()->getASTContext();
+  for (const auto &[bridgedElmtTy, bridgedLabel] : llvm::zip_equal(elementTypes.unbridged<BridgedASTType>(), labels.unbridged<BridgedStringRef>())) {
+    elements.emplace_back(bridgedElmtTy.unbridged(), astContext.getIdentifier(bridgedLabel.unbridged()));
   }
   return {swift::TupleType::get(elements, context->getModule()->getASTContext())};
 }
