@@ -369,7 +369,7 @@ extension ASTGenVisitor {
             defaultValueInitContext: nil
           )
           param.setSpecifier(.default)
-          param.setImplicit()
+          param.asDecl.setImplicit()
           params.append(param)
         }
       }
