@@ -19,24 +19,12 @@
 
 SWIFT_BEGIN_NULLABILITY_ANNOTATIONS
 
-struct BridgedTypeHasher {
-  unsigned operator()(const BridgedType &value) const;
-};
-
-SWIFT_IMPORT_UNSAFE bool operator==(const BridgedType &lhs,
-                                    const BridgedType &rhs);
-
-using SpecializedBranchTracingEnumDict =
-    std::unordered_map<BridgedType, BridgedType, BridgedTypeHasher>;
-
 struct ClosureAndIdxInPayload {
   SWIFT_IMPORT_UNSAFE ClosureAndIdxInPayload(BridgedInstruction closure,
                                              SwiftInt idxInPayload);
   BridgedInstruction closure;
   SwiftInt idxInPayload;
 };
-
-using VectorOfClosureAndIdxInPayload = std::vector<ClosureAndIdxInPayload>;
 
 struct BranchTracingEnumAndClosureInfo {
   BridgedType enumType;
@@ -45,24 +33,8 @@ struct BranchTracingEnumAndClosureInfo {
   SwiftInt idxInPayload;
 };
 
-using VectorOfBranchTracingEnumAndClosureInfo =
-    std::vector<BranchTracingEnumAndClosureInfo>;
-
-SWIFT_IMPORT_UNSAFE SpecializedBranchTracingEnumDict
-autodiffSpecializeBranchTracingEnums(
-    BridgedFunction topVJP, BridgedType topBTE,
-    const VectorOfBranchTracingEnumAndClosureInfo
-        &vectorOfBranchTracingEnumAndClosureInfo);
-
-SWIFT_IMPORT_UNSAFE BridgedArgument specializeBranchTracingEnumBBArgInVJP(
-    BridgedArgument arg, const SpecializedBranchTracingEnumDict &specBTEDict);
-
 SWIFT_IMPORT_UNSAFE BridgedArgument specializePayloadTupleBBArgInPullback(
     BridgedArgument arg, BridgedType enumType, SwiftInt caseIdx);
-
-SWIFT_IMPORT_UNSAFE BridgedOwnedString
-getSpecializedBranchTracingEnumDictAsString(
-    const SpecializedBranchTracingEnumDict &specBTEDict);
 
 SWIFT_IMPORT_UNSAFE BridgedType getBranchingTraceEnumLoweredType(BridgedDeclObj ed,
                                              BridgedFunction vjp);

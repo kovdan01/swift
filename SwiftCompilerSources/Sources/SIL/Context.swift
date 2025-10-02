@@ -69,11 +69,16 @@ extension Context {
     }
   }
 
-  public func getTupleTypeWithLabels(elements: [AST.`Type`], labels: [StringRef]) -> AST.`Type` {
+  public func getTupleTypeWithLabels(elements: [AST.`Type`], labels: [swift.Identifier]) -> AST.`Type` {
     assert(elements.count == labels.count)
-    let bridgedElements = elements.map { $0.bridged }.withBridgedArrayRef{ $0 }
-    let bridgedLabels = labels.map { $0._bridged }.withBridgedArrayRef{ $0 }
-    return AST.`Type`(bridged: _bridged.getTupleTypeWithLabels(bridgedElements, bridgedLabels))
+
+    return elements.withBridgedArrayRef{
+    eltArr in labels.withBridgedArrayRef{labelsArr in
+    AST.`Type`(bridged: _bridged.getTupleTypeWithLabels(eltArr, labelsArr))}}
+
+//    let bridgedElements = elements.map { $0.bridged }.withBridgedArrayRef{ $0 }
+//    let bridgedLabels = labels.map { $0._bridged }.withBridgedArrayRef{ $0 }
+//    return AST.`Type`(bridged: _bridged.getTupleTypeWithLabels(bridgedElements, bridgedLabels))
   }
 
   public var swiftArrayDecl: NominalTypeDecl {

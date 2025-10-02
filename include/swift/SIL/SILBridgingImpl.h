@@ -450,8 +450,9 @@ BridgedType BridgedType::getTupleElementType(SwiftInt idx) const {
   return unbridged().getTupleElementType(idx);
 }
 
-BridgedStringRef BridgedType::getTupleElementLabel(SwiftInt idx) const {
-  return llvm::cast<swift::TupleType>(unbridged().getASTType().getPointer())->getElement(idx).getName().str();
+swift::Identifier BridgedType::getTupleElementLabel(SwiftInt idx) const {
+  return llvm::cast<swift::TupleType>(unbridged().getASTType().getPointer())->getElement(idx).getName();
+  //return llvm::cast<swift::TupleType>(unbridged().getASTType().getPointer())->getElement(idx).getName().str();
 }
 
 BridgedType BridgedType::getFunctionTypeWithNoEscape(bool withNoEscape) const {
@@ -2935,10 +2936,12 @@ BridgedASTType BridgedContext::getTupleType(BridgedArrayRef elementTypes) const 
 }
 
 BridgedASTType BridgedContext::getTupleTypeWithLabels(BridgedArrayRef elementTypes, BridgedArrayRef labels) const {
+  assert(elementTypes.getCount() == labels.getCount());
   llvm::SmallVector<swift::TupleTypeElt, 8> elements;
-  swift::ASTContext &astContext = context->getModule()->getASTContext();
-  for (const auto &[bridgedElmtTy, bridgedLabel] : llvm::zip_equal(elementTypes.unbridged<BridgedASTType>(), labels.unbridged<BridgedStringRef>())) {
-    elements.emplace_back(bridgedElmtTy.unbridged(), astContext.getIdentifier(bridgedLabel.unbridged()));
+  llvm::ArrayRef<BridgedASTType> elementTypesArr = elementTypes.unbridged<BridgedASTType>();
+  llvm::ArrayRef<swift::Identifier> labelsArr = elementTypes.unbridged<swift::Identifier>();
+  for (const auto &[bridgedElmtTy, label] : llvm::zip_equal(elementTypesArr, labelsArr)) {
+    elements.emplace_back(bridgedElmtTy.unbridged(), label);
   }
   return {swift::TupleType::get(elements, context->getModule()->getASTContext())};
 }

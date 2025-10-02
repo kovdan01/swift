@@ -307,8 +307,10 @@ public struct TupleElementArray : RandomAccessCollection, FormattedLikeArray {
     type.bridged.getTupleElementType(index).type
   }
 
-  public func label(at index: Int) -> StringRef {
-    StringRef(bridged: type.bridged.getTupleElementLabel(index))
+  //public func label(at index: Int) -> StringRef {
+  public func label(at index: Int) -> swift.Identifier {
+    //StringRef(bridged: type.bridged.getTupleElementLabel(index))
+    type.bridged.getTupleElementLabel(index)
   }
 }
 
