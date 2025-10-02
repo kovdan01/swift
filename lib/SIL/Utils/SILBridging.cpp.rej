@@ -1,0 +1,12 @@
+--- lib/SIL/Utils/SILBridging.cpp
++++ lib/SIL/Utils/SILBridging.cpp
+@@ -20,8 +20,8 @@
+ #include "swift/AST/Attr.h"
+ #include "swift/AST/SemanticAttrs.h"
+ #include "swift/Basic/Assertions.h"
+-#include "swift/SIL/SILContext.h"
+ #include "swift/SIL/SILCloner.h"
++#include "swift/SIL/SILContext.h"
+ #include "swift/SIL/MemAccessUtils.h"
+ #include "swift/SIL/OwnershipUtils.h"
+ #include "swift/SIL/ParseTestSpecification.h"

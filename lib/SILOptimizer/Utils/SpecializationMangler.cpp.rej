@@ -1,0 +1,34 @@
+--- lib/SILOptimizer/Utils/SpecializationMangler.cpp
++++ lib/SILOptimizer/Utils/SpecializationMangler.cpp
+@@ -257,15 +265,28 @@ FunctionSignatureSpecializationMangler::mangleClosureProp(SILInstruction *Inst)
+   }
+ }
+ 
++void FunctionSignatureSpecializationMangler::mangleAutoDiffBranchTracingEnum(
++    ValueBase *Arg) {
++  ArgOpBuffer << 'b';
++  appendIdentifier(Arg->getType().getAsString());
++}
++
+ void FunctionSignatureSpecializationMangler::mangleArgument(
+-    ArgumentModifierIntBase ArgMod, NullablePtr<SILInstruction> Inst) {
++    ArgumentModifierIntBase ArgMod, NullablePtr<void> Payload) {
+   if (ArgMod == ArgumentModifierIntBase(ArgumentModifier::ConstantProp)) {
+-    mangleConstantProp(Inst.get());
++    mangleConstantProp(reinterpret_cast<SILInstruction *>(Payload.get()));
+     return;
+   }
+ 
+   if (ArgMod == ArgumentModifierIntBase(ArgumentModifier::ClosureProp)) {
+-    mangleClosureProp(Inst.get());
++    mangleClosureProp(reinterpret_cast<SILInstruction *>(Payload.get()));
++    return;
++  }
++
++  if (ArgMod ==
++      ArgumentModifierIntBase(ArgumentModifier::AutoDiffBranchTracingEnum)) {
++    mangleAutoDiffBranchTracingEnum(
++        reinterpret_cast<ValueBase *>(Payload.get()));
+     return;
+   }
+ 

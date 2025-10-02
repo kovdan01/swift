@@ -1,0 +1,20 @@
+--- lib/Demangling/Demangler.cpp
++++ lib/Demangling/Demangler.cpp
+@@ -3388,11 +3388,15 @@ NodePointer Demangler::demangleFunctionSpecialization() {
+       case FunctionSigSpecializationParamKind::ConstantPropGlobal:
+       case FunctionSigSpecializationParamKind::ConstantPropString:
+       case FunctionSigSpecializationParamKind::ConstantPropKeyPath:
+-      case FunctionSigSpecializationParamKind::ClosureProp: {
++      case FunctionSigSpecializationParamKind::ClosureProp:
++      case FunctionSigSpecializationParamKind::AutoDiffBranchTracingEnum: {
+         size_t FixedChildren = Param->getNumChildren();
+         while (NodePointer Ty = popNode(Node::Kind::Type)) {
+           if (ParamKind != FunctionSigSpecializationParamKind::ClosureProp &&
+-              ParamKind != FunctionSigSpecializationParamKind::ConstantPropKeyPath)
++              ParamKind != FunctionSigSpecializationParamKind::
++                               AutoDiffBranchTracingEnum &&
++              ParamKind !=
++                  FunctionSigSpecializationParamKind::ConstantPropKeyPath)
+             return nullptr;
+           Param = addChild(Param, Ty);
+         }
