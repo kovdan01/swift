@@ -66,6 +66,14 @@ public struct Type: TypeProperties, CustomStringConvertible, NoReflectionChildre
   public func subst(with substitutionMap: SubstitutionMap) -> Type {
     return Type(bridged: bridged.subst(substitutionMap.bridged))
   }
+
+  public func mapTypeOutOfContext() -> Type {
+    return Type(bridged: bridged.mapTypeOutOfContext())
+  }
+
+  public func getReducedType(sig: GenericSignature) -> CanonicalType {
+    CanonicalType(bridged: bridged.getReducedType(sig.bridged))
+  }
 }
 
 /// A Type that is statically known to be canonical.
@@ -85,6 +93,10 @@ public struct CanonicalType: TypeProperties, CustomStringConvertible, NoReflecti
 
   public func subst(with substitutionMap: SubstitutionMap) -> CanonicalType {
     return rawType.subst(with: substitutionMap).canonical
+  }
+
+  public func SILFunctionType_getSubstGenericSignature() -> CanGenericSignature {
+    CanGenericSignature(bridged: bridged.SILFunctionType_getSubstGenericSignature())
   }
 }
 
