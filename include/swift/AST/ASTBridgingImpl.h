@@ -137,6 +137,12 @@ bool BridgedSourceFile_isScriptMode(BridgedSourceFile sf) {
   return sf.unbridged()->isScriptMode();
 }
 
+void BridgedSourceFile_addTopLevelDecl(BridgedSourceFile sf, BridgedDecl decl) {
+  auto &file = sf.unbridged()->getOrCreateSynthesizedFile();
+  file.addTopLevelDecl(decl.unbridged());
+  file.getParentModule()->clearLookupCache();
+}
+
 //===----------------------------------------------------------------------===//
 // MARK: BridgedDeclObj
 //===----------------------------------------------------------------------===//
@@ -221,6 +227,14 @@ bool BridgedDeclObj::Destructor_isIsolated() const {
 
 bool BridgedDeclObj::EnumElementDecl_hasAssociatedValues() const {
   return getAs<swift::EnumElementDecl>()->hasAssociatedValues();
+}
+
+BridgedParameterList BridgedDeclObj::EnumElementDecl_getParameterList() const {
+  return getAs<swift::EnumElementDecl>()->getParameterList();
+}
+
+BridgedStringRef BridgedDeclObj::EnumElementDecl_getNameStr() const {
+  return getAs<swift::EnumElementDecl>()->getNameStr();
 }
 
 //===----------------------------------------------------------------------===//
@@ -326,9 +340,20 @@ swift::ParamSpecifier unbridge(BridgedParamSpecifier specifier) {
   }
 }
 
+BridgedParamDecl
+BridgedParamDecl_cloneWithoutType(BridgedParamDecl cDecl) {
+  return swift::ParamDecl::cloneWithoutType(cDecl.unbridged()->getASTContext(),
+                                            cDecl.unbridged());
+}
+
 void BridgedParamDecl_setTypeRepr(BridgedParamDecl cDecl,
                                   BridgedTypeRepr cType) {
   cDecl.unbridged()->setTypeRepr(cType.unbridged());
+}
+
+void BridgedParamDecl_setInterfaceType(BridgedParamDecl cDecl,
+                                       BridgedASTType cType) {
+  cDecl.unbridged()->setInterfaceType(cType.unbridged());
 }
 
 void BridgedParamDecl_setSpecifier(BridgedParamDecl cDecl,
@@ -336,8 +361,18 @@ void BridgedParamDecl_setSpecifier(BridgedParamDecl cDecl,
   cDecl.unbridged()->setSpecifier(unbridge(cSpecifier));
 }
 
-void BridgedParamDecl_setImplicit(BridgedParamDecl cDecl) {
+void BridgedDecl_setImplicit(BridgedDecl cDecl) {
   cDecl.unbridged()->setImplicit();
+}
+
+void BridgedGenericContext_setGenericSignature(
+    BridgedGenericContext cDecl, BridgedGenericSignature cGenSig) {
+  cDecl.unbridged()->setGenericSignature(cGenSig.unbridged());
+}
+
+void BridgedNominalTypeDecl_addMember(BridgedNominalTypeDecl cDecl,
+                                      BridgedDecl member) {
+  cDecl.unbridged()->addMember(member.unbridged());
 }
 
 //===----------------------------------------------------------------------===//
@@ -607,6 +642,10 @@ BridgedConformance BridgedASTType::checkConformance(BridgedDeclObj proto) const 
   return swift::checkConformance(unbridged(), proto.getAs<swift::ProtocolDecl>(), /*allowMissing=*/ false);
 }  
 
+BridgedASTType BridgedASTType::mapTypeOutOfContext() const {
+  return {unbridged()->mapTypeOutOfContext().getPointer()};
+}
+
 static_assert((int)BridgedASTType::TraitResult::IsNot == (int)swift::TypeTraitResult::IsNot);
 static_assert((int)BridgedASTType::TraitResult::CanBe == (int)swift::TypeTraitResult::CanBe);
 static_assert((int)BridgedASTType::TraitResult::Is == (int)swift::TypeTraitResult::Is);
@@ -822,6 +861,20 @@ BridgedASTTypeArray BridgedGenericSignature::getGenericParams() const {
 
 BridgedASTType BridgedGenericSignature::mapTypeIntoContext(BridgedASTType type) const {
   return {unbridged().getGenericEnvironment()->mapTypeIntoContext(type.unbridged()).getPointer()};
+}
+
+BridgedCanGenericSignature
+BridgedGenericSignature::getCanonicalSignature() const {
+  return BridgedCanGenericSignature{impl};
+}
+
+swift::CanGenericSignature BridgedCanGenericSignature::unbridged() const {
+  return swift::GenericSignature(impl).getCanonicalSignature();
+}
+
+BridgedGenericSignature
+BridgedCanGenericSignature::getGenericSignature() const {
+  return BridgedGenericSignature{impl};
 }
 
 //===----------------------------------------------------------------------===//

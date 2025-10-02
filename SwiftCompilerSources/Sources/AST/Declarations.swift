@@ -118,6 +118,8 @@ final public class MacroDecl: ValueDecl {}
 
 final public class EnumElementDecl: ValueDecl {
   public var hasAssociatedValues: Bool { bridged.EnumElementDecl_hasAssociatedValues() }
+  public var parameterList: BridgedParameterList { bridged.EnumElementDecl_getParameterList() }
+  public var name: StringRef { StringRef(bridged: bridged.EnumElementDecl_getNameStr()) }
 }
 
 final public class ExtensionDecl: Decl {}

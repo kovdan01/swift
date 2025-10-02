@@ -27,6 +27,7 @@ public struct Type : TypeProperties, CustomStringConvertible, NoReflectionChildr
 
   public var isAddress: Bool { bridged.isAddress() }
   public var isObject: Bool { !isAddress }
+  public var category: ValueCategory { ValueCategory(bridged: bridged.getCategory()) }
 
   public var addressType: Type { bridged.getAddressType().type }
   public var objectType: Type { bridged.getObjectType().type }
@@ -266,6 +267,7 @@ public struct NominalFieldsArray : RandomAccessCollection, FormattedLikeArray {
 }
 
 public struct EnumCase {
+  public let enumElementDecl : EnumElementDecl
   public let payload: Type?
   public let index: Int
 }
@@ -288,7 +290,8 @@ public struct EnumCases : CollectionLikeSequence, IteratorProtocol {
         caseIterator = caseIterator.getNext()
         caseIndex += 1
       }
-      return EnumCase(payload: enumType.bridged.getEnumCasePayload(caseIterator, function.bridged).typeOrNil,
+      return EnumCase(enumElementDecl: enumType.bridged.getEnumElementDecl(caseIterator).getAs(EnumElementDecl.self),
+                      payload: enumType.bridged.getEnumCasePayload(caseIterator, function.bridged).typeOrNil,
                       index: caseIndex)
     }
     return nil
@@ -303,6 +306,10 @@ public struct TupleElementArray : RandomAccessCollection, FormattedLikeArray {
 
   public subscript(_ index: Int) -> Type {
     type.bridged.getTupleElementType(index).type
+  }
+
+  public func label(at index: Int) -> swift.Identifier {
+    type.bridged.getTupleElementLabel(index)
   }
 }
 
