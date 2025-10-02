@@ -42,6 +42,12 @@ BridgedGenericParamList BridgedGenericParamList_createParsed(
       rightAngleLoc);
 }
 
+BridgedGenericParamList BridgedGenericParamList_create(
+    BridgedASTContext cContext,
+    BridgedArrayRef cParameters) {
+  return GenericParamList::create(cContext.unbridged(), SourceLoc(), cParameters.unbridged<GenericTypeParamDecl *>(), SourceLoc());
+}
+
 BridgedGenericTypeParamDecl BridgedGenericTypeParamDecl_createParsed(
     BridgedASTContext cContext, BridgedDeclContext cDeclContext,
     SourceLoc specifierLoc, Identifier name, SourceLoc nameLoc,
@@ -57,6 +63,17 @@ BridgedGenericTypeParamDecl BridgedGenericTypeParamDecl_createParsed(
   }
 
   return decl;
+}
+
+BridgedGenericTypeParamDecl BridgedGenericTypeParamDecl_createImplicit(
+    BridgedDeclContext cDeclContext,
+    swift::Identifier name,
+    unsigned depth,
+    unsigned index, swift::GenericTypeParamKind paramKind) {
+  auto *param = GenericTypeParamDecl::createImplicit(
+      cDeclContext.unbridged(), name, depth, index, paramKind);
+  param->setDeclContext(cDeclContext.unbridged());
+  return param;
 }
 
 BridgedTrailingWhereClause
