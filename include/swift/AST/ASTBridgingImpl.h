@@ -634,10 +634,6 @@ BridgedGenericSignature BridgedASTType::getInvocationGenericSignatureOfFunctionT
   return {unbridged()->castTo<swift::SILFunctionType>()->getInvocationGenericSignature().getPointer()};
 }
 
-// BridgedCanType BridgedASTType::getReducedType(BridgedGenericSignature sig) const {
-//   return unbridged()->getReducedType(sig.unbridged());
-// }
-
 BridgedASTType BridgedASTType::subst(BridgedSubstitutionMap substMap) const {
   return {unbridged().subst(substMap.unbridged()).getPointer()};
 }
