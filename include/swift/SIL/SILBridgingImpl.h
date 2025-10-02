@@ -321,6 +321,17 @@ bool BridgedType::isAddress() const {
   return unbridged().isAddress();
 }
 
+static inline BridgedValueCategory bridge(swift::SILValueCategory category) {
+  switch (category) {
+  case swift::SILValueCategory::Address: return BridgedValueCategory::Address;
+  case swift::SILValueCategory::Object:  return BridgedValueCategory::Object;
+  }
+}
+
+BridgedValueCategory BridgedType::getCategory() const {
+  return bridge(unbridged().getCategory());
+}
+
 BridgedCanType BridgedType::getCanType() const {
   return unbridged().getASTType();
 }
@@ -437,12 +448,23 @@ BridgedType BridgedType::getEnumCasePayload(EnumElementIterator i, BridgedFuncti
   return swift::SILType();
 }
 
+BridgedDeclObj BridgedType::getEnumElementDecl(EnumElementIterator i) const {
+  swift::EnumElementDecl *elt = *unbridge(i);
+  return {elt};
+}
+
 SwiftInt BridgedType::getNumTupleElements() const {
   return unbridged().getNumTupleElements();
 }
 
 BridgedType BridgedType::getTupleElementType(SwiftInt idx) const {
   return unbridged().getTupleElementType(idx);
+}
+
+swift::Identifier BridgedType::getTupleElementLabel(SwiftInt idx) const {
+  return llvm::cast<swift::TupleType>(unbridged().getASTType().getPointer())
+      ->getElement(idx)
+      .getName();
 }
 
 BridgedType BridgedType::getFunctionTypeWithNoEscape(bool withNoEscape) const {
@@ -454,6 +476,22 @@ BridgedType BridgedType::getFunctionTypeWithNoEscape(bool withNoEscape) const {
 BridgedArgumentConvention BridgedType::getCalleeConvention() const {
   auto fnType = unbridged().getAs<swift::SILFunctionType>();
   return getArgumentConvention(fnType->getCalleeConvention());
+}
+
+BridgedType BridgedType::mapTypeOutOfContext() const {
+  return unbridged().mapTypeOutOfContext();
+}
+
+static inline swift::SILValueCategory unbridge(BridgedValueCategory category) {
+  switch (category) {
+  case BridgedValueCategory::Address: return swift::SILValueCategory::Address;
+  case BridgedValueCategory::Object:  return swift::SILValueCategory::Object;
+  }
+}
+
+BridgedType
+BridgedType_getPrimitiveType(BridgedCanType canType, BridgedValueCategory silValueCategory) {
+  return swift::SILType::getPrimitiveType(canType.unbridged(), unbridge(silValueCategory));
 }
 
 //===----------------------------------------------------------------------===//
@@ -611,6 +649,11 @@ void BridgedArgument::copyFlags(BridgedArgument fromArgument) const {
   fArg->copyFlags(static_cast<swift::SILFunctionArgument *>(fromArgument.getArgument()));
 }
 
+BridgedValue::Ownership BridgedArgument::getOwnership() const {
+  swift::ValueBase *val = getArgument();
+  return BridgedValue{SwiftObject{val}}.getOwnership();
+}
+
 swift::SILArgument * _Nullable OptionalBridgedArgument::unbridged() const {
   if (!obj)
     return nullptr;
@@ -723,6 +766,10 @@ BridgedSubstitutionMap BridgedFunction::getForwardingSubstitutionMap() const {
 
 BridgedASTType BridgedFunction::mapTypeIntoContext(BridgedASTType ty) const {
   return {getFunction()->mapTypeIntoContext(ty.unbridged()).getPointer()};
+}
+
+BridgedType BridgedFunction::mapSILTypeIntoContext(BridgedType ty) const {
+  return {getFunction()->mapTypeIntoContext(ty.unbridged())};
 }
 
 OptionalBridgedBasicBlock BridgedFunction::getFirstBlock() const {
@@ -902,6 +949,13 @@ BridgedType BridgedFunction::getLoweredType(BridgedASTType type, bool maximallyA
     return BridgedType(getFunction()->getLoweredType(swift::Lowering::AbstractionPattern::getOpaque(), type.type));
   }
   return BridgedType(getFunction()->getLoweredType(type.type));
+}
+
+BridgedType BridgedFunction::getLoweredType(BridgedCanType type) const {
+  swift::Lowering::AbstractionPattern pattern(
+      getFunction()->getLoweredFunctionType()->getSubstGenericSignature(), type.unbridged());
+  return getFunction()->getModule().Types.getLoweredType(pattern, type.unbridged(),
+                                      swift::TypeExpansionContext::minimal());
 }
 
 BridgedType BridgedFunction::getLoweredType(BridgedType type) const {
@@ -1871,6 +1925,13 @@ BridgedArgument BridgedBasicBlock::getArgument(SwiftInt index) const {
 BridgedArgument BridgedBasicBlock::addBlockArgument(BridgedType type, BridgedValue::Ownership ownership) const {
   return {unbridged()->createPhiArgument(
       type.unbridged(), BridgedValue::unbridge(ownership))};
+}
+
+BridgedArgument
+BridgedBasicBlock::insertPhiArgument(SwiftInt index, BridgedType type,
+                                     BridgedValue::Ownership ownership) const {
+  return {unbridged()->insertPhiArgument(index, type.unbridged(),
+                                         BridgedValue::unbridge(ownership))};
 }
 
 BridgedArgument BridgedBasicBlock::addFunctionArgument(BridgedType type) const {
@@ -2891,6 +2952,24 @@ BridgedASTType BridgedContext::getTupleType(BridgedArrayRef elementTypes) const 
     elements.push_back(bridgedElmtTy.unbridged());
   }
   return {swift::TupleType::get(elements, context->getModule()->getASTContext())};
+}
+
+BridgedASTType
+BridgedContext::getTupleTypeWithLabels(BridgedArrayRef elementTypes,
+                                       BridgedArrayRef labels) const {
+  assert(elementTypes.getCount() == labels.getCount());
+  llvm::SmallVector<swift::TupleTypeElt, 8> elements;
+  elements.reserve(elementTypes.getCount());
+  llvm::ArrayRef<BridgedASTType> elementTypesArr =
+      elementTypes.unbridged<BridgedASTType>();
+  llvm::ArrayRef<swift::Identifier> labelsArr =
+      labels.unbridged<swift::Identifier>();
+  for (const auto &[bridgedElmtTy, label] :
+       llvm::zip_equal(elementTypesArr, labelsArr)) {
+    elements.emplace_back(bridgedElmtTy.unbridged(), label);
+  }
+  return {
+      swift::TupleType::get(elements, context->getModule()->getASTContext())};
 }
 
 BridgedDeclObj BridgedContext::getSwiftArrayDecl() const {
