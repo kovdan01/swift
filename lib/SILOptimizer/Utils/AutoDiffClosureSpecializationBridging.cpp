@@ -38,18 +38,43 @@ ClosureAndIdxInPayload::ClosureAndIdxInPayload(BridgedInstruction closure,
 
 static SILType getBranchingTraceEnumLoweredTypeImpl(EnumDecl *ed,
                                                     SILFunction &vjp) {
+  llvm::errs() << "EEEEEEEEE 00\n";
+  llvm::errs() << (void*)ed << "\n";
+  llvm::errs() << "EEEEEEEEE 01\n";
+  ed->dump(llvm::errs());
+  llvm::errs() << "EEEEEEEEE 02\n";
+  llvm::errs() << ed->getDeclaredInterfaceType() << "\n";
+  llvm::errs() << "EEEEEEEEE 03\n";
   return autodiff::getLoweredTypeImpl(
       ed->getDeclaredInterfaceType()->getCanonicalType(), &vjp,
       vjp.getModule().Types);
 }
 
-BridgedType getBranchingTraceEnumLoweredTypeImpl(BridgedEnumDecl ed,
+BridgedType getBranchingTraceEnumLoweredType2(BridgedEnumDecl ed,
                                                     BridgedFunction vjp) {
-  return getBranchingTraceEnumLoweredTypeImpl(ed.unbridged(), vjp.getFunction());
+  llvm::errs() << "DDDDDDDDD 00\n";
+  llvm::errs() << (void*)ed.unbridged() << "\n";
+  llvm::errs() << "DDDDDDDDD 01\n";
+  ed.unbridged()->dump(llvm::errs());
+  llvm::errs() << "DDDDDDDDD 02\n";
+  llvm::errs() << ed.unbridged()->getDeclaredInterfaceType() << "\n";
+  llvm::errs() << "DDDDDDDDD 03\n";
+  llvm::errs() << getBranchingTraceEnumLoweredTypeImpl(ed.unbridged(), *vjp.getFunction()) << "\n";
+  llvm::errs() << "DDDDDDDDD 04\n";
+  return getBranchingTraceEnumLoweredTypeImpl(ed.unbridged(), *vjp.getFunction());
 }
 
 BridgedType getBranchingTraceEnumLoweredType(BridgedDeclObj ed,
                                              BridgedFunction vjp) {
+  llvm::errs() << "FFFFFFFFF 00\n";
+  llvm::errs() << (void*)ed.unbridged() << " " << (void*)ed.getAs<EnumDecl>() << "\n";
+  llvm::errs() << "FFFFFFFFF 01\n";
+  ed.getAs<EnumDecl>()->dump(llvm::errs());
+  llvm::errs() << "FFFFFFFFF 02\n";
+  llvm::errs() << ed.getAs<EnumDecl>()->getDeclaredInterfaceType() << "\n";
+  llvm::errs() << "FFFFFFFFF 03\n";
+  llvm::errs() << getBranchingTraceEnumLoweredTypeImpl(ed.getAs<EnumDecl>(), *vjp.getFunction()) << "\n";
+  llvm::errs() << "FFFFFFFFF 04\n";
   return getBranchingTraceEnumLoweredTypeImpl(ed.getAs<EnumDecl>(), *vjp.getFunction());
 }
 

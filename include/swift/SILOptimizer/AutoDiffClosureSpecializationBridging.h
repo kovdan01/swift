@@ -72,7 +72,7 @@ SWIFT_IMPORT_UNSAFE BridgedNullableGenericParamList cloneGenericParameters(Bridg
 
 SWIFT_IMPORT_UNSAFE BridgedSourceFile autodiffGetSourceFile(BridgedFunction f);
 
-SWIFT_IMPORT_UNSAFE BridgedType getBranchingTraceEnumLoweredTypeImpl(BridgedEnumDecl ed,
+SWIFT_IMPORT_UNSAFE BridgedType getBranchingTraceEnumLoweredType2(BridgedEnumDecl ed,
                                                  BridgedFunction vjp);
 
 SWIFT_END_NULLABILITY_ANNOTATIONS

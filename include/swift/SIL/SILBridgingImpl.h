@@ -635,6 +635,11 @@ void BridgedArgument::copyFlags(BridgedArgument fromArgument) const {
   fArg->copyFlags(static_cast<swift::SILFunctionArgument *>(fromArgument.getArgument()));
 }
 
+BridgedValue::Ownership BridgedArgument::getOwnership() const {
+  swift::ValueBase *val = getArgument();
+  return BridgedValue{SwiftObject{val}}.getOwnership();
+}
+
 swift::SILArgument * _Nullable OptionalBridgedArgument::unbridged() const {
   if (!obj)
     return nullptr;
@@ -1903,6 +1908,10 @@ BridgedArgument BridgedBasicBlock::getArgument(SwiftInt index) const {
 BridgedArgument BridgedBasicBlock::addBlockArgument(BridgedType type, BridgedValue::Ownership ownership) const {
   return {unbridged()->createPhiArgument(
       type.unbridged(), BridgedValue::unbridge(ownership))};
+}
+
+BridgedArgument BridgedBasicBlock::insertPhiArgument(SwiftInt index, BridgedType type, BridgedValue::Ownership ownership) const {
+  return {unbridged()->insertPhiArgument(index, type.unbridged(), BridgedValue::unbridge(ownership))};
 }
 
 BridgedArgument BridgedBasicBlock::addFunctionArgument(BridgedType type) const {
