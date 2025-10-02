@@ -56,6 +56,10 @@ public class NominalTypeDecl: GenericTypeDecl {
   final public var valueTypeDestructor: DestructorDecl? {
     bridged.NominalType_getValueTypeDestructor().getAs(DestructorDecl.self)
   }
+
+  public var declaredInterfaceType : AST.`Type` {
+    AST.`Type`(bridged: bridged.NominalType_getDeclaredInterfaceType())
+  }
 }
 
 final public class EnumDecl: NominalTypeDecl {
@@ -118,6 +122,8 @@ final public class MacroDecl: ValueDecl {}
 
 final public class EnumElementDecl: ValueDecl {
   public var hasAssociatedValues: Bool { bridged.EnumElementDecl_hasAssociatedValues() }
+  public var parameterList: BridgedParameterList { bridged.EnumElementDecl_getParameterList() }
+  public var name: StringRef { StringRef(bridged: bridged.EnumElementDecl_getNameStr()) }
 }
 
 final public class ExtensionDecl: Decl {}
