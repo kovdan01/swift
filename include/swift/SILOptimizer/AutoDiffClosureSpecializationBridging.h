@@ -47,6 +47,8 @@ SWIFT_IMPORT_UNSAFE BridgedSourceFile autodiffGetSourceFile(BridgedFunction f);
 SWIFT_IMPORT_UNSAFE BridgedType getBranchingTraceEnumLoweredType2(BridgedEnumDecl ed,
                                                  BridgedFunction vjp);
 
+SWIFT_IMPORT_UNSAFE BridgedOwnedString getEnumDeclAsString(BridgedType bteType);
+
 SWIFT_END_NULLABILITY_ANNOTATIONS
 
 #endif

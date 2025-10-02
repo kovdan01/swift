@@ -155,16 +155,16 @@ swift::SourceLoc BridgedDeclObj::getLoc() const {
   return unbridged()->getLoc();
 }
 
-// void BridgedDeclObj::setImplicit() const {
-//   return unbridged()->setImplicit();
-// }
-
 BridgedDeclObj BridgedDeclObj::getModuleContext() const {
   return {unbridged()->getModuleContext()};
 }
 
 OptionalBridgedDeclObj BridgedDeclObj::getParent() const {
   return {unbridged()->getDeclContext()->getAsDecl()};
+}
+
+BridgedDeclContext BridgedDeclObj::getDeclContext() const {
+  return {unbridged()->getDeclContext()};
 }
 
 BridgedStringRef BridgedDeclObj::Type_getName() const {
@@ -248,14 +248,6 @@ BridgedParameterList BridgedDeclObj::EnumElementDecl_getParameterList() const {
 BridgedStringRef BridgedDeclObj::EnumElementDecl_getNameStr() const {
   return getAs<swift::EnumElementDecl>()->getNameStr();
 }
-
-BridgedNominalTypeDecl BridgedDeclObj::asNominalTypeDecl() const {
-  return getAs<swift::NominalTypeDecl>();
-}
-
-// BridgedDeclObjArray BridgedDeclObj::EnumDecl_getAllMembers() const {
-//   return {getAs<swift::EnumDecl>()->getAllMembers()};
-// }
 
 //===----------------------------------------------------------------------===//
 // MARK: BridgedASTNode
@@ -378,14 +370,6 @@ void BridgedParamDecl_setSpecifier(BridgedParamDecl cDecl,
 void BridgedDecl_setImplicit(BridgedDecl cDecl) {
   cDecl.unbridged()->setImplicit();
 }
-
-// void BridgedParamDecl_setImplicit(BridgedParamDecl cDecl) {
-//   cDecl.unbridged()->setImplicit();
-// }
-
-// void BridgedNominalTypeDecl_setImplicit(BridgedNominalTypeDecl cDecl) {
-//   cDecl.unbridged()->setImplicit();
-// }
 
 void BridgedGenericContext_setGenericSignature(BridgedGenericContext cDecl, BridgedGenericSignature cGenSig) {
   cDecl.unbridged()->setGenericSignature(cGenSig.unbridged());

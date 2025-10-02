@@ -361,9 +361,9 @@ struct BridgedDeclObj {
   BridgedDeclObj(SwiftObject obj) : obj(obj) {}
   BridgedOwnedString getDebugDescription() const;
   BRIDGED_INLINE swift::SourceLoc getLoc() const;
-  //BRIDGED_INLINE void setImplicit() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedDeclObj getModuleContext() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE OptionalBridgedDeclObj getParent() const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedDeclContext getDeclContext() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedStringRef Type_getName() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedStringRef Value_getUserFacingName() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE swift::SourceLoc Value_getNameLoc() const;
@@ -384,7 +384,6 @@ struct BridgedDeclObj {
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedASTType EnumElementDecl_getPayloadInterfaceType() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedParameterList EnumElementDecl_getParameterList() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedStringRef EnumElementDecl_getNameStr() const;
-  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedNominalTypeDecl asNominalTypeDecl() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedStringRef AccessorDecl_getKindName() const;
 };
 

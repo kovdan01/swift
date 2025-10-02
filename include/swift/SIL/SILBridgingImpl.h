@@ -452,7 +452,6 @@ BridgedType BridgedType::getTupleElementType(SwiftInt idx) const {
 
 swift::Identifier BridgedType::getTupleElementLabel(SwiftInt idx) const {
   return llvm::cast<swift::TupleType>(unbridged().getASTType().getPointer())->getElement(idx).getName();
-  //return llvm::cast<swift::TupleType>(unbridged().getASTType().getPointer())->getElement(idx).getName().str();
 }
 
 BridgedType BridgedType::getFunctionTypeWithNoEscape(bool withNoEscape) const {
@@ -2938,8 +2937,9 @@ BridgedASTType BridgedContext::getTupleType(BridgedArrayRef elementTypes) const 
 BridgedASTType BridgedContext::getTupleTypeWithLabels(BridgedArrayRef elementTypes, BridgedArrayRef labels) const {
   assert(elementTypes.getCount() == labels.getCount());
   llvm::SmallVector<swift::TupleTypeElt, 8> elements;
+  elements.reserve(elementTypes.getCount());
   llvm::ArrayRef<BridgedASTType> elementTypesArr = elementTypes.unbridged<BridgedASTType>();
-  llvm::ArrayRef<swift::Identifier> labelsArr = elementTypes.unbridged<swift::Identifier>();
+  llvm::ArrayRef<swift::Identifier> labelsArr = labels.unbridged<swift::Identifier>();
   for (const auto &[bridgedElmtTy, label] : llvm::zip_equal(elementTypesArr, labelsArr)) {
     elements.emplace_back(bridgedElmtTy.unbridged(), label);
   }

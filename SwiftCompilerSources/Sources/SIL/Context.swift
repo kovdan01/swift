@@ -55,13 +55,6 @@ extension Context {
     }
   }
 
-  public func getTupleTypeWithLabels(elements: [Type], labels: [StringRef]) -> AST.`Type` {
-    assert(elements.count == labels.count)
-    let bridgedElements = elements.map { $0.bridged }.withBridgedArrayRef{ $0 }
-    let bridgedLabels = labels.map { $0._bridged }.withBridgedArrayRef{ $0 }
-    return AST.`Type`(bridged: _bridged.getTupleTypeWithLabels(bridgedElements, bridgedLabels))
-  }
-
   public func getTupleType(elements: [AST.`Type`]) -> AST.`Type` {
     let bridgedElements = elements.map { $0.bridged }
     return bridgedElements.withBridgedArrayRef {
@@ -71,14 +64,9 @@ extension Context {
 
   public func getTupleTypeWithLabels(elements: [AST.`Type`], labels: [swift.Identifier]) -> AST.`Type` {
     assert(elements.count == labels.count)
-
     return elements.withBridgedArrayRef{
-    eltArr in labels.withBridgedArrayRef{labelsArr in
-    AST.`Type`(bridged: _bridged.getTupleTypeWithLabels(eltArr, labelsArr))}}
-
-//    let bridgedElements = elements.map { $0.bridged }.withBridgedArrayRef{ $0 }
-//    let bridgedLabels = labels.map { $0._bridged }.withBridgedArrayRef{ $0 }
-//    return AST.`Type`(bridged: _bridged.getTupleTypeWithLabels(bridgedElements, bridgedLabels))
+      eltArr in labels.withBridgedArrayRef{labelsArr in
+      AST.`Type`(bridged: _bridged.getTupleTypeWithLabels(eltArr, labelsArr))}}
   }
 
   public var swiftArrayDecl: NominalTypeDecl {

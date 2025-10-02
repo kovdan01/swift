@@ -105,3 +105,10 @@ BridgedArgument specializePayloadTupleBBArgInPullback(BridgedArgument arg,
 
   return {newArg};
 }
+
+BridgedOwnedString getEnumDeclAsString(BridgedType bteType) {
+  std::string str;
+  llvm::raw_string_ostream out(str);
+  bteType.unbridged().getEnumOrBoundGenericEnum()->print(out);
+  return BridgedOwnedString(/*stringToCopy=*/StringRef(str));
+}

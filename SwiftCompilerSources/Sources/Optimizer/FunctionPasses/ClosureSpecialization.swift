@@ -173,17 +173,6 @@ func getCapturedArgTypesTupleForClosure(closure : SingleValueInstruction, contex
     assert(false)
   }
   return AST.`Type`(bridged: context.getTupleType(elements: capturedArgTypes).bridged)
-//  llvm::SmallVector<TupleTypeElt, 8> capturedArgTypes;
-//
-//  if (const auto *pai = dyn_cast<PartialApplyInst>(closure)) {
-//    capturedArgTypes.reserve(pai->getArguments().size());
-//    for (const SILValue &arg : pai->getArguments())
-//      capturedArgTypes.emplace_back(arg->getType().getASTType(), Identifier{});
-//  } else {
-//    assert(isa<ThinToThickFunctionInst>(closure));
-//  }
-//
-//  return TupleType::get(capturedArgTypes, ctx);
 }
 
 typealias BTEToPredsDict = [SIL.`Type`: [SIL.`Type`]]
@@ -278,7 +267,7 @@ func autodiffSpecializeBranchTracingEnum(bteType: SIL.`Type`, topVJP: Function,
                                          specBTEDict: [SIL.`Type`: SIL.`Type`],
                                          context: FunctionPassContext) -> SIL.`Type` {
   let oldED = bteType.nominal as! EnumDecl
-  let declContext = oldED.bridged.asNominalTypeDecl().asDeclContext
+  let declContext = oldED.bridged.getDeclContext()
   let astContext = declContext.astContext
   assert(specBTEDict[bteType] == nil)
 
@@ -301,7 +290,6 @@ func autodiffSpecializeBranchTracingEnum(bteType: SIL.`Type`, topVJP: Function,
 
     var newECDNameSuffix : String = ""
     var newPayloadTupleElementTypes = [AST.`Type`]()
-    //var labels = [StringRef]()
     var labels = [swift.Identifier]()
 
     for idxInPayloadTuple in 0..<oldPayloadTupleType.tupleElements.count {
@@ -315,10 +303,8 @@ func autodiffSpecializeBranchTracingEnum(bteType: SIL.`Type`, topVJP: Function,
         newPayloadTupleEltType = oldPayloadTupleType.tupleElements[idxInPayloadTuple].rawType
         if idxInPayloadTuple == 0 {
           if let predED = newPayloadTupleEltType!.nominal as? EnumDecl {
-            //assert(label.string == "predecessor");
             let predBTEType : SIL.`Type` = remapType(
-                ty: getBranchingTraceEnumLoweredType(predED.bridged, topVJP.bridged).type, function: topVJP);
-                //ty: getBranchingTraceEnumLoweredType(BridgedEnumDecl(raw: predED.bridged.obj), topVJP.bridged).type, function: topVJP);
+                ty: getBranchingTraceEnumLoweredType(predED.bridged, topVJP.bridged).type, function: topVJP)
             newPayloadTupleEltType = specBTEDict[predBTEType]!.rawType
           }
         }
@@ -326,15 +312,12 @@ func autodiffSpecializeBranchTracingEnum(bteType: SIL.`Type`, topVJP: Function,
       newPayloadTupleElementTypes.append(newPayloadTupleEltType!)
       labels.append(label)
     }
-//    let newTupleType : AST.`Type` = newPayloadTupleElementTypes.withBridgedArrayRef{
-//        eltArr in labels.withBridgedArrayRef{labelsArr in
-//        AST.`Type`(bridged: context.getTupleTypeWithLabels(elements: eltArr, labels: labelsArr).bridged.mapTypeOutOfContext())}}
     let newTupleType = AST.`Type`(bridged: context.getTupleTypeWithLabels(elements: newPayloadTupleElementTypes, labels: labels).bridged.mapTypeOutOfContext())
 
     let newParamDecl : BridgedParamDecl = BridgedParamDecl_cloneWithoutType(oldPD)
 
     newParamDecl.setInterfaceType(newTupleType.bridged);
-    let newPL = BridgedParameterList.create(astContext, parameters: [newParamDecl].withBridgedArrayRef{ $0 })
+    let newPL = [newParamDecl].withBridgedArrayRef{BridgedParameterList.create(astContext, parameters: $0)}
     newPLs.append(newPL)
 
     if newECDNameSuffix.count != 0 {
@@ -2029,13 +2012,26 @@ func specializeBranchTracingEnumBBArgInVJP1(arg: Argument, specBTEDict: SpecBTED
   return newArg
 }
 
+extension SIL.`Type` : Comparable {
+  public static func < (lhs: SIL.`Type`, rhs: SIL.`Type`) -> Bool {
+    return "\(lhs)" < "\(rhs)"
+  }
+}
+
 let specializeBranchTracingEnums = FunctionTest("autodiff_specialize_branch_tracing_enums") {
   function, arguments, context in
   let enumDict = getSpecBTEDict(vjp: function, context: context)
   print(
     "Specialized branch tracing enum dict for VJP \(function.name) contains \(enumDict.count) elements:"
   )
-  print(enumDict)
+
+  var keys = [SIL.`Type`](enumDict.keys)
+  keys.sort()
+  for (idx, key) in keys.enumerated() {
+    print("non-specialized BTE \(idx): \(String(taking: getEnumDeclAsString(key.bridged)))")
+    print("specialized BTE \(idx): \(String(taking: getEnumDeclAsString(enumDict[key]!.bridged)))")
+  }
+  print("")
 }
 
 let specializeBTEArgInVjpBB = FunctionTest("autodiff_specialize_bte_arg_in_vjp_bb") {
@@ -2046,7 +2042,6 @@ let specializeBTEArgInVjpBB = FunctionTest("autodiff_specialize_bte_arg_in_vjp_b
     guard let arg = bb.getBranchTracingEnumArg(vjp: function) else {
       continue
     }
-    //let newArg = arg
     let newArg = specializeBranchTracingEnumBBArgInVJP1(arg: arg, specBTEDict: enumDict)
     print("\(newArg)")
     bb.eraseArgument(at: newArg.index, context)
@@ -2068,7 +2063,6 @@ let specializePayloadArgInPullbackBB = FunctionTest("autodiff_specialize_payload
       continue
     }
 
-    //let enumType = enumDict[enumTypeAndCase.enumType.bridged]!
     let enumType = enumDict[enumTypeAndCase.enumType]!
     let newArg = specializePayloadTupleBBArgInPullback(
       arg.bridged, enumType.bridged, enumTypeAndCase.caseIdx
