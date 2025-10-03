@@ -54,3 +54,8 @@ BridgedOwnedString getEnumDeclAsString(BridgedType bteType) {
   bteType.unbridged().getEnumOrBoundGenericEnum()->print(out);
   return BridgedOwnedString(/*stringToCopy=*/StringRef(str));
 }
+
+void replaceBBArg(BridgedArgument oldArg, BridgedArgument newArg) {
+  oldArg.getArgument()->replaceAllUsesWith(newArg.getArgument());
+  oldArg.getParent().eraseArgument(oldArg.getArgument()->getIndex());
+}

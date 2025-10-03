@@ -769,7 +769,8 @@ createEmptyFunction(BridgedStringRef name,
   return {context->createEmptyFunction(name.unbridged(), params, hasSelfParam, fromFunc.getFunction())};
 }
 
-BridgedGlobalVar BridgedContext::createGlobalVariable(BridgedStringRef name, BridgedType type,
+BridgedGlobalVar BridgedContext::createGlobalVariable(BridgedStringRef name,
+                                                      BridgedType type,
                                                       BridgedLinkage linkage,
                                                       bool isLet,
                                                       bool markedAsUsed) const {

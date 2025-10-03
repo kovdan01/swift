@@ -299,6 +299,8 @@ struct BridgedType {
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE EnumElementIterator getFirstEnumCaseIterator() const;
   BRIDGED_INLINE bool isEndCaseIterator(EnumElementIterator i) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType getEnumCasePayload(EnumElementIterator i, BridgedFunction f) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedType
+  getEnumCasePayload(SwiftInt caseIndex, BridgedFunction f) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedDeclObj
   getEnumElementDecl(EnumElementIterator i) const;
   BRIDGED_INLINE SwiftInt getNumTupleElements() const;
@@ -825,6 +827,8 @@ struct BridgedInstruction {
   BRIDGED_INLINE void RefElementAddrInst_setImmutable(bool isImmutable) const;
   BRIDGED_INLINE bool RefTailAddrInst_isImmutable() const;
   BRIDGED_INLINE SwiftInt PartialApplyInst_numArguments() const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedSubstitutionMap
+  PartialApplyInst_getSubstitutionMap() const;
   BRIDGED_INLINE SwiftInt ApplyInst_numArguments() const;
   BRIDGED_INLINE bool ApplyInst_getNonThrowing() const;
   BRIDGED_INLINE bool ApplyInst_getNonAsync() const;
@@ -857,6 +861,8 @@ struct BridgedInstruction {
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedBasicBlock BranchInst_getTargetBlock() const;
   BRIDGED_INLINE SwiftInt SwitchEnumInst_getNumCases() const;
   BRIDGED_INLINE SwiftInt SwitchEnumInst_getCaseIndex(SwiftInt idx) const;
+  BRIDGED_INLINE OptionalBridgedBasicBlock
+  SwitchEnumInst_getSuccessorForDefault() const;
   BRIDGED_INLINE SwiftInt StoreInst_getStoreOwnership() const;
   BRIDGED_INLINE SwiftInt AssignInst_getAssignOwnership() const;
   BRIDGED_INLINE MarkDependenceKind MarkDependenceInst_dependenceKind() const;
@@ -1356,6 +1362,11 @@ struct BridgedBuilder{
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createDestructureStruct(BridgedValue str) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTuple(BridgedType type,
                                                                     BridgedValueArray elements) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
+  createTuple(BridgedValueArray elements) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
+  createPayloadTupleForBranchTracingEnum(BridgedValueArray elements,
+                                         BridgedType tupleWithLabels) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleExtract(BridgedValue str,
                                                                            SwiftInt elementIndex) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleElementAddr(BridgedValue addr,

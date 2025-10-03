@@ -33,6 +33,9 @@ SWIFT_IMPORT_UNSAFE BridgedSourceFile autodiffGetSourceFile(BridgedFunction f);
 
 SWIFT_IMPORT_UNSAFE BridgedOwnedString getEnumDeclAsString(BridgedType bteType);
 
+SWIFT_IMPORT_UNSAFE void replaceBBArg(BridgedArgument oldArg,
+                                      BridgedArgument newArg);
+
 SWIFT_END_NULLABILITY_ANNOTATIONS
 
 #endif
