@@ -68,6 +68,7 @@ class FunctionSignatureSpecializationMangler : public SpecializationMangler {
     BoxToValue = 3,
     BoxToStack = 4,
     InOutToOut = 5,
+    AutoDiffBranchTracingEnum = 6,
 
     First_Option = 0,
     Last_Option = 31,
@@ -82,8 +83,7 @@ class FunctionSignatureSpecializationMangler : public SpecializationMangler {
     LastOptionSetEntry = 32768,
   };
 
-  using ArgInfo = std::pair<ArgumentModifierIntBase,
-                            NullablePtr<SILInstruction>>;
+  using ArgInfo = std::pair<ArgumentModifierIntBase, NullablePtr<void>>;
   // Information for each SIL argument in the original function before
   // specialization. This includes SIL indirect result argument required for
   // the original function type at the current stage of compilation.
@@ -102,6 +102,8 @@ public:
   void setArgumentClosureProp(unsigned OrigArgIdx, PartialApplyInst *PAI);
   void setArgumentClosureProp(unsigned OrigArgIdx,
                               ThinToThickFunctionInst *TTTFI);
+  void setArgumentAutoDiffBranchTracingEnum(unsigned OrigArgIdx,
+                                            ValueBase *Arg);
   void setArgumentDead(unsigned OrigArgIdx);
   void setArgumentOwnedToGuaranteed(unsigned OrigArgIdx);
   void setArgumentGuaranteedToOwned(unsigned OrigArgIdx);
@@ -120,8 +122,9 @@ public:
 private:
   void mangleConstantProp(SILInstruction *constInst);
   void mangleClosureProp(SILInstruction *Inst);
+  void mangleAutoDiffBranchTracingEnum(ValueBase *Arg);
   void mangleArgument(ArgumentModifierIntBase ArgMod,
-                      NullablePtr<SILInstruction> Inst);
+                      NullablePtr<void> Payload);
   void mangleReturnValue(ReturnValueModifierIntBase RetMod);
 };
 
