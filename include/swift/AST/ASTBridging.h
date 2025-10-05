@@ -361,7 +361,6 @@ struct BridgedDeclObj {
   BRIDGED_INLINE swift::SourceLoc getLoc() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedDeclObj getModuleContext() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE OptionalBridgedDeclObj getParent() const;
-  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedDeclContext getDeclContext() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedStringRef Type_getName() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedStringRef Value_getUserFacingName() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE swift::SourceLoc Value_getNameLoc() const;
@@ -1373,6 +1372,9 @@ SWIFT_NAME("BridgedDecl.forEachDeclToHoist(self:_:)")
 void BridgedDecl_forEachDeclToHoist(BridgedDecl decl,
                                     BridgedSwiftClosure closure);
 
+SWIFT_NAME("BridgedDecl.getDeclContext(self:)")
+BridgedDeclContext BridgedDecl_getDeclContext(BridgedDecl decl);
+
 enum ENUM_EXTENSIBILITY_ATTR(closed) BridgedStaticSpelling {
   BridgedStaticSpellingNone,
   BridgedStaticSpellingStatic,
@@ -1728,8 +1730,8 @@ void BridgedTopLevelCodeDecl_dump(BridgedTopLevelCodeDecl decl);
 SWIFT_NAME("BridgedDecl.dump(self:)")
 void BridgedDecl_dump(BridgedDecl decl);
 
-SWIFT_NAME("BridgedValueDecl.setAccessPublic(self:)")
-void BridgedValueDecl_setAccessPublic(BridgedValueDecl decl);
+SWIFT_NAME("BridgedValueDecl.setAccess(self:_:)")
+void BridgedValueDecl_setAccess(BridgedValueDecl decl, swift::AccessLevel accessLevel);
 
 //===----------------------------------------------------------------------===//
 // MARK: AbstractStorageDecl

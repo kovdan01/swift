@@ -147,8 +147,12 @@ void BridgedDecl_forEachDeclToHoist(BridgedDecl cDecl,
   });
 }
 
-void BridgedValueDecl_setAccessPublic(BridgedValueDecl decl) {
-  decl.unbridged()->setAccess(AccessLevel::Public);
+BridgedDeclContext BridgedDecl_getDeclContext(BridgedDecl decl) {
+  return decl.unbridged()->getDeclContext();
+}
+
+void BridgedValueDecl_setAccess(BridgedValueDecl decl, swift::AccessLevel accessLevel) {
+  decl.unbridged()->setAccess(accessLevel);
 }
 
 BridgedAccessorDecl BridgedAccessorDecl_createParsed(

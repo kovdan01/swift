@@ -159,10 +159,6 @@ OptionalBridgedDeclObj BridgedDeclObj::getParent() const {
   return {unbridged()->getDeclContext()->getAsDecl()};
 }
 
-BridgedDeclContext BridgedDeclObj::getDeclContext() const {
-  return {unbridged()->getDeclContext()};
-}
-
 BridgedStringRef BridgedDeclObj::Type_getName() const {
   return getAs<swift::TypeDecl>()->getName().str();
 }
