@@ -669,6 +669,15 @@ public struct Builder {
     return notifyNew(tuple.getAs(TupleInst.self))
   }
 
+  public func createPayloadTupleForBranchTracingEnum(elements: [Value], tupleWithLabels: Type)
+    -> TupleInst
+  {
+    let tuple = elements.withBridgedValues { valuesRef in
+      return bridged.createPayloadTupleForBranchTracingEnum(valuesRef, tupleWithLabels.bridged)
+    }
+    return notifyNew(tuple.getAs(TupleInst.self))
+  }
+
   public func createTupleExtract(tuple: Value, elementIndex: Int) -> TupleExtractInst {
     return notifyNew(bridged.createTupleExtract(tuple.bridged, elementIndex).getAs(TupleExtractInst.self))
   }
