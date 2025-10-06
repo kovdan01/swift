@@ -1036,13 +1036,13 @@ SILPassPipelinePlan::getPerformancePassPipeline(const SILOptions &Options) {
   }
   P.addOwnershipModelEliminator();
 
-  P.addAutodiffClosureSpecialization();
+  P.addAutodiffClosureSpecialization1();
 
   // After serialization run the function pass pipeline to iteratively lower
   // high-level constructs like @_semantics calls.
   addMidLevelFunctionPipeline(P);
 
-  P.addAutodiffClosureSpecialization();
+  P.addAutodiffClosureSpecialization2();
 
   // Perform optimizations that specialize.
   addClosureSpecializePassPipeline(P);
