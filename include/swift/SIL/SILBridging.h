@@ -1371,6 +1371,9 @@ struct BridgedBuilder{
                                                                     BridgedValueArray elements) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
   createTuple(BridgedValueArray elements) const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction
+  createPayloadTupleForBranchTracingEnum(BridgedValueArray elements,
+                                         BridgedType tupleWithLabels) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleExtract(BridgedValue str,
                                                                            SwiftInt elementIndex) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedInstruction createTupleElementAddr(BridgedValue addr,
