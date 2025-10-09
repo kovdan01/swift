@@ -26,8 +26,12 @@ final public class Function : CustomStringConvertible, HasShortDescription, Hash
     return Location(bridged: bridged.getLocation())
   }
 
-  public var sourceFile: BridgedNullableSourceFile {
-    return bridged.getSourceFile()
+  public var sourceFile: SourceFile? {
+    let val = bridged.getSourceFile()
+    if val.raw == nil {
+      return nil
+    }
+    return SourceFile(raw: val.raw!)
   }
 
   final public var description: String {
