@@ -36,10 +36,10 @@ public struct GenericSignature: CustomStringConvertible, NoReflectionChildren {
 
   public var isEmpty: Bool { bridged.impl == nil }
 
-  public var canonicalSignature: CanGenericSignature { CanGenericSignature(bridged: bridged.getCanonicalSignature()) }
+  public var canonicalSignature: CanonicalGenericSignature { CanonicalGenericSignature(bridged: bridged.getCanonicalSignature()) }
 }
 
-public struct CanGenericSignature {
+public struct CanonicalGenericSignature {
   public let bridged: BridgedCanGenericSignature
 
   public init(bridged: BridgedCanGenericSignature) {
