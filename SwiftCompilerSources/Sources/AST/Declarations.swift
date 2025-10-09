@@ -36,10 +36,12 @@ public class Decl: CustomStringConvertible, Hashable {
   }
 }
 
+public typealias Identifier = swift.Identifier
+
 public class ValueDecl: Decl {
   final public var nameLoc: SourceLoc? { SourceLoc(bridged: bridged.Value_getNameLoc()) }
   final public var userFacingName: StringRef { StringRef(bridged: bridged.Value_getUserFacingName()) }
-  final public var baseIdentifier: swift.Identifier { bridged.Value_getBaseIdentifier() }
+  final public var baseIdentifier: Identifier { bridged.Value_getBaseIdentifier() }
   final public var isObjC: Bool { bridged.Value_isObjC() }
 }
 
@@ -58,8 +60,8 @@ public class NominalTypeDecl: GenericTypeDecl {
     bridged.NominalType_getValueTypeDestructor().getAs(DestructorDecl.self)
   }
 
-  public var declaredInterfaceType : AST.`Type` {
-    AST.`Type`(bridged: bridged.NominalType_getDeclaredInterfaceType())
+  public var declaredInterfaceType : Type {
+    Type(bridged: bridged.NominalType_getDeclaredInterfaceType())
   }
 }
 
@@ -123,8 +125,8 @@ final public class MacroDecl: ValueDecl {}
 
 final public class EnumElementDecl: ValueDecl {
   public var hasAssociatedValues: Bool { bridged.EnumElementDecl_hasAssociatedValues() }
-  public var parameterList: BridgedParameterList { bridged.EnumElementDecl_getParameterList() }
-  public var nameStr: StringRef { StringRef(bridged: bridged.EnumElementDecl_getNameStr()) }
+  public var parameterList: ParameterList { bridged.EnumElementDecl_getParameterList() }
+  public var name: StringRef { StringRef(bridged: bridged.EnumElementDecl_getNameStr()) }
 }
 
 final public class ExtensionDecl: Decl {}
@@ -154,6 +156,10 @@ final public class PrefixOperatorDecl: OperatorDecl {}
 final public class PostfixOperatorDecl: OperatorDecl {}
 
 final public class MacroExpansionDecl: Decl {}
+
+public typealias ParameterList = BridgedParameterList
+
+public typealias SourceFile = BridgedSourceFile
 
 // Bridging utilities
 
