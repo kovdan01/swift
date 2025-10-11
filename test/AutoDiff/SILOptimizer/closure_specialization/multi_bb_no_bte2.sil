@@ -1,5 +1,6 @@
 /// Multi basic block VJP, pullback not accepting branch tracing enum argument.
 
+// RUN: %target-sil-opt -sil-print-types -autodiff-closure-specialization              %s -o - | %FileCheck %s --check-prefixes=TRUNNER,CHECK
 // RUN: %target-sil-opt -sil-print-types -autodiff-closure-specialization -sil-combine %s -o - | %FileCheck %s --check-prefixes=COMBINE,CHECK
 
 // REQUIRES: swift_in_compiler
@@ -49,27 +50,35 @@ bb0(%0 : $Float, %1 : @owned $@callee_guaranteed (@guaranteed Array<Float>.Diffe
 // reverse-mode derivative of sum1(_:_:)
 sil hidden [ossa] @$s4test4sum1ySfSaySfG_ACtFTJrSSpSr : $@convention(thin) (@guaranteed Array<Float>, @guaranteed Array<Float>) -> (Float, @owned @callee_guaranteed (Float) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView)) {
 bb0(%0 : @guaranteed $Array<Float>, %1 : @guaranteed $Array<Float>):
-  // CHECK:         sil private [signature_optimized_thunk] [heuristic_always_inline] [ossa] @$s4test4sum1ySfSaySfG_ACtFTJpSSpSr055$sSfSa16_DifferentiationAA14DifferentiableRzlE0B4ViewVyd8_GIegno_D10AEIegyo_TRSfSa01_F0AE0H0RzlE0hL0VySf_GIegno_Tf1nnc_n0ce1_fghi39E13_vjpSubscript5indexx5value_SaA2aBRzljkl48Vy13TangentVectorQz_GAIc8pullbacktSi_tFAKL_yAjiaV7FSf_TG5ACSiTf1nnc_n : $@convention(thin) (Float, @owned @callee_guaranteed (@guaranteed Array<Float>.DifferentiableView) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView), @owned Array<Float>, Int) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView) {
+  // CHECK-LABEL:   sil private [signature_optimized_thunk] [heuristic_always_inline] [ossa] @$s4test4sum1ySfSaySfG_ACtFTJpSSpSr055$sSfSa16_DifferentiationAA14DifferentiableRzlE0B4ViewVyd8_GIegno_D10AEIegyo_TRSfSa01_F0AE0H0RzlE0hL0VySf_GIegno_Tf1nnc_n0ce1_fghi39E13_vjpSubscript5indexx5value_SaA2aBRzljkl48Vy13TangentVectorQz_GAIc8pullbacktSi_tFAKL_yAjiaV7FSf_TG5ACSiTf1nnc_n : $@convention(thin) (Float, @owned @callee_guaranteed (@guaranteed Array<Float>.DifferentiableView) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView), @owned Array<Float>, Int) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView) {
   // CHECK:         bb0(%0 : $Float, %1 : @owned $@callee_guaranteed (@guaranteed Array<Float>.DifferentiableView) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView), %2 : @owned $Array<Float>, %3 : $Int):
   // CHECK:           %[[#D6:]] = function_ref @$s13TangentVector16_Differentiation14DifferentiablePQzSaA2bCRzlE0D4ViewVyAE_GIegno_AeHIegno_AbCRzlTRSf_TG5 : $@convention(thin) (@in_guaranteed Float, @guaranteed @callee_guaranteed (@in_guaranteed Float) -> @owned Array<Float>.DifferentiableView) -> @owned Array<Float>.DifferentiableView
   // CHECK:           %[[#D4:]] = function_ref @$sSa16_DifferentiationAA14DifferentiableRzlE13_vjpSubscript5indexx5value_SaA2aBRzlE0B4ViewVy13TangentVectorQz_GAIc8pullbacktSi_tFAKL_yAjiaBRzlFSf_TG5 : $@convention(thin) (@in_guaranteed Float, @guaranteed Array<Float>, Int) -> @owned Array<Float>.DifferentiableView
   // CHECK:           %[[#D5:]] = partial_apply [callee_guaranteed] %[[#D4]](%2, %3) : $@convention(thin) (@in_guaranteed Float, @guaranteed Array<Float>, Int) -> @owned Array<Float>.DifferentiableView
+  // TRUNNER:         %[[#D7:]] = partial_apply [callee_guaranteed] %[[#D6]](%[[#D5]]) : $@convention(thin) (@in_guaranteed Float, @guaranteed @callee_guaranteed (@in_guaranteed Float) -> @owned Array<Float>.DifferentiableView) -> @owned Array<Float>.DifferentiableView
+  // TRUNNER:         %[[#D14:]] = apply %[[#D7]](%[[#D12]]) : $@callee_guaranteed (@in_guaranteed Float) -> @owned Array<Float>.DifferentiableView
   // CHECK:           store %[[#D11:]] to [trivial] %[[#D12:]] : $*Float
   // COMBINE:         %[[#D14:]] = apply %[[#D6]](%[[#D12]], %[[#D5]]) : $@convention(thin) (@in_guaranteed Float, @guaranteed @callee_guaranteed (@in_guaranteed Float) -> @owned Array<Float>.DifferentiableView) -> @owned Array<Float>.DifferentiableView
+  // TRUNNER:         strong_release %[[#D7]] : $@callee_guaranteed (@in_guaranteed Float) -> @owned Array<Float>.DifferentiableView
   // COMBINE:         destroy_value %[[#D5]] : $@callee_guaranteed (@in_guaranteed Float) -> @owned Array<Float>.DifferentiableView
   // CHECK:           %[[#D17:]] = apply %1(%[[#D14]]) : $@callee_guaranteed (@guaranteed Array<Float>.DifferentiableView) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView)
   // CHECK:           return %[[#D17]] : $(Array<Float>.DifferentiableView, Array<Float>.DifferentiableView)
 
-  // CHECK:         sil hidden [ossa] @$s4test4sum1ySfSaySfG_ACtFTJrSSpSr : $@convention(thin) (@guaranteed Array<Float>, @guaranteed Array<Float>) -> (Float, @owned @callee_guaranteed (Float) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView)) {
+  // CHECK-LABEL:   sil hidden [ossa] @$s4test4sum1ySfSaySfG_ACtFTJrSSpSr : $@convention(thin) (@guaranteed Array<Float>, @guaranteed Array<Float>) -> (Float, @owned @callee_guaranteed (Float) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView)) {
   // CHECK:           (%[[#]], %[[#E42:]]) = destructure_tuple %[[#]] : $(Array<Float>, @callee_guaranteed (@guaranteed Array<Float>.DifferentiableView) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView))
   // CHECK:         bb8:
 
+  // TRUNNER:         %[[#E44:]] = function_ref @$sSa16_DifferentiationAA14DifferentiableRzlE13_vjpSubscript5indexx5value_SaA2aBRzlE0B4ViewVy13TangentVectorQz_GAIc8pullbacktSi_tFAKL_yAjiaBRzlFSf_TG5 : $@convention(thin) (@in_guaranteed Float, @guaranteed Array<Float>, Int) -> @owned Array<Float>.DifferentiableView
+  // TRUNNER:         %[[#E45:]] = partial_apply [callee_guaranteed] %[[#E44]](%[[#]], %[[#]]) : $@convention(thin) (@in_guaranteed Float, @guaranteed Array<Float>, Int) -> @owned Array<Float>.DifferentiableView
+  // TRUNNER:         %[[#E46:]] = function_ref @$s13TangentVector16_Differentiation14DifferentiablePQzSaA2bCRzlE0D4ViewVyAE_GIegno_AeHIegno_AbCRzlTRSf_TG5 : $@convention(thin) (@in_guaranteed Float, @guaranteed @callee_guaranteed (@in_guaranteed Float) -> @owned Array<Float>.DifferentiableView) -> @owned Array<Float>.DifferentiableView
+  // TRUNNER:         %[[#E47:]] = partial_apply [callee_guaranteed] %[[#E46]](%[[#E45]]) : $@convention(thin) (@in_guaranteed Float, @guaranteed @callee_guaranteed (@in_guaranteed Float) -> @owned Array<Float>.DifferentiableView) -> @owned Array<Float>.DifferentiableView
+  // TRUNNER:         %[[#]] = function_ref @$s4test4sum1ySfSaySfG_ACtFTJpSSpSr055$sSfSa16_DifferentiationAA14DifferentiableRzlE0B4ViewVyd8_GIegno_D10AEIegyo_TRSfSa01_F0AE0H0RzlE0hL0VySf_GIegno_Tf1nnc_n : $@convention(thin) (Float, @owned @callee_guaranteed (@guaranteed Array<Float>.DifferentiableView) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView), @owned @callee_guaranteed (@in_guaranteed Float) -> @owned Array<Float>.DifferentiableView) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView)
 
-  // COMBINE-NOT:     function_ref @$sSa16_DifferentiationAA14DifferentiableRzlE13_vjpSubscript5indexx5value_SaA2aBRzlE0B4ViewVy13TangentVectorQz_GAIc8pullbacktSi_tFAKL_yAjiaBRzlFSf_TG5
-  // COMBINE-NOT:     partial_apply
-  // COMBINE-NOT:     function_ref @$s13TangentVector16_Differentiation14DifferentiablePQzSaA2bCRzlE0D4ViewVyAE_GIegno_AeHIegno_AbCRzlTRSf_TG5
-  // COMBINE-NOT:     partial_apply
-  // COMBINE-NOT:     function_ref @$s4test4sum1ySfSaySfG_ACtFTJpSSpSr055$sSfSa16_DifferentiationAA14DifferentiableRzlE0B4ViewVyd8_GIegno_D10AEIegyo_TRSfSa01_F0AE0H0RzlE0hL0VySf_GIegno_Tf1nnc_n
+  // COMBINE-NOT:     = function_ref @$sSa16_DifferentiationAA14DifferentiableRzlE13_vjpSubscript5indexx5value_SaA2aBRzlE0B4ViewVy13TangentVectorQz_GAIc8pullbacktSi_tFAKL_yAjiaBRzlFSf_TG5
+  // COMBINE-NOT:     = partial_apply
+  // COMBINE-NOT:     = function_ref @$s13TangentVector16_Differentiation14DifferentiablePQzSaA2bCRzlE0D4ViewVyAE_GIegno_AeHIegno_AbCRzlTRSf_TG5
+  // COMBINE-NOT:     = partial_apply
+  // COMBINE-NOT:     = function_ref @$s4test4sum1ySfSaySfG_ACtFTJpSSpSr055$sSfSa16_DifferentiationAA14DifferentiableRzlE0B4ViewVyd8_GIegno_D10AEIegyo_TRSfSa01_F0AE0H0RzlE0hL0VySf_GIegno_Tf1nnc_n
 
   // CHECK:           %[[#E52:]] = function_ref @$s4test4sum1ySfSaySfG_ACtFTJpSSpSr055$sSfSa16_DifferentiationAA14DifferentiableRzlE0B4ViewVyd8_GIegno_D10AEIegyo_TRSfSa01_F0AE0H0RzlE0hL0VySf_GIegno_Tf1nnc_n0ce1_fghi39E13_vjpSubscript5indexx5value_SaA2aBRzljkl48Vy13TangentVectorQz_GAIc8pullbacktSi_tFAKL_yAjiaV7FSf_TG5ACSiTf1nnc_n : $@convention(thin) (Float, @owned @callee_guaranteed (@guaranteed Array<Float>.DifferentiableView) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView), @owned Array<Float>, Int) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView)
   // CHECK:           %[[#E53:]] = partial_apply [callee_guaranteed] %[[#E52]](%[[#E42]], %[[#]], %[[#]]) : $@convention(thin) (Float, @owned @callee_guaranteed (@guaranteed Array<Float>.DifferentiableView) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView), @owned Array<Float>, Int) -> (@owned Array<Float>.DifferentiableView, @owned Array<Float>.DifferentiableView)
