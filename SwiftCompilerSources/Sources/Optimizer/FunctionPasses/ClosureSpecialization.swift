@@ -11,14 +11,13 @@
 //===-----------------------------------------------------------------------===//
 
 import AST
-import ASTBridging
 import SIL
 
 private let verbose = false
 
 private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
   if verbose {
-   debugLog(prefix: prefix, "[ADCS] " + message())
+    debugLog(prefix: prefix, "[ADCS] " + message())
   }
 }
 
@@ -963,7 +962,7 @@ func getSourceFileFor(derivative: Function) -> SourceFile {
 func cloneGenericParameters(
   astContext: ASTContext, declContext: DeclContext, canonicalGenericSig: CanonicalGenericSignature
 ) -> GenericParamList {
-  var params : [BridgedGenericTypeParamDecl] = []
+  var params: [BridgedGenericTypeParamDecl] = []
   for type in canonicalGenericSig.genericSignature.genericParameters {
     assert(type.isGenericTypeParameter)
     params.append(
@@ -975,9 +974,9 @@ func cloneGenericParameters(
         paramKind: type.kindOfGenericTypeParameter))
   }
   return GenericParamList.createParsed(
-      astContext, leftAngleLoc: nil, parameters: params,
-      genericWhereClause: nil,
-      rightAngleLoc: nil)
+    astContext, leftAngleLoc: nil, parameters: params,
+    genericWhereClause: nil,
+    rightAngleLoc: nil)
 }
 
 func autodiffSpecializeBranchTracingEnum(
@@ -1052,21 +1051,21 @@ func autodiffSpecializeBranchTracingEnum(
   let canonicalGenericSig = topVJP.genericSignature.canonicalSignature
   var genericParams = GenericParamList?(nil)
   if !canonicalGenericSig.isEmpty {
-      genericParams = cloneGenericParameters(
-        astContext: astContext, declContext: declContext, canonicalGenericSig: canonicalGenericSig
-      )
+    genericParams = cloneGenericParameters(
+      astContext: astContext, declContext: declContext, canonicalGenericSig: canonicalGenericSig
+    )
   }
 
   let newED =
-      BridgedEnumDecl.createParsed(
-        astContext, declContext: declContext,
-        enumKeywordLoc: nil,
-        name: newEDNameStr,
-        nameLoc: nil,
-        genericParamList: genericParams,
-        inheritedTypes: [],
-        genericWhereClause: nil,
-        braceRange: SourceRange(start: nil))
+    BridgedEnumDecl.createParsed(
+      astContext, declContext: declContext,
+      enumKeywordLoc: nil,
+      name: newEDNameStr,
+      nameLoc: nil,
+      genericParamList: genericParams,
+      inheritedTypes: [],
+      genericWhereClause: nil,
+      braceRange: SourceRange(start: nil))
 
   newED.asDecl.setImplicit()
   if !canonicalGenericSig.isEmpty {
@@ -1436,11 +1435,14 @@ func getSpecBTEDict(vjp: Function, context: FunctionPassContext) -> SpecBTEDict 
   return enumDict
 }
 
-func specializeBranchTracingEnumBBArgInVJP(arg: Argument, specBTEDict: SpecBTEDict, context: FunctionPassContext) -> Argument {
+func specializeBranchTracingEnumBBArgInVJP(
+  arg: Argument, specBTEDict: SpecBTEDict, context: FunctionPassContext
+) -> Argument {
   let bb = arg.parentBlock
   assert(specBTEDict[arg.type] != nil)
   let newType = specBTEDict[arg.type]!
-  return bb.insertPhiArgument(atPosition: arg.index, type: newType, ownership: arg.ownership, context)
+  return bb.insertPhiArgument(
+    atPosition: arg.index, type: newType, ownership: arg.ownership, context)
 }
 
 extension SIL.`Type`: Comparable {
@@ -1473,7 +1475,8 @@ let specializeBTEArgInVjpBB = FunctionTest("autodiff_specialize_bte_arg_in_vjp_b
     guard let arg = bb.getBranchTracingEnumArg(vjp: function) else {
       continue
     }
-    let newArg = specializeBranchTracingEnumBBArgInVJP(arg: arg, specBTEDict: enumDict, context: context)
+    let newArg = specializeBranchTracingEnumBBArgInVJP(
+      arg: arg, specBTEDict: enumDict, context: context)
     print("\(newArg)")
     bb.eraseArgument(at: newArg.index, context)
   }
@@ -1497,7 +1500,8 @@ func specializePayloadTupleBBArgInPullback(
   }
   assert(newPayloadTupleTy != nil)
 
-  return bb.insertPhiArgument(atPosition: arg.index, type: newPayloadTupleTy!, ownership: arg.ownership, context)
+  return bb.insertPhiArgument(
+    atPosition: arg.index, type: newPayloadTupleTy!, ownership: arg.ownership, context)
 }
 
 let specializePayloadArgInPullbackBB = FunctionTest("autodiff_specialize_payload_arg_in_pb_bb") {
