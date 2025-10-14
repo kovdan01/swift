@@ -292,7 +292,8 @@ extension TypeProperties {
 
   /// The generic signature that the component types are specified in terms of, if any.
   public var substitutedGenericSignatureOfFunctionType: CanonicalGenericSignature {
-    CanonicalGenericSignature(bridged: rawType.canonical.bridged.SILFunctionType_getSubstGenericSignature())
+    CanonicalGenericSignature(
+      bridged: rawType.canonical.bridged.SILFunctionType_getSubstGenericSignature())
   }
 }
 

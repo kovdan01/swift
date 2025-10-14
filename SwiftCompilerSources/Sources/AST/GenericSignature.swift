@@ -36,7 +36,9 @@ public struct GenericSignature: CustomStringConvertible, NoReflectionChildren {
 
   public var isEmpty: Bool { bridged.impl == nil }
 
-  public var canonicalSignature: CanonicalGenericSignature { CanonicalGenericSignature(bridged: bridged.getCanonicalSignature()) }
+  public var canonicalSignature: CanonicalGenericSignature {
+    CanonicalGenericSignature(bridged: bridged.getCanonicalSignature())
+  }
 }
 
 public struct CanonicalGenericSignature {
@@ -48,5 +50,7 @@ public struct CanonicalGenericSignature {
 
   public var isEmpty: Bool { bridged.impl == nil }
 
-  public var genericSignature: GenericSignature { GenericSignature(bridged: bridged.getGenericSignature()) }
+  public var genericSignature: GenericSignature {
+    GenericSignature(bridged: bridged.getGenericSignature())
+  }
 }

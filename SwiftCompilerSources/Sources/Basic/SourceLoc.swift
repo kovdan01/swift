@@ -38,10 +38,6 @@ extension Optional<SourceLoc> {
 public struct SourceRange {
   public let bridged: swift.SourceRange
 
-  public init(bridged: swift.SourceRange) {
-    self.bridged = bridged
-  }
-
   public init(start: SourceLoc?) {
     self.bridged = swift.SourceRange(start: start.bridgedLocation)
   }
