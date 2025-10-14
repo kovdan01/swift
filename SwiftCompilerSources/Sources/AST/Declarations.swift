@@ -201,6 +201,10 @@ public typealias BridgedParamDecl = ASTBridging.BridgedParamDecl
 
 public typealias BridgedGenericTypeParamDecl = ASTBridging.BridgedGenericTypeParamDecl
 
+public typealias BridgedEnumDecl = ASTBridging.BridgedEnumDecl
+
+public typealias BridgedEnumElementDecl = ASTBridging.BridgedEnumElementDecl
+
 extension ParameterList {
   public subscript(_ index: Int) -> BridgedParamDecl {
     return get(index)

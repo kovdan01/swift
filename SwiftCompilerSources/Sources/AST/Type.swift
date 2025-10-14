@@ -112,7 +112,6 @@ public struct CanonicalType: TypeProperties, CustomStringConvertible, NoReflecti
   public func subst(with substitutionMap: SubstitutionMap) -> CanonicalType {
     return rawType.subst(with: substitutionMap).canonical
   }
-
 }
 
 /// Implements the common members of `AST.Type`, `AST.CanonicalType` and `SIL.Type`.
