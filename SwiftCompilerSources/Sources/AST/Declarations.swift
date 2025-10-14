@@ -40,10 +40,6 @@ public class Decl: CustomStringConvertible, Hashable {
   }
 }
 
-public typealias Identifier = swift.Identifier
-
-public typealias GenericTypeParamKind = swift.GenericTypeParamKind
-
 public class ValueDecl: Decl {
   final public var nameLoc: SourceLoc? { SourceLoc(bridged: bridged.Value_getNameLoc()) }
   final public var userFacingName: StringRef { StringRef(bridged: bridged.Value_getUserFacingName()) }
@@ -70,8 +66,6 @@ public class NominalTypeDecl: GenericTypeDecl {
     Type(bridged: bridged.NominalType_getDeclaredInterfaceType())
   }
 }
-
-public typealias SourceRange = swift.SourceRange
 
 final public class EnumDecl: NominalTypeDecl {
   public var hasRawType: Bool { bridged.Enum_hasRawType() }
@@ -183,6 +177,10 @@ extension Optional where Wrapped == Decl {
   }
 }
 
+public typealias Identifier = swift.Identifier
+
+public typealias GenericTypeParamKind = swift.GenericTypeParamKind
+
 public typealias ASTContext = BridgedASTContext
 
 public typealias DeclContext = BridgedDeclContext
@@ -245,7 +243,7 @@ extension BridgedEnumDecl {
         genericParamList: genericParamList.bridged,
         inheritedTypes: types,
         genericWhereClause: genericWhereClause.bridged,
-        braceRange: braceRange)
+        braceRange: braceRange.bridged)
     }
   }
   }
