@@ -824,17 +824,6 @@ extension BasicBlock {
   }
 }
 
-extension Decl {
-  public var asDecl: BridgedDecl { BridgedDecl(raw: bridged.obj) }
-}
-
-extension BridgedDecl {
-  public var asDeclObj: BridgedDeclObj {
-    BridgedDeclObj(SwiftObject(raw.bindMemory(to: BridgedSwiftObject.self, capacity: 1)))
-  }
-  public var decl: Decl { asDeclObj.decl }
-}
-
 typealias ClosureInfoMultiBB = (
   closure: SingleValueInstruction,
   capturedArgs: [Value],
@@ -945,10 +934,7 @@ func remapType(ty: SIL.`Type`, function: Function) -> SIL.`Type` {
   }
   let remappedCanType = silType.rawType.getReducedType(
     of: function.loweredFunctionType.substitutedGenericSignatureOfFunctionType.genericSignature)
-//    sig: function.loweredFunctionType.SILFunctionType_getSubstGenericSignature().genericSignature)
   let remappedSILType = remappedCanType.loweredType(in: function)
-//  let remappedSILType = Type.getPrimitiveType(
-//    canType: remappedCanType, silValueCategory: silType.category)
   if !function.genericSignature.isEmpty {
     return function.mapTypeIntoContext(remappedSILType)
   }
@@ -963,7 +949,7 @@ func getSourceFileFor(derivative: Function) -> SourceFile {
   if let sourceFile = derivative.sourceFile {
     return sourceFile
   }
-  return derivative.bridged.getFilesForModule().withElements(ofType: BridgedFileUnit.self) {
+  return derivative.bridged.getFilesForModule().withElements(ofType: FileUnit.self) {
     for fileUnit in $0 {
       if let sourceFileRawPtr = fileUnit.castToSourceFile().raw {
         return SourceFile?(SourceFile(raw: sourceFileRawPtr))
@@ -975,25 +961,23 @@ func getSourceFileFor(derivative: Function) -> SourceFile {
 }
 
 func cloneGenericParameters(
-  astContext: BridgedASTContext, declContext: BridgedDeclContext, canonicalGenericSig: CanonicalGenericSignature
-) -> BridgedGenericParamList {
-  var params = [BridgedGenericTypeParamDecl]()
+  astContext: ASTContext, declContext: DeclContext, canonicalGenericSig: CanonicalGenericSignature
+) -> GenericParamList {
+  var params = [GenericTypeParamDecl]()
   for type in canonicalGenericSig.genericSignature.genericParameters {
     assert(type.isGenericTypeParameter)
     params.append(
-      BridgedGenericTypeParamDecl.createImplicit(
+      GenericTypeParamDecl.createImplicit(
         declContext: declContext,
         name: type.nameOfGenericTypeParameter,
         depth: type.depthOfGenericTypeParameter,
         index: type.indexOfGenericTypeParameter,
         paramKind: type.kindOfGenericTypeParameter))
   }
-  return params.withBridgedArrayRef {
-    BridgedGenericParamList.createParsed(
-      astContext, leftAngleLoc: swift.SourceLoc(raw: nil), parameters: $0,
-      genericWhereClause: BridgedNullableTrailingWhereClause(raw: nil),
-      rightAngleLoc: swift.SourceLoc(raw: nil))
-  }
+  return GenericParamList.createParsed(
+      astContext, leftAngleLoc: nil, parameters: params,
+      genericWhereClause: nil,
+      rightAngleLoc: nil)
 }
 
 func autodiffSpecializeBranchTracingEnum(
@@ -1005,7 +989,7 @@ func autodiffSpecializeBranchTracingEnum(
   assert(specBTEDict[bteType] == nil)
 
   let oldED = bteType.nominal as! EnumDecl
-  let declContext = oldED.asDecl.declContext
+  let declContext = oldED.declContext
   let astContext = declContext.astContext
 
   var newEDNameStr: String = oldED.name.string + "_spec"
@@ -1017,13 +1001,12 @@ func autodiffSpecializeBranchTracingEnum(
 
     let oldPL: ParameterList = oldEED.parameterList
     assert(oldPL.size == 1)
-    let oldPD: BridgedParamDecl = oldPL.get(0)
+    let oldPD: BridgedParamDecl = oldPL[0]
 
     let closureInfosMultiBB: [ClosureInfoMultiBB] = bteCaseToClosureListDict[enumCase.index] ?? []
 
     var newECDNameSuffix: String = ""
     var newPayloadTupleElementTypes = [(label: Identifier, type: AST.`Type`)]()
-    //var labels = [Identifier]()
 
     for idxInPayloadTuple in 0..<oldPayloadTupleType.tupleElements.count {
       let label: Identifier = oldPayloadTupleType.tupleElements.label(at: idxInPayloadTuple)
@@ -1047,7 +1030,6 @@ func autodiffSpecializeBranchTracingEnum(
         }
       }
       newPayloadTupleElementTypes.append((label: label, type: newPayloadTupleEltType!))
-      //labels.append(label)
     }
     let newTupleType =
       context.getTupleType(elements: newPayloadTupleElementTypes)
@@ -1055,12 +1037,11 @@ func autodiffSpecializeBranchTracingEnum(
 
     let newPD = oldPD.cloneWithoutType()
 
-    newPD.setInterfaceType(newTupleType.bridged)
-    let newPL = [newPD].withBridgedArrayRef {
+    newPD.setInterfaceType(type: newTupleType)
+    let newPL =
       ParameterList.createParsed(
-        astContext, leftParenLoc: swift.SourceLoc(raw: nil), parameters: $0,
-        rightParenLoc: swift.SourceLoc(raw: nil))
-    }
+        astContext, leftParenLoc: nil, parameters: [newPD],
+        rightParenLoc: nil)
     newPLs.append(newPL)
 
     if newECDNameSuffix.count != 0 {
@@ -1069,27 +1050,24 @@ func autodiffSpecializeBranchTracingEnum(
   }
 
   let canonicalGenericSig = topVJP.genericSignature.canonicalSignature
-  var genericParams = BridgedNullableGenericParamList(raw: nil)
+  var genericParams = GenericParamList?(nil)
   if !canonicalGenericSig.isEmpty {
-    genericParams = BridgedNullableGenericParamList(
-      raw: cloneGenericParameters(
+      genericParams = cloneGenericParameters(
         astContext: astContext, declContext: declContext, canonicalGenericSig: canonicalGenericSig
-      ).raw)
+      )
   }
 
-  let newED = newEDNameStr.withCString { strPtr in
-    [AST.`Type`]().withBridgedArrayRef { inheritedTypes in
+  let newED =
       BridgedEnumDecl.createParsed(
         astContext, declContext: declContext,
-        enumKeywordLoc: swift.SourceLoc(raw: nil),
-        name: astContext.getIdentifier(BridgedStringRef(data: strPtr, count: newEDNameStr.count)),
-        nameLoc: swift.SourceLoc(raw: nil),
+        enumKeywordLoc: nil,
+        name: newEDNameStr,
+        nameLoc: nil,
         genericParamList: genericParams,
-        inheritedTypes: inheritedTypes,
-        genericWhereClause: BridgedNullableTrailingWhereClause(raw: nil),
-        braceRange: swift.SourceRange(start: swift.SourceLoc(raw: nil)))
-    }
-  }
+        inheritedTypes: [],
+        genericWhereClause: nil,
+        braceRange: SourceRange(start: SourceLoc?(nil).bridgedLocation))
+
   newED.asDecl.setImplicit()
   if !canonicalGenericSig.isEmpty {
     newED.asGenericContext.setGenericSignature(canonicalGenericSig.genericSignature.bridged)
@@ -1100,9 +1078,9 @@ func autodiffSpecializeBranchTracingEnum(
     let newPL: ParameterList = newPLs[idx]
     let newEED = BridgedEnumElementDecl.createParsed(
       astContext, declContext: newED.asDeclContext,
-      name: oldEED.baseIdentifier, nameLoc: swift.SourceLoc(raw: nil),
-      parameterList: BridgedNullableParameterList(raw: newPL.raw),
-      equalsLoc: swift.SourceLoc(raw: nil), rawValue: BridgedNullableExpr(raw: nil))
+      name: oldEED.baseIdentifier, nameLoc: nil,
+      parameterList: newPL,
+      equalsLoc: nil, rawValue: nil)
     newEED.asDecl.setImplicit()
     newED.asNominalTypeDecl.addMember(newEED.asDecl)
   }
@@ -1411,40 +1389,14 @@ extension Instruction {
 /// Represents a partial_apply of pullback capturing one or more closure arguments.
 private struct PullbackClosureInfo {
   let paiOfPullback: PartialApplyInst
-  //var closureArgDescriptors: [ClosureArgDescriptor] = []
   var closureInfosMultiBB: [ClosureInfoMultiBB] = []
 
   init(paiOfPullback: PartialApplyInst) {
     self.paiOfPullback = paiOfPullback
   }
-//  mutating func appendClosureArgDescriptor(_ descriptor: ClosureArgDescriptor) {
-//    self.closureArgDescriptors.append(descriptor)
-//  }
   var pullbackFn: Function {
     paiOfPullback.referencedFunction!
   }
-//  var reachableExitBBsInCallee: [BasicBlock] {
-//    pullbackFn.blocks.filter { $0.isReachableExitBlock }
-//  }
-//  func hasClosureArg(at index: Int) -> Bool {
-//    closureArgDescriptors.contains { $0.closureArgumentIndex == index }
-//  }
-//  func closureArgDesc(at index: Int) -> ClosureArgDescriptor? {
-//    closureArgDescriptors.first { $0.closureArgumentIndex == index }
-//  }
-//  func appliedArgForClosure(at index: Int) -> Value? {
-//    if let closureArgDesc = closureArgDesc(at: index) {
-//      return paiOfPullback.arguments[
-//        closureArgDesc.closureArgIndex - paiOfPullback.unappliedArgumentCount]
-//    }
-//    return nil
-//  }
-//  func specializedCalleeName(_ context: FunctionPassContext) -> String {
-//    let closureArgs = Array(self.closureArgDescriptors.map {
-//      (argumentIndex: $0.closureArgIndex, argumentValue: $0.closure)
-//    })
-//    return context.mangle(withClosureArguments: closureArgs, from: pullbackFn)
-//  }
 }
 
 let getPullbackClosureInfoMultiBBTest = FunctionTest(
