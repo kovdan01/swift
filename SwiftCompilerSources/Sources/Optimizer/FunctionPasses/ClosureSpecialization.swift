@@ -963,11 +963,11 @@ func getSourceFileFor(derivative: Function) -> SourceFile {
 func cloneGenericParameters(
   astContext: ASTContext, declContext: DeclContext, canonicalGenericSig: CanonicalGenericSignature
 ) -> GenericParamList {
-  var params = [GenericTypeParamDecl]()
+  var params : [BridgedGenericTypeParamDecl] = []
   for type in canonicalGenericSig.genericSignature.genericParameters {
     assert(type.isGenericTypeParameter)
     params.append(
-      GenericTypeParamDecl.createImplicit(
+      BridgedGenericTypeParamDecl.createImplicit(
         declContext: declContext,
         name: type.nameOfGenericTypeParameter,
         depth: type.depthOfGenericTypeParameter,
