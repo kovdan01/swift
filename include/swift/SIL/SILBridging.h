@@ -579,7 +579,6 @@ struct BridgedFunction {
   bool isConvertPointerToPointerArgument() const;
   bool isAddressor() const;
   bool isAutodiffVJP() const;
-  bool isAutodiffSubsetParametersThunk() const;
   SwiftInt specializationLevel() const;
   SWIFT_IMPORT_UNSAFE BridgedSubstitutionMap getMethodSubstitutions(BridgedSubstitutionMap contextSubs,
                                                                     BridgedCanType selfType) const;
