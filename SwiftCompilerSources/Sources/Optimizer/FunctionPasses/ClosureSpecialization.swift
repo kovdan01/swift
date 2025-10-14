@@ -1066,7 +1066,7 @@ func autodiffSpecializeBranchTracingEnum(
         genericParamList: genericParams,
         inheritedTypes: [],
         genericWhereClause: nil,
-        braceRange: SourceRange(start: SourceLoc?(nil).bridgedLocation))
+        braceRange: SourceRange(start: nil))
 
   newED.asDecl.setImplicit()
   if !canonicalGenericSig.isEmpty {
