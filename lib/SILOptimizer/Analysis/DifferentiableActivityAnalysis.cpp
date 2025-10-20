@@ -298,6 +298,7 @@ void DifferentiableActivityInfo::setUseful(SILValue value,
 
 void DifferentiableActivityInfo::setUsefulAndPropagateToOperands(
     SILValue value, unsigned dependentVariableIndex) {
+  LLVM_DEBUG(llvm::dbgs() << "AAAAAA setUsefulAndPropagateToOperands: " << value << '\n');
   // Skip already-useful values to prevent infinite recursion.
   if (isUseful(value, dependentVariableIndex))
     return;
@@ -337,15 +338,20 @@ void DifferentiableActivityInfo::setUsefulAndPropagateToOperands(
 
 void DifferentiableActivityInfo::propagateUseful(
     SILInstruction *inst, unsigned dependentVariableIndex) {
+  LLVM_DEBUG(llvm::dbgs() << "AAAAAA propagateUseful: " << *inst << '\n');
   // Propagate usefulness for the given instruction: mark operands as useful and
   // recursively propagate usefulness to defining instructions of operands.
   auto i = dependentVariableIndex;
   // Handle full apply sites: `apply`, `try_apply`, and `begin_apply`.
   if (FullApplySite::isa(inst)) {
+    LLVM_DEBUG(llvm::dbgs() << "AAAAAA propagateUseful FullApplySite\n");
     FullApplySite applySite(inst);
     // If callee is non-varying, skip.
-    if (isWithoutDerivative(applySite.getCallee()))
+    if (isWithoutDerivative(applySite.getCallee())) {
+      LLVM_DEBUG(llvm::dbgs() << "AAAAAA propagateUseful isWithoutDerivative\n");
       return;
+    }
+    LLVM_DEBUG(llvm::dbgs() << "AAAAAA propagateUseful with derivative\n");
     // If callee is a `modify` accessor, propagate usefulness through yielded
     // addresses. Semantically, yielded addresses can be viewed as a projection
     // into the `inout` argument.
@@ -362,6 +368,11 @@ void DifferentiableActivityInfo::propagateUseful(
     // Propagate usefulness through apply site arguments.
     for (auto arg : applySite.getArgumentsWithoutIndirectResults())
       setUsefulAndPropagateToOperands(arg, i);
+    if (applySite.getArguments().size() == 0) {
+      LLVM_DEBUG(llvm::dbgs() << "AAAAAA propagateUseful no args, callee = " << applySite.getCallee() << "\n");
+      // MYTODO proper autoclosure check
+      setUsefulAndPropagateToOperands(applySite.getCallee(), i);
+    }
   }
   // Handle store-like instructions:
   //   `store`, `store_borrow`, `copy_addr`, `unconditional_checked_cast`

@@ -340,36 +340,48 @@ VarDecl *getTangentStoredProperty(ADContext &context, VarDecl *originalField,
         "`@noDerivative` stored property accesses should not be "
         "differentiated; activity analysis should not mark as varied");
   case TangentPropertyInfo::Error::Kind::NominalParentNotDifferentiable:
+    llvm::errs() << "JJJJJJJ 00\n";
     context.emitNondifferentiabilityError(
         sourceLoc, invoker,
         diag::autodiff_stored_property_parent_not_differentiable,
         parentDeclName, fieldName);
+    llvm::errs() << "JJJJJJJ 01\n";
     break;
   case TangentPropertyInfo::Error::Kind::OriginalPropertyNotDifferentiable:
+    llvm::errs() << "JJJJJJJ 02\n";
     context.emitNondifferentiabilityError(
         sourceLoc, invoker, diag::autodiff_stored_property_not_differentiable,
         parentDeclName, fieldName, originalField->getInterfaceType());
+    llvm::errs() << "JJJJJJJ 03\n";
     break;
   case TangentPropertyInfo::Error::Kind::ParentTangentVectorNotStruct:
+    llvm::errs() << "JJJJJJJ 04\n";
     context.emitNondifferentiabilityError(
         sourceLoc, invoker, diag::autodiff_stored_property_tangent_not_struct,
         parentDeclName, fieldName);
+    llvm::errs() << "JJJJJJJ 05\n";
     break;
   case TangentPropertyInfo::Error::Kind::TangentPropertyNotFound:
+    llvm::errs() << "JJJJJJJ 06\n";
     context.emitNondifferentiabilityError(
         sourceLoc, invoker,
         diag::autodiff_stored_property_no_corresponding_tangent, parentDeclName,
         fieldName);
+    llvm::errs() << "JJJJJJJ 07\n";
     break;
   case TangentPropertyInfo::Error::Kind::TangentPropertyWrongType:
+    llvm::errs() << "JJJJJJJ 08\n";
     context.emitNondifferentiabilityError(
         sourceLoc, invoker, diag::autodiff_tangent_property_wrong_type,
         parentDeclName, fieldName, tanFieldInfo.error->getType());
+    llvm::errs() << "JJJJJJJ 09\n";
     break;
   case TangentPropertyInfo::Error::Kind::TangentPropertyNotStored:
+    llvm::errs() << "JJJJJJJ 10\n";
     context.emitNondifferentiabilityError(
         sourceLoc, invoker, diag::autodiff_tangent_property_not_stored,
         parentDeclName, fieldName);
+    llvm::errs() << "JJJJJJJ 11\n";
     break;
   }
   return nullptr;
