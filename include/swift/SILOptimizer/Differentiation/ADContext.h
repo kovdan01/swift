@@ -334,11 +334,15 @@ ADContext::emitNondifferentiabilityError(SourceLoc loc,
   // non-differentiation operation.
   case DifferentiationInvoker::Kind::DifferentiableFunctionInst: {
     auto *inst = invoker.getDifferentiableFunctionInst();
+    llvm::errs() << "IIIIII 00\n";
     if (auto *expr = findDifferentialOperator(inst)) {
+      llvm::errs() << "IIIIII 01\n";
       diagnose(expr->getLoc(), diag::autodiff_function_not_differentiable_error)
           .highlight(expr->getSubExpr()->getSourceRange());
+      llvm::errs() << "IIIIII 02\n";
       return diagnose(loc, diag, std::forward<U>(args)...);
     }
+    llvm::errs() << "IIIIII 03\n";
     diagnose(loc, diag::autodiff_expression_not_differentiable_error);
     return diagnose(loc, diag, std::forward<U>(args)...);
   }
@@ -349,11 +353,15 @@ ADContext::emitNondifferentiabilityError(SourceLoc loc,
   // note on the non-differentiation operation.
   case DifferentiationInvoker::Kind::LinearFunctionInst: {
     auto *inst = invoker.getLinearFunctionInst();
+    llvm::errs() << "IIIIII 04\n";
     if (auto *expr = findDifferentialOperator(inst)) {
+      llvm::errs() << "IIIIII 05\n";
       diagnose(expr->getLoc(), diag::autodiff_function_not_differentiable_error)
           .highlight(expr->getSubExpr()->getSourceRange());
+      llvm::errs() << "IIIIII 06\n";
       return diagnose(loc, diag, std::forward<U>(args)...);
     }
+    llvm::errs() << "IIIIII 07\n";
     diagnose(loc, diag::autodiff_expression_not_differentiable_error);
     return diagnose(loc, diag, std::forward<U>(args)...);
   }
@@ -367,9 +375,11 @@ ADContext::emitNondifferentiabilityError(SourceLoc loc,
     // If the witness has an associated attribute, emit an error at its
     // location.
     if (auto *attr = witness->getAttribute()) {
+      llvm::errs() << "IIIIII 08\n";
       diagnose(attr->getLocation(),
                diag::autodiff_function_not_differentiable_error)
           .highlight(attr->getRangeWithAt());
+      llvm::errs() << "IIIIII 09\n";
       // Emit informative note.
       bool emittedNote = false;
       // If the witness comes from an implicit `@differentiable` attribute
@@ -393,8 +403,10 @@ ADContext::emitNondifferentiabilityError(SourceLoc loc,
     }
     // Otherwise, emit an error on the original function.
     else {
+      llvm::errs() << "IIIIII 10\n";
       diagnose(original->getLocation().getSourceLoc(),
                diag::autodiff_function_not_differentiable_error);
+      llvm::errs() << "IIIIII 11\n";
     }
     return diagnose(loc, diag, std::forward<U>(args)...);
   }
