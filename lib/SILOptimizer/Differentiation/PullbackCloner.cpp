@@ -977,8 +977,10 @@ public:
   void visitSILInstruction(SILInstruction *inst) {
     LLVM_DEBUG(getADDebugStream()
                << "Unhandled instruction in PullbackCloner: " << *inst);
+    llvm::errs() << "JJJJJJJ 68\n";
     getContext().emitNondifferentiabilityError(
         inst, getInvoker(), diag::autodiff_expression_not_differentiable_note);
+    llvm::errs() << "JJJJJJJ 69\n";
     errorOccurred = true;
   }
 
@@ -1327,8 +1329,10 @@ public:
     assert(getPullbackInfo().shouldDifferentiateApplySite(bai));
 
     // abort_apply differentiation is not yet supported.
+    llvm::errs() << "JJJJJJJ 70\n";
     getContext().emitNondifferentiabilityError(
         bai, getInvoker(), diag::autodiff_coroutines_not_supported);
+    llvm::errs() << "JJJJJJJ 71\n";
     errorOccurred = true;
   }
 
@@ -1919,6 +1923,22 @@ public:
     visitValueOwnershipInst(bbi);
   }
 
+  /// TODO
+  void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *cetnei) {
+    visitValueOwnershipInst(cetnei);
+  }
+
+  /// TODO
+  void visitPartialApplyInst(PartialApplyInst *pai) {
+    assert(pai->getArgumentOperands().size() == 1);
+    auto *bb = pai->getParent();
+    const Operand &op = pai->getArgumentOperands().front();
+    SILValue val = op.get();
+    assert(getTangentValueCategory(pai) == SILValueCategory::Object);
+    auto adj = getAdjointValue(bb, pai);
+    addAdjointValue(bb, val, adj, pai->getLoc());
+  }
+
   /// Handle `move_value` instruction.
   ///   Original: y = move_value x
   ///    Adjoint: adj[x] += adj[y]; adj[y] = 0
@@ -1927,8 +1947,10 @@ public:
     case SILValueCategory::Address:
       LLVM_DEBUG(getADDebugStream() << "AutoDiff does not support move_value with "
                  "SILValueCategory::Address");
+      llvm::errs() << "JJJJJJJ 72\n";
       getContext().emitNondifferentiabilityError(
         mvi, getInvoker(), diag::autodiff_expression_not_differentiable_note);
+      llvm::errs() << "JJJJJJJ 73\n";
       errorOccurred = true;
       return;
     case SILValueCategory::Object:
@@ -1945,16 +1967,20 @@ public:
     // Check for non-differentiable writes.
     if (bai->getAccessKind() == SILAccessKind::Modify) {
       if (isa<GlobalAddrInst>(bai->getSource())) {
+        llvm::errs() << "JJJJJJJ 74\n";
         getContext().emitNondifferentiabilityError(
             bai, getInvoker(),
             diag::autodiff_cannot_differentiate_writes_to_global_variables);
+        llvm::errs() << "JJJJJJJ 75\n";
         errorOccurred = true;
         return;
       }
       if (isa<ProjectBoxInst>(bai->getSource())) {
+        llvm::errs() << "JJJJJJJ 76\n";
         getContext().emitNondifferentiabilityError(
             bai, getInvoker(),
             diag::autodiff_cannot_differentiate_writes_to_mutable_captures);
+        llvm::errs() << "JJJJJJJ 77\n";
         errorOccurred = true;
         return;
       }
@@ -1993,9 +2019,11 @@ public:
     if (ei->getType().getEnumOrBoundGenericEnum() != optionalEnumDecl) {
       LLVM_DEBUG(getADDebugStream()
                  << "Unsupported enum type in PullbackCloner: " << *ei);
+      llvm::errs() << "JJJJJJJ 78\n";
       getContext().emitNondifferentiabilityError(
           ei, getInvoker(),
           diag::autodiff_expression_not_differentiable_note);
+      llvm::errs() << "JJJJJJJ 79\n";
       errorOccurred = true;
       return;
     }
@@ -2030,9 +2058,11 @@ public:
     if (origEnum->getType().getEnumOrBoundGenericEnum() != optionalEnumDecl) {
       LLVM_DEBUG(getADDebugStream()
                  << "Unsupported enum type in PullbackCloner: " << *inject);
+      llvm::errs() << "JJJJJJJ 80\n";
       getContext().emitNondifferentiabilityError(
           inject, getInvoker(),
           diag::autodiff_expression_not_differentiable_note);
+      llvm::errs() << "JJJJJJJ 81\n";
       errorOccurred = true;
       return;
     }
@@ -2051,9 +2081,11 @@ public:
           LLVM_DEBUG(getADDebugStream()
                      << "Could not find a matching init_enum_data_addr for: "
                      << *inject);
+          llvm::errs() << "JJJJJJJ 82\n";
           getContext().emitNondifferentiabilityError(
               inject, getInvoker(),
               diag::autodiff_expression_not_differentiable_note);
+          llvm::errs() << "JJJJJJJ 83\n";
           errorOccurred = true;
           return;
         }
@@ -2164,9 +2196,11 @@ public:
     if (enumTy.getASTType().getEnumOrBoundGenericEnum() != optionalEnumDecl) {
       LLVM_DEBUG(getADDebugStream()
                  << "Unhandled instruction in PullbackCloner: " << *utedai);
+      llvm::errs() << "JJJJJJJ 84\n";
       getContext().emitNondifferentiabilityError(
           utedai, getInvoker(),
           diag::autodiff_expression_not_differentiable_note);
+      llvm::errs() << "JJJJJJJ 85\n";
       errorOccurred = true;
       return;
     }
@@ -2342,8 +2376,10 @@ bool PullbackCloner::Implementation::run() {
       // differentiation support.
       if (type.getEnumOrBoundGenericEnum()) {
         if (!type.getASTType()->isOptional()) {
+          llvm::errs() << "JJJJJJJ 86\n";
           getContext().emitNondifferentiabilityError(
               v, getInvoker(), diag::autodiff_enums_unsupported);
+          llvm::errs() << "JJJJJJJ 87\n";
           errorOccurred = true;
           return true;
         }
@@ -2373,8 +2409,10 @@ bool PullbackCloner::Implementation::run() {
       // Check that active values are differentiable. Otherwise we may crash
       // later when tangent space is required, but not available.
       if (!getTangentSpace(remapType(type).getASTType())) {
+        llvm::errs() << "JJJJJJJ 88\n";
         getContext().emitNondifferentiabilityError(
             v, getInvoker(), diag::autodiff_expression_not_differentiable_note);
+        llvm::errs() << "JJJJJJJ 89\n";
         errorOccurred = true;
         return true;
       }
@@ -3313,12 +3351,16 @@ void PullbackCloner::Implementation::visitSILBasicBlock(SILBasicBlock *bb) {
       LLVM_DEBUG(getADDebugStream() <<
                  "do not know how to handle this incoming bb argument");
       if (auto term = bbArg->getSingleTerminator()) {
+        llvm::errs() << "JJJJJJJ 90\n";
         getContext().emitNondifferentiabilityError(term, getInvoker(),
           diag::autodiff_expression_not_differentiable_note);
+        llvm::errs() << "JJJJJJJ 91\n";
       } else {
         // This will be a bit confusing, but still better than nothing.
+        llvm::errs() << "JJJJJJJ 92\n";
         getContext().emitNondifferentiabilityError(bbArg, getInvoker(),
           diag::autodiff_expression_not_differentiable_note);
+        llvm::errs() << "JJJJJJJ 93\n";
       }
 
       errorOccurred = true;
