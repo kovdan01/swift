@@ -176,9 +176,11 @@ static bool diagnoseNoReturn(ADContext &context, SILFunction *original,
                              DifferentiationInvoker invoker) {
   if (original->findReturnBB() != original->end())
     return false;
+  llvm::errs() << "JJJJJJJ 24\n";
   context.emitNondifferentiabilityError(
       original->getLocation().getEndSourceLoc(), invoker,
       diag::autodiff_missing_return);
+  llvm::errs() << "JJJJJJJ 25\n";
   return true;
 }
 
@@ -216,8 +218,10 @@ static bool diagnoseUnsupportedControlFlow(ADContext &context,
 
     // If terminator is an unsupported branching terminator, emit an error.
     if (term->isBranch()) {
+      llvm::errs() << "JJJJJJJ 26\n";
       context.emitNondifferentiabilityError(
           term, invoker, diag::autodiff_control_flow_not_supported);
+      llvm::errs() << "JJJJJJJ 27\n";
       return true;
     }
   }
@@ -324,9 +328,11 @@ static bool diagnoseUnsatisfiedRequirements(ADContext &context,
       unsatisfiedRequirements,
       [&](Requirement req) { req.print(stream, PrintOptions()); },
       [&] { stream << ", "; });
+  llvm::errs() << "JJJJJJJ 28\n";
   context.emitNondifferentiabilityError(
       loc, invoker, diag::autodiff_function_assoc_func_unmet_requirements,
       stream.str());
+  llvm::errs() << "JJJJJJJ 29\n";
   return true;
 }
 
@@ -558,8 +564,10 @@ DifferentiationTransformer::createPrivateDifferentiabilityWitness(
   // If the function is intentionally marked as being opaque to
   // differentiation, then we should not create a task for it.
   if (originalFn->hasSemanticsAttr("autodiff.opaque")) {
+    llvm::errs() << "JJJJJJJ 30\n";
     context.emitNondifferentiabilityError(
         original, invoker, diag::autodiff_opaque_function_not_differentiable);
+    llvm::errs() << "JJJJJJJ 31\n";
     return nullptr;
   }
 
@@ -571,8 +579,10 @@ DifferentiationTransformer::createPrivateDifferentiabilityWitness(
 
     SILType paramType = param.getSILStorageInterfaceType();
     if (!paramType.isDifferentiable(context.getModule())) {
+      llvm::errs() << "JJJJJJJ 32\n";
       context.emitNondifferentiabilityError(
           original, invoker, diag::autodiff_nondifferentiable_argument);
+      llvm::errs() << "JJJJJJJ 33\n";
       return nullptr;
     }
   }
@@ -603,16 +613,20 @@ DifferentiationTransformer::createPrivateDifferentiabilityWitness(
     }
 
     if (!resultType || !resultType.isDifferentiable(context.getModule())) {
+      llvm::errs() << "JJJJJJJ 34\n";
       context.emitNondifferentiabilityError(
           original, invoker, diag::autodiff_nondifferentiable_result);
+      llvm::errs() << "JJJJJJJ 35\n";
       return nullptr;
     }
   }
 
   // Check and diagnose external declarations.
   if (originalFn->isExternalDeclaration()) {
+    llvm::errs() << "JJJJJJJ 36\n";
     context.emitNondifferentiabilityError(
         original, invoker, diag::autodiff_external_nondifferentiable_function);
+    llvm::errs() << "JJJJJJJ 37\n";
     return nullptr;
   }
 
@@ -700,10 +714,12 @@ DifferentiationTransformer::emitDerivativeFunctionReference(
           diffableFnType->getDifferentiabilityParameterIndices();
       for (auto i : desiredConfig.parameterIndices->getIndices()) {
         if (!paramIndices->contains(i)) {
+          llvm::errs() << "JJJJJJJ 38\n";
           context.emitNondifferentiabilityError(
               original, invoker,
               diag::
                   autodiff_function_noderivative_parameter_not_differentiable);
+          llvm::errs() << "JJJJJJJ 39\n";
           return std::nullopt;
         }
       }
@@ -762,10 +778,12 @@ DifferentiationTransformer::emitDerivativeFunctionReference(
         // kinds of fragility.
         if (parentFn->getLinkage() == SILLinkage::PublicNonABI)
           fragileKind = DefaultArgument;
+        llvm::errs() << "JJJJJJJ 40\n";
         context.emitNondifferentiabilityError(
             original, invoker, diag::autodiff_private_derivative_from_fragile,
             fragileKind,
             isa_and_nonnull<AbstractClosureExpr>(loc.getAsASTNode<Expr>()));
+        llvm::errs() << "JJJJJJJ 41\n";
         return std::nullopt;
       }
     }
@@ -839,10 +857,12 @@ DifferentiationTransformer::emitDerivativeFunctionReference(
         // kinds of fragility.
         if (parentFn->getLinkage() == SILLinkage::PublicNonABI)
           fragileKind = DefaultArgument;
+        llvm::errs() << "JJJJJJJ 42\n";
         context.emitNondifferentiabilityError(
             original, invoker, diag::autodiff_private_derivative_from_fragile,
             fragileKind,
             isa_and_nonnull<AbstractClosureExpr>(loc.getAsASTNode<Expr>()));
+        llvm::errs() << "JJJJJJJ 43\n";
         return std::nullopt;
       }
 
@@ -892,8 +912,10 @@ DifferentiationTransformer::emitDerivativeFunctionReference(
     // If requirement declaration does not have any derivative function
     // configurations, produce an error.
     if (requirementDecl->getDerivativeFunctionConfigurations().empty()) {
+      llvm::errs() << "JJJJJJJ 44\n";
       context.emitNondifferentiabilityError(
           original, invoker, diag::autodiff_protocol_member_not_differentiable);
+      llvm::errs() << "JJJJJJJ 45\n";
       return std::nullopt;
     }
     // Find the minimal derivative configuration: minimal parameter indices and
@@ -904,9 +926,11 @@ DifferentiationTransformer::emitDerivativeFunctionReference(
         requirementDecl, desiredConfig.parameterIndices,
         minimalASTParamIndices);
     if (!minimalConfig) {
+      llvm::errs() << "JJJJJJJ 46\n";
       context.emitNondifferentiabilityError(
           original, invoker,
           diag::autodiff_member_subset_indices_not_differentiable);
+      llvm::errs() << "JJJJJJJ 47\n";
       return std::nullopt;
     }
     // Emit a `witness_method` instruction for the derivative function.
@@ -938,8 +962,10 @@ DifferentiationTransformer::emitDerivativeFunctionReference(
     // If method declaration does not have any derivative function
     // configurations, produce an error.
     if (methodDecl->getDerivativeFunctionConfigurations().empty()) {
+      llvm::errs() << "JJJJJJJ 48\n";
       context.emitNondifferentiabilityError(
           original, invoker, diag::autodiff_class_member_not_differentiable);
+      llvm::errs() << "JJJJJJJ 49\n";
       return std::nullopt;
     }
     // Find the minimal derivative configuration: minimal parameter indices and
@@ -949,9 +975,11 @@ DifferentiationTransformer::emitDerivativeFunctionReference(
     auto minimalConfig = findMinimalDerivativeConfiguration(
         methodDecl, desiredConfig.parameterIndices, minimalASTParamIndices);
     if (!minimalConfig) {
+      llvm::errs() << "JJJJJJJ 50\n";
       context.emitNondifferentiabilityError(
           original, invoker,
           diag::autodiff_member_subset_indices_not_differentiable);
+      llvm::errs() << "JJJJJJJ 51\n";
       return std::nullopt;
     }
     // Emit a `class_method` instruction for the derivative function.
@@ -974,8 +1002,10 @@ DifferentiationTransformer::emitDerivativeFunctionReference(
   }
 
   // Emit the general opaque function error.
+  llvm::errs() << "JJJJJJJ 52\n";
   context.emitNondifferentiabilityError(
       original, invoker, diag::autodiff_opaque_function_not_differentiable);
+  llvm::errs() << "JJJJJJJ 53\n";
   return std::nullopt;
 }
 
@@ -1158,9 +1188,11 @@ bool DifferentiationTransformer::canonicalizeDifferentiabilityWitness(
       // JVP and differential generation do not currently support functions with
       // multiple basic blocks.
       if (orig->size() > 1) {
+        llvm::errs() << "JJJJJJJ 54\n";
         context.emitNondifferentiabilityError(orig->getLocation().getSourceLoc(),
                                               invoker,
                                               diag::autodiff_jvp_control_flow_not_supported);
+        llvm::errs() << "JJJJJJJ 55\n";
         return true;
       }
       // Emit JVP function.
@@ -1379,9 +1411,11 @@ SILValue DifferentiationTransformer::promoteToDifferentiableFunction(
         return false;
       };
       if (didPartiallyApplyArguments(origFnOperand)) {
+        llvm::errs() << "JJJJJJJ 56\n";
         context.emitNondifferentiabilityError(
             origFnOperand, invoker,
             diag::autodiff_cannot_param_subset_thunk_partially_applied_orig_fn);
+        llvm::errs() << "JJJJJJJ 57\n";
         return nullptr;
       }
       // Create the parameter subset thunk.

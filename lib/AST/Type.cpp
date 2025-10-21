@@ -4772,6 +4772,26 @@ TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
     return tangentSpace;
   };
 
+  // TODO closures
+  if (getAs<AnyFunctionType>() || getAs<SILFunctionType>()) {
+    llvm::errs() << "DDDDDDD 01 ";
+    this->dump(llvm::errs());
+    llvm::errs() << "\n";
+    auto a = ctx.getFloatType();
+    llvm::errs() << "DDDDDDD 02\n";
+    auto b = a->getAutoDiffTangentSpace(lookupConformance);
+    llvm::errs() << "DDDDDDD 03\n";
+    auto c = b->getType();
+    llvm::errs() << "DDDDDDD 04\n";
+    auto d = TangentSpace::getTangentVector(c);
+    llvm::errs() << "DDDDDDD 05\n";
+    auto e = cache(d);
+    llvm::errs() << "DDDDDDD 06\n";
+    return e;
+    // TangentSpace::getTangentVector(ctx.getFloatType()->getAutoDiffTangentSpace(lookupConformance)->getType());
+    // return cache(std::nullopt);
+  }
+
   // For tuple types: the tangent space is a tuple of the elements'  tangent
   // space types, for the elements that have a tangent space.
   if (auto *tupleTy = getAs<TupleType>()) {
@@ -4808,6 +4828,10 @@ TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
   auto assocTy = conformance.getTypeWitness(assocDecl);
   if (!assocTy->hasError())
     return cache(TangentSpace::getTangentVector(assocTy));
+
+  llvm::errs() << "DDDDDDD 00 ";
+  this->dump(llvm::errs());
+  llvm::errs() << "\n";
 
   // Otherwise, there is no associated tangent space. Return `None`.
   return cache(std::nullopt);

@@ -420,8 +420,10 @@ public:
   }
 
   void visitSILInstruction(SILInstruction *inst) {
+    llvm::errs() << "JJJJJJJ 12\n";
     context.emitNondifferentiabilityError(
         inst, invoker, diag::autodiff_expression_not_differentiable_note);
+    llvm::errs() << "JJJJJJJ 13\n";
     errorOccurred = true;
   }
 
@@ -505,10 +507,12 @@ public:
       auto paramIndices = originalFnTy->getDifferentiabilityParameterIndices();
       for (auto i : config.parameterIndices->getIndices()) {
         if (!paramIndices->contains(i)) {
+          llvm::errs() << "JJJJJJJ 14\n";
           context.emitNondifferentiabilityError(
               origCallee, invoker,
               diag::
                   autodiff_function_noderivative_parameter_not_differentiable);
+          llvm::errs() << "JJJJJJJ 15\n";
           errorOccurred = true;
           return;
         }
@@ -565,11 +569,13 @@ public:
                 auto arg = ai->getArgumentsWithoutIndirectResults()[paramIndex];
                 auto startLoc = arg.getLoc().getStartSourceLoc();
                 auto endLoc = arg.getLoc().getEndSourceLoc();
+                llvm::errs() << "JJJJJJJ 16\n";
                 context
                     .emitNondifferentiabilityError(
                         arg, invoker, diag::autodiff_nondifferentiable_argument)
                     .fixItInsert(startLoc, "withoutDerivative(at: ")
                     .fixItInsertAfter(endLoc, ")");
+                llvm::errs() << "JJJJJJJ 17\n";
                 errorOccurred = true;
                 return true;
               }
@@ -589,12 +595,14 @@ public:
               if (!remappedResultType.isDifferentiable(getModule())) {
                 auto startLoc = ai->getLoc().getStartSourceLoc();
                 auto endLoc = ai->getLoc().getEndSourceLoc();
+                llvm::errs() << "JJJJJJJ 18\n";
                 context
                     .emitNondifferentiabilityError(
                         origCallee, invoker,
                         diag::autodiff_nondifferentiable_result)
                     .fixItInsert(startLoc, "withoutDerivative(at: ")
                     .fixItInsertAfter(endLoc, ")");
+                llvm::errs() << "JJJJJJJ 19\n";
                 errorOccurred = true;
                 return true;
               }
@@ -961,16 +969,20 @@ public:
     // Check for non-differentiable writes.
     if (bai->getAccessKind() == SILAccessKind::Modify) {
       if (isa<GlobalAddrInst>(bai->getSource())) {
+        llvm::errs() << "JJJJJJJ 20\n";
         context.emitNondifferentiabilityError(
             bai, invoker,
             diag::autodiff_cannot_differentiate_writes_to_global_variables);
+        llvm::errs() << "JJJJJJJ 21\n";
         errorOccurred = true;
         return;
       }
       if (isa<ProjectBoxInst>(bai->getSource())) {
+        llvm::errs() << "JJJJJJJ 22\n";
         context.emitNondifferentiabilityError(
             bai, invoker,
             diag::autodiff_cannot_differentiate_writes_to_mutable_captures);
+        llvm::errs() << "JJJJJJJ 23\n";
         errorOccurred = true;
         return;
       }
