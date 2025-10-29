@@ -828,8 +828,6 @@ struct BridgedInstruction {
   BRIDGED_INLINE void RefElementAddrInst_setImmutable(bool isImmutable) const;
   BRIDGED_INLINE bool RefTailAddrInst_isImmutable() const;
   BRIDGED_INLINE SwiftInt PartialApplyInst_numArguments() const;
-  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedSubstitutionMap
-  PartialApplyInst_getSubstitutionMap() const;
   BRIDGED_INLINE SwiftInt ApplyInst_numArguments() const;
   BRIDGED_INLINE bool ApplyInst_getNonThrowing() const;
   BRIDGED_INLINE bool ApplyInst_getNonAsync() const;
@@ -980,7 +978,6 @@ struct BridgedArgument {
   BRIDGED_INLINE void setReborrow(bool reborrow) const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE OptionalBridgedDeclObj getDecl() const;
   BRIDGED_INLINE void copyFlags(BridgedArgument fromArgument) const;
-  BRIDGED_INLINE BridgedValue::Ownership getOwnership() const;
 };
 
 struct OptionalBridgedArgument {

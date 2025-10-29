@@ -231,8 +231,8 @@ public struct Type : TypeProperties, CustomStringConvertible, NoReflectionChildr
     return false
   }
 
-  public func mapTypeOutOfContext(in function: Function) -> Type {
-    rawType.mapTypeOutOfContext().canonical.loweredType(in: function)
+  public func mapOutOfContext(in function: Function) -> Type {
+    rawType.mapOutOfContext().canonical.loweredType(in: function)
   }
 }
 

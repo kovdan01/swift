@@ -630,11 +630,6 @@ void BridgedArgument::copyFlags(BridgedArgument fromArgument) const {
   fArg->copyFlags(static_cast<swift::SILFunctionArgument *>(fromArgument.getArgument()));
 }
 
-BridgedValue::Ownership BridgedArgument::getOwnership() const {
-  swift::ValueBase *val = getArgument();
-  return BridgedValue{SwiftObject{val}}.getOwnership();
-}
-
 swift::SILArgument * _Nullable OptionalBridgedArgument::unbridged() const {
   if (!obj)
     return nullptr;
@@ -1136,12 +1131,6 @@ bool BridgedInstruction::shouldBeForwarding() const {
 
 bool BridgedInstruction::isIdenticalTo(BridgedInstruction inst) const {
   return unbridged()->isIdenticalTo(inst.unbridged());
-}
-
-BridgedSubstitutionMap
-BridgedInstruction::PartialApplyInst_getSubstitutionMap() const {
-  auto *pai = llvm::cast<swift::PartialApplyInst>(unbridged());
-  return {pai->getSubstitutionMap()};
 }
 
 SwiftInt BridgedInstruction::MultipleValueInstruction_getNumResults() const {
