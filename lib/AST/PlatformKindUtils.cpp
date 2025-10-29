@@ -115,9 +115,13 @@ swift::basePlatformForExtensionPlatform(PlatformKind Platform) {
   case PlatformKind::tvOS:
   case PlatformKind::watchOS:
   case PlatformKind::visionOS:
+  case PlatformKind::DriverKit:
+  case PlatformKind::Swift:
+  case PlatformKind::anyAppleOS:
   case PlatformKind::FreeBSD:
   case PlatformKind::OpenBSD:
   case PlatformKind::Windows:
+  case PlatformKind::Android:
   case PlatformKind::none:
     return std::nullopt;
   }
@@ -158,12 +162,19 @@ static bool isPlatformActiveForTarget(PlatformKind Platform,
     case PlatformKind::visionOS:
     case PlatformKind::visionOSApplicationExtension:
       return Target.isXROS();
+    case PlatformKind::DriverKit:
+      return Target.isDriverKit();
+    case PlatformKind::Swift:
+    case PlatformKind::anyAppleOS:
+      return Target.isOSDarwin();
     case PlatformKind::OpenBSD:
       return Target.isOSOpenBSD();
     case PlatformKind::FreeBSD:
       return Target.isOSFreeBSD();
     case PlatformKind::Windows:
       return Target.isOSWindows();
+    case PlatformKind::Android:
+      return Target.isAndroid();
     case PlatformKind::none:
       llvm_unreachable("handled above");
   }
@@ -217,6 +228,10 @@ static PlatformKind platformForTriple(const llvm::Triple &triple,
     return (enableAppExtensionRestrictions
                 ? PlatformKind::visionOSApplicationExtension
                 : PlatformKind::visionOS);
+  }
+
+  if (triple.isAndroid()) {
+    return PlatformKind::Android;
   }
 
   return PlatformKind::none;
@@ -285,12 +300,19 @@ swift::tripleOSTypeForPlatform(PlatformKind platform) {
   case PlatformKind::visionOS:
   case PlatformKind::visionOSApplicationExtension:
     return llvm::Triple::XROS;
+  case PlatformKind::DriverKit:
+    return llvm::Triple::DriverKit;
+  case PlatformKind::Swift:
+  case PlatformKind::anyAppleOS:
+      return std::nullopt;
   case PlatformKind::FreeBSD:
     return llvm::Triple::FreeBSD;
   case PlatformKind::OpenBSD:
     return llvm::Triple::OpenBSD;
   case PlatformKind::Windows:
     return llvm::Triple::Win32;
+  case PlatformKind::Android:
+    return llvm::Triple::Linux;
   case PlatformKind::none:
     return std::nullopt;
   }
@@ -323,9 +345,13 @@ bool swift::isPlatformSPI(PlatformKind Platform) {
   case PlatformKind::watchOSApplicationExtension:
   case PlatformKind::visionOS:
   case PlatformKind::visionOSApplicationExtension:
+  case PlatformKind::DriverKit:
+  case PlatformKind::Swift:
+  case PlatformKind::anyAppleOS:
   case PlatformKind::OpenBSD:
   case PlatformKind::FreeBSD:
   case PlatformKind::Windows:
+  case PlatformKind::Android:
   case PlatformKind::none:
     return false;
   }

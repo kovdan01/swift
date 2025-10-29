@@ -888,6 +888,8 @@ public:
   llvm::IntegerType *CoroAllocatorFlagsTy;
   llvm::StructType *CoroAllocatorTy;
 
+  llvm::StructType *SwiftImplicitActorType; // { %swift.refcounted, i8* }
+
   llvm::GlobalVariable *TheTrivialPropertyDescriptor = nullptr;
 
   llvm::Constant *swiftImmortalRefCount = nullptr;
@@ -919,6 +921,7 @@ public:
   llvm::CallingConv::ID SwiftCC;       /// swift calling convention
   llvm::CallingConv::ID SwiftAsyncCC;  /// swift calling convention for async
   llvm::CallingConv::ID SwiftCoroCC;   /// swift calling convention for callee-allocated coroutines
+  llvm::CallingConv::ID SwiftClientRR_CC; /// swift client retain/release calling convention
 
   /// What kind of tail call should be used for async->async calls.
   llvm::CallInst::TailCallKind AsyncTailCallKind;
@@ -1131,6 +1134,7 @@ public:
   const LoadableTypeInfo &
   getReferenceObjectTypeInfo(ReferenceCounting refcounting);
   const LoadableTypeInfo &getNativeObjectTypeInfo();
+  const LoadableTypeInfo &getImplicitActorTypeInfo();
   const LoadableTypeInfo &getUnknownObjectTypeInfo();
   const LoadableTypeInfo &getBridgeObjectTypeInfo();
   const LoadableTypeInfo &getRawPointerTypeInfo();
@@ -1159,10 +1163,9 @@ public:
   CanType getRuntimeReifiedType(CanType type);
   Type substOpaqueTypesWithUnderlyingTypes(Type type);
   CanType substOpaqueTypesWithUnderlyingTypes(CanType type);
-  SILType substOpaqueTypesWithUnderlyingTypes(SILType type, CanGenericSignature genericSig);
-  std::pair<CanType, ProtocolConformanceRef>
-  substOpaqueTypesWithUnderlyingTypes(CanType type,
-                                      ProtocolConformanceRef conformance);
+  SILType substOpaqueTypesWithUnderlyingTypes(SILType type);
+  ProtocolConformanceRef
+  substOpaqueTypesWithUnderlyingTypes(ProtocolConformanceRef conformance);
 
   bool isResilient(NominalTypeDecl *decl, ResilienceExpansion expansion,
                    ClassDecl *asViewedFromRootClass = nullptr);

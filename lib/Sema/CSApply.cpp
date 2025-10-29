@@ -588,66 +588,6 @@ namespace {
       }
     }
 
-    // Returns None if the AST does not contain enough information to recover
-    // substitutions; this is different from an Optional(SubstitutionMap()),
-    // indicating a valid call to a non-generic operator.
-    std::optional<SubstitutionMap> getOperatorSubstitutions(ValueDecl *witness,
-                                                            Type refType) {
-      // We have to recover substitutions in this hacky way because
-      // the AST does not retain enough information to devirtualize
-      // calls like this.
-      auto witnessType = witness->getInterfaceType();
-
-      // Compute the substitutions.
-      auto *gft = witnessType->getAs<GenericFunctionType>();
-      if (gft == nullptr) {
-        if (refType->isEqual(witnessType))
-          return SubstitutionMap();
-        return std::nullopt;
-      }
-
-      auto sig = gft->getGenericSignature();
-      auto *env = sig.getGenericEnvironment();
-
-      witnessType = FunctionType::get(gft->getParams(),
-                                      gft->getResult(),
-                                      gft->getExtInfo());
-      witnessType = env->mapTypeIntoContext(witnessType);
-
-      TypeSubstitutionMap subs;
-      auto substType = witnessType->substituteBindingsTo(
-        refType,
-        [&](ArchetypeType *origType, CanType substType) -> CanType {
-          if (auto gpType = dyn_cast<GenericTypeParamType>(
-                origType->getInterfaceType()->getCanonicalType()))
-            subs[gpType] = substType;
-
-          return substType;
-        });
-
-      // If substitution failed, it means that the protocol requirement type
-      // and the witness type did not match up. The only time that this
-      // should happen is when the witness is defined in a base class and
-      // the actual call uses a derived class. For example,
-      //
-      // protocol P { func +(lhs: Self, rhs: Self) }
-      // class Base : P { func +(lhs: Base, rhs: Base) {} }
-      // class Derived : Base {}
-      //
-      // If we enter this code path with two operands of type Derived,
-      // we know we're calling the protocol requirement P.+, with a
-      // substituted type of (Derived, Derived) -> (). But the type of
-      // the witness is (Base, Base) -> (). Just bail out and make a
-      // witness method call in this rare case; SIL mandatory optimizations
-      // will likely devirtualize it anyway.
-      if (!substType)
-        return std::nullopt;
-
-      return SubstitutionMap::get(sig,
-                                  QueryTypeSubstitutionMap{subs},
-                                  LookUpConformanceInModule());
-    }
-
     /// Determine whether the given reference is to a method on
     /// a remote distributed actor in the given context.
     bool isDistributedThunk(ConcreteDeclRef ref, Expr *context);
@@ -673,65 +613,6 @@ namespace {
         assert(cast<FuncDecl>(decl)->isOperator() && "Must be an operator");
 
         auto baseTy = getBaseType(adjustedFullType->castTo<FunctionType>());
-
-        // Handle operator requirements found in protocols.
-        if (auto proto = dyn_cast<ProtocolDecl>(decl->getDeclContext())) {
-          bool isCurried = shouldBuildCurryThunk(choice, /*baseIsInstance=*/false);
-
-          // If we have a concrete conformance, build a call to the witness.
-          //
-          // FIXME: This is awful. We should be able to handle this as a call to
-          // the protocol requirement with Self == the concrete type, and SILGen
-          // (or later) can devirtualize as appropriate.
-          auto conformance = checkConformance(baseTy, proto);
-          if (conformance.isConcrete()) {
-            if (auto witness = conformance.getConcrete()->getWitnessDecl(decl)) {
-              bool isMemberOperator = witness->getDeclContext()->isTypeContext();
-
-              if (!isMemberOperator || !isCurried) {
-                // The fullType was computed by substituting the protocol
-                // requirement so it always has a (Self) -> ... curried
-                // application. Strip it off if the witness was a top-level
-                // function.
-                Type refType;
-                if (isMemberOperator)
-                  refType = adjustedFullType;
-                else
-                  refType = adjustedFullType->castTo<AnyFunctionType>()->getResult();
-
-                // Build the AST for the call to the witness.
-                auto subMap = getOperatorSubstitutions(witness, refType);
-                if (subMap) {
-                  ConcreteDeclRef witnessRef(witness, *subMap);
-                  auto declRefExpr =  new (ctx) DeclRefExpr(witnessRef, loc,
-                                                            /*Implicit=*/false);
-                  declRefExpr->setFunctionRefInfo(choice.getFunctionRefInfo());
-                  cs.setType(declRefExpr, refType);
-
-                  Expr *refExpr;
-                  if (isMemberOperator) {
-                    // If the operator is a type member, add the implicit
-                    // (Self) -> ... call.
-                    Expr *base =
-                      TypeExpr::createImplicitHack(loc.getBaseNameLoc(), baseTy,
-                                                   ctx);
-                    cs.setType(base, MetatypeType::get(baseTy));
-
-                    refExpr =
-                        DotSyntaxCallExpr::create(ctx, declRefExpr, SourceLoc(),
-                                                  Argument::unlabeled(base));
-                    auto refType = adjustedFullType->castTo<FunctionType>()->getResult();
-                    cs.setType(refExpr, refType);
-                  } else {
-                    refExpr = declRefExpr;
-                  }
-
-                  return forceUnwrapIfExpected(refExpr, locator);
-                }
-              }
-            }
-          }
-        }
 
         // Build a reference to the member.
         Expr *base =
@@ -7488,12 +7369,13 @@ Expr *ExprRewriter::coerceToType(Expr *expr, Type toType,
 
     case ConversionRestrictionKind::CGFloatToDouble:
     case ConversionRestrictionKind::DoubleToCGFloat: {
-      DeclName name(ctx, DeclBaseName::createConstructor(), Identifier());
+      // OK: Implicit conversion, no module selector to drop here.
+      DeclNameRef initRef(ctx, /*module selector=*/Identifier(),
+                          DeclBaseName::createConstructor(), { Identifier() });
 
       ConstructorDecl *decl = nullptr;
       SmallVector<ValueDecl *, 2> candidates;
-      dc->lookupQualified(toType->getAnyNominal(),
-                          DeclNameRef(name), SourceLoc(),
+      dc->lookupQualified(toType->getAnyNominal(), initRef, SourceLoc(),
                           NL_QualifiedDefault, candidates);
       for (auto *candidate : candidates) {
         auto *ctor = cast<ConstructorDecl>(candidate);
@@ -9068,7 +8950,8 @@ namespace {
     PreWalkResult<Expr *> walkToExprPre(Expr *expr) override {
       // For closures, update the parameter types and check the body.
       if (auto closure = dyn_cast<ClosureExpr>(expr)) {
-        rewriteFunction(closure);
+        if (rewriteFunction(closure))
+          return Action::Stop();
 
         if (AnyFunctionRef(closure).hasExternalPropertyWrapperParameters()) {
           auto *thunkTy = Rewriter.cs.getType(closure)->castTo<FunctionType>();
@@ -9081,19 +8964,22 @@ namespace {
       }
 
       if (auto *SVE = dyn_cast<SingleValueStmtExpr>(expr)) {
-        rewriteSingleValueStmtExpr(SVE);
+        if (rewriteSingleValueStmtExpr(SVE))
+          return Action::Stop();
         return Action::SkipNode(SVE);
       }
 
       if (auto tap = dyn_cast_or_null<TapExpr>(expr)) {
-        rewriteTapExpr(tap);
+        if (rewriteTapExpr(tap))
+          return Action::Stop();
         return Action::SkipNode(tap);
       }
 
       if (auto captureList = dyn_cast<CaptureListExpr>(expr)) {
         // Rewrite captures.
         for (const auto &capture : captureList->getCaptureList()) {
-          (void)rewriteTarget(SyntacticElementTarget(capture.PBD));
+          if (!rewriteTarget(SyntacticElementTarget(capture.PBD)))
+            return Action::Stop();
         }
       }
 
@@ -9119,31 +9005,36 @@ namespace {
       return Action::SkipNode();
     }
 
-    NullablePtr<Pattern>
-    rewritePattern(Pattern *pattern, DeclContext *DC);
+    [[nodiscard]]
+    NullablePtr<Pattern> rewritePattern(Pattern *pattern, DeclContext *DC);
 
     /// Rewrite the target, producing a new target.
+    [[nodiscard]]
     std::optional<SyntacticElementTarget>
     rewriteTarget(SyntacticElementTarget target) override;
 
     /// Rewrite the function for the given solution.
     ///
     /// \returns true if an error occurred.
+    [[nodiscard]]
     bool rewriteFunction(AnyFunctionRef fn) {
       return Rewriter.cs.applySolution(fn, *this);
     }
 
+    [[nodiscard]]
     bool rewriteSingleValueStmtExpr(SingleValueStmtExpr *SVE) {
       return Rewriter.cs.applySolutionToSingleValueStmt(SVE, *this);
     }
 
-    void rewriteTapExpr(TapExpr *tap) {
+    [[nodiscard]]
+    bool rewriteTapExpr(TapExpr *tap) {
       // First, let's visit the tap expression itself
       // and set all of the inferred types.
-      Rewriter.visitTapExpr(tap);
+      if (!Rewriter.visitTapExpr(tap))
+        return true;
 
       // Now, let's apply solution to the body
-      (void)Rewriter.cs.applySolutionToBody(tap, *this);
+      return Rewriter.cs.applySolutionToBody(tap, *this);
     }
   };
 } // end anonymous namespace

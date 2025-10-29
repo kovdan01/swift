@@ -209,7 +209,8 @@ diagnoseIfModuleImportsShadowingDecl(ModuleInterfaceOptions const &Opts,
   using namespace namelookup;
 
   SmallVector<ValueDecl *, 4> decls;
-  lookupInModule(importedModule, importingModule->getName(), decls,
+  lookupInModule(importedModule, importingModule->getName(),
+                 /*hasModuleSelector=*/false, decls,
                  NLKind::UnqualifiedLookup, ResolutionKind::TypesOnly,
                  importedModule, SourceLoc(),
                  NL_UnqualifiedDefault | NL_IncludeUsableFromInline);
@@ -804,7 +805,7 @@ public:
     // the order in which previous implementations printed these attributes.
     for (auto attr = clonedAttrs.rbegin(), end = clonedAttrs.rend();
          attr != end; ++attr) {
-      extension->getAttrs().add(const_cast<DeclAttribute *>(*attr));
+      extension->addAttribute(const_cast<DeclAttribute *>(*attr));
     }
 
     ctx.evaluator.cacheOutput(ExtendedTypeRequest{extension},
