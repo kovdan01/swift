@@ -29,7 +29,13 @@ public class Decl: CustomStringConvertible, Hashable {
   // True if this declaration is imported from C/C++/ObjC.
   public var hasClangNode: Bool { bridged.hasClangNode() }
 
-  public var declContext: DeclContext { DeclContextObj(bridged: BridgedDeclContext(raw: bridged.getDeclContext().opaqueValue)) }
+  public var declContext: DeclContext {
+    if let decl = parent {
+      debugLog("BBBBBBBB 00")
+      return decl as! DeclContext
+    }
+    return DeclContextObj(bridged: bridged.getDeclContext())
+  }
 
   public var bridgedDecl: BridgedDecl { BridgedDecl(raw: bridged.obj) }
 
@@ -50,7 +56,7 @@ extension DeclContext {
   public var astContext: ASTContext { bridgedDeclContext.astContext }
 }
 
-class DeclContextObj : DeclContext {
+fileprivate class DeclContextObj : DeclContext {
   public var bridgedDeclContext: BridgedDeclContext
   public init(bridged: BridgedDeclContext) { bridgedDeclContext = bridged }
 }
@@ -176,7 +182,7 @@ final public class MacroDecl: ValueDecl {}
 
 final public class EnumElementDecl: ValueDecl {
   public var hasAssociatedValues: Bool { bridged.EnumElementDecl_hasAssociatedValues() }
-  public var parameterList: ParameterList { bridged.EnumElementDecl_getParameterList() }
+  public var parameterList: ParameterList { ParameterList(bridged: bridged.EnumElementDecl_getParameterList()) }
   public var name: StringRef { StringRef(bridged: bridged.EnumElementDecl_getNameStr()) }
 
   public static func createParsed(
@@ -185,7 +191,7 @@ final public class EnumElementDecl: ValueDecl {
     parameterList: ParameterList?,
     equalsLoc: SourceLoc?, rawValue: Expr?
   ) -> EnumElementDecl {
-    BridgedEnumElementDecl.createParsed(astContext, declContext: declContext.bridgedDeclContext, name: name, nameLoc: nameLoc, parameterList: parameterList, equalsLoc: equalsLoc, rawValue: rawValue).asDecl.declObj.getAs(EnumElementDecl.self)
+    BridgedEnumElementDecl.createParsed(astContext, declContext: declContext.bridgedDeclContext, name: name, nameLoc: nameLoc, parameterList: parameterList.bridged, equalsLoc: equalsLoc, rawValue: rawValue).asDecl.declObj.getAs(EnumElementDecl.self)
   }
 }
 
@@ -252,7 +258,7 @@ public typealias ASTContext = BridgedASTContext
 
 public typealias Expr = BridgedExpr
 
-public typealias ParameterList = BridgedParameterList
+//public typealias ParameterList = BridgedParameterList
 
 public typealias SourceFile = BridgedSourceFile
 
@@ -270,20 +276,28 @@ public typealias BridgedGenericTypeParamDecl = ASTBridging.BridgedGenericTypePar
 
 /*public */typealias BridgedEnumElementDecl = ASTBridging.BridgedEnumElementDecl
 
-extension ParameterList {
-  public subscript(_ index: Int) -> BridgedParamDecl {
-    return get(index)
+public class ParameterList {
+  public var bridged: BridgedParameterList
+
+  public init(bridged: BridgedParameterList) {
+    self.bridged = bridged
   }
+
+  public subscript(_ index: Int) -> BridgedParamDecl {
+    return bridged.get(index)
+  }
+
+  public var size: Int { bridged.size }
 
   public static func createParsed(
     _ astContext: ASTContext, leftParenLoc: SourceLoc?, parameters: [BridgedParamDecl],
     rightParenLoc: SourceLoc?
   ) -> ParameterList {
-    parameters.withBridgedArrayRef {
-      ParameterList.createParsed(
+    ParameterList(bridged: parameters.withBridgedArrayRef {
+      BridgedParameterList.createParsed(
         astContext, leftParenLoc: leftParenLoc.bridgedLocation, parameters: $0,
         rightParenLoc: rightParenLoc.bridgedLocation)
-    }
+    })
   }
 }
 
@@ -336,7 +350,7 @@ extension BridgedEnumElementDecl {
   static func createParsed(
     _ astContext: ASTContext, declContext: BridgedDeclContext,
     name: Identifier, nameLoc: SourceLoc?,
-    parameterList: ParameterList?,
+    parameterList: BridgedParameterList?,
     equalsLoc: SourceLoc?, rawValue: Expr?
   ) -> BridgedEnumElementDecl {
     BridgedEnumElementDecl.createParsed(
@@ -367,6 +381,15 @@ extension BridgedParamDecl {
 }
 
 extension ParameterList? {
+  public var bridged: BridgedParameterList? {
+    if self == nil {
+      return nil
+    }
+    return self!.bridged
+  }
+}
+
+extension BridgedParameterList? {
   public var bridged: BridgedNullableParameterList {
     BridgedNullableParameterList(raw: self?.raw)
   }

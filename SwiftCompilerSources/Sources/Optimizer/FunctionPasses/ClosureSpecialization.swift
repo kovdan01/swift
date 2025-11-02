@@ -1007,6 +1007,9 @@ func autodiffSpecializeBranchTracingEnum(
   for enumCase in bteType.getEnumCases(in: topVJP)! {
     let oldPayloadTupleType: Type = enumCase.payload!
     let oldEED: EnumElementDecl = enumCase.enumElementDecl
+    debugLog("AAAAAAAA 00")
+    debugLog("\(oldEED.declContext)")
+    debugLog("AAAAAAAA 01")
 
     let oldPL: ParameterList = oldEED.parameterList
     assert(oldPL.size == 1)
@@ -1085,8 +1088,6 @@ func autodiffSpecializeBranchTracingEnum(
     let oldEED: EnumElementDecl = enumCase.enumElementDecl
     let newPL: ParameterList = newPLs[idx]
     let newEED = EnumElementDecl.createParsed(
-      //astContext, declContext: BridgedEnumDecl(raw: newED.bridged.obj).asDeclContext,
-      //astContext, declContext: DeclContextObj(bridged: BridgedDeclContextObj(newED.bridged.obj)),
       astContext, declContext: newED,
       name: oldEED.baseIdentifier, nameLoc: nil,
       parameterList: newPL,

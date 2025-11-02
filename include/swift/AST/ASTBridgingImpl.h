@@ -177,7 +177,7 @@ OptionalBridgedDeclObj BridgedDeclObj::getParent() const {
   return {unbridged()->getDeclContext()->getAsDecl()};
 }
 
-BridgedDeclContextObj BridgedDeclObj::getDeclContext() const {
+BridgedDeclContext BridgedDeclObj::getDeclContext() const {
   return {unbridged()->getDeclContext()};
 }
 

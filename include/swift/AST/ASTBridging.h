@@ -304,15 +304,6 @@ struct OptionalBridgedDeclObj {
 #endif
 };
 
-struct BridgedDeclContextObj {
-  swift::DeclContext *opaqueValue;
-
-  BRIDGED_INLINE BridgedDeclContextObj(swift::DeclContext *dc) : opaqueValue(dc) {};
-  BRIDGED_INLINE swift::DeclContext *unbridged() const { return opaqueValue; }
-
-  BRIDGED_INLINE SWIFT_IMPORT_UNSAFE BridgedASTContext getASTContext() const { return unbridged()->getASTContext(); }
-};
-
 struct BridgedDeclObj {
   SwiftObject obj;
 
@@ -330,7 +321,7 @@ struct BridgedDeclObj {
   BRIDGED_INLINE swift::SourceLoc getLoc() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedDeclObj getModuleContext() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE OptionalBridgedDeclObj getParent() const;
-  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedDeclContextObj getDeclContext() const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedDeclContext getDeclContext() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedDeclContext asGenericContext() const;
   BRIDGED_INLINE void setImplicit() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedStringRef Type_getName() const;
@@ -1340,9 +1331,6 @@ void BridgedDecl_attachParsedAttrs(BridgedDecl decl, BridgedDeclAttributes attrs
 SWIFT_NAME("BridgedDecl.forEachDeclToHoist(self:_:)")
 void BridgedDecl_forEachDeclToHoist(BridgedDecl decl,
                                     BridgedSwiftClosure closure);
-
-SWIFT_NAME("getter:BridgedDecl.declContext(self:)")
-BridgedDeclContext BridgedDecl_getDeclContext(BridgedDecl decl);
 
 enum ENUM_EXTENSIBILITY_ATTR(closed) BridgedStaticSpelling {
   BridgedStaticSpellingNone,
