@@ -346,8 +346,13 @@ namespace swift {
     }
 
     ~InFlightDiagnostic() {
-      if (IsActive)
+      llvm::errs() << "IIIIIIIIII 00\n";
+      if (IsActive) {
+        llvm::errs() << "IIIIIIIIII 01\n";
         flush();
+        llvm::errs() << "IIIIIIIIII 02\n";
+      }
+      llvm::errs() << "IIIIIIIIII 03\n";
     }
     
     /// Flush the active diagnostic to the diagnostic output engine.

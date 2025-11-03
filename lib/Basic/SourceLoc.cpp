@@ -449,21 +449,35 @@ namespace {
     }
 
     bool operator()(unsigned lhsID, SourceLoc rhsLoc) const {
+      llvm::errs() << "QQQQQQQQQ 00 " << lhsID << "\n";
       auto lhsRange = sourceMgr->getRangeForBuffer(lhsID);
+      llvm::errs() << "QQQQQQQQQ 01\n";
 
       std::less<const char *> pointerCompare;
-      return pointerCompare(
+      llvm::errs() << "QQQQQQQQQ 02 BEGIN\n";
+      llvm::errs() << (const char *)lhsRange.getEnd().getOpaquePointerValue() << "\n";
+      llvm::errs() << "QQQQQQQQQ 02 MIDDLE 00\n";
+      llvm::errs() << (const char *)rhsLoc.getOpaquePointerValue() << "\n";
+      llvm::errs() << "QQQQQQQQQ 02 END\n";
+      auto x = pointerCompare(
           (const char *)lhsRange.getEnd().getOpaquePointerValue(),
           (const char *)rhsLoc.getOpaquePointerValue());
+      llvm::errs() << "QQQQQQQQQ 03 " << (int)x << "\n";
+      return x;
     }
 
     bool operator()(SourceLoc lhsLoc, unsigned rhsID) const {
+      llvm::errs() << "QQQQQQQQQ 04\n";
       auto rhsRange = sourceMgr->getRangeForBuffer(rhsID);
+      llvm::errs() << "QQQQQQQQQ 05\n";
 
       std::less<const char *> pointerCompare;
-      return pointerCompare(
+      llvm::errs() << "QQQQQQQQQ 06\n";
+      auto x = pointerCompare(
           (const char *)lhsLoc.getOpaquePointerValue(),
           (const char *)rhsRange.getEnd().getOpaquePointerValue());
+      llvm::errs() << "QQQQQQQQQ 07\n";
+      return x;
     }
   };
 
@@ -482,11 +496,14 @@ namespace {
 
 std::optional<unsigned>
 SourceManager::findBufferContainingLocInternal(SourceLoc Loc) const {
+  llvm::errs() << "PPPPPPPPPPPP 00\n";
   ASSERT(Loc.isValid());
+  llvm::errs() << "PPPPPPPPPPPP 01\n";
 
   // If the cache is out-of-date, update it now.
   unsigned numBuffers = LLVMSourceMgr.getNumBuffers();
   if (numBuffers != LocCache.numBuffersOriginal) {
+    llvm::errs() << "PPPPPPPPPPPP 05 " << numBuffers << " " << LocCache.numBuffersOriginal << "\n";
     LocCache.sortedBuffers.assign(std::begin(range(1, numBuffers + 1)),
                                   std::end(range(1, numBuffers + 1)));
     LocCache.numBuffersOriginal = numBuffers;
@@ -500,11 +517,13 @@ SourceManager::findBufferContainingLocInternal(SourceLoc Loc) const {
     auto newEnd =
         std::unique(LocCache.sortedBuffers.begin(),
                     LocCache.sortedBuffers.end(), BufferIDSameRange{this});
+    llvm::errs() << "PPPPPPPPPPPP 05 newEnd = " << newEnd - LocCache.sortedBuffers.begin() << "\n";
     LocCache.sortedBuffers.erase(newEnd, LocCache.sortedBuffers.end());
 
     // Forget the last buffer we looked at; it might have been replaced.
     LocCache.lastBufferID = std::nullopt;
   }
+  llvm::errs() << "PPPPPPPPPPPP 06\n";
 
   // Determine whether the source location we're looking for is within the
   // given buffer ID.
@@ -520,19 +539,40 @@ SourceManager::findBufferContainingLocInternal(SourceLoc Loc) const {
 
   // Check the last buffer we looked in.
   if (auto lastBufferID = LocCache.lastBufferID) {
-    if (isInBuffer(*lastBufferID))
+    llvm::errs() << "PPPPPPPPPPPP 07\n";
+    if (isInBuffer(*lastBufferID)) {
+      llvm::errs() << "PPPPPPPPPPPP 08\n";
       return *lastBufferID;
+    }
+    llvm::errs() << "PPPPPPPPPPPP 09\n";
   }
+  llvm::errs() << "PPPPPPPPPPPP 10 size = " << LocCache.sortedBuffers.size() << ", data = " << LocCache.sortedBuffers.data() << "\n";
 
   // Search the sorted list of buffer IDs.
-  auto found = std::lower_bound(LocCache.sortedBuffers.begin(),
-                                LocCache.sortedBuffers.end(), Loc,
+  // auto found = std::lower_bound(LocCache.sortedBuffers.begin(),
+  //                               LocCache.sortedBuffers.end(), Loc,
+  //                               BufferIDRangeComparison{this});
+  auto found = llvm::lower_bound(LocCache.sortedBuffers, Loc,
                                 BufferIDRangeComparison{this});
 
+  llvm::errs() << "PPPPPPPPPPPP 02 BEGIN\n";
+  if (!LocCache.sortedBuffers.empty()) {
+    llvm::errs() << (int)BufferIDRangeComparison{this}(LocCache.sortedBuffers[0], Loc) << "\n";
+    llvm::errs() << "PPPPPPPPPPPP 02 MIDDLE\n";
+    llvm::errs() << (int)BufferIDRangeComparison{this}(Loc, LocCache.sortedBuffers[0]) << "\n";
+  }
+  llvm::errs() << "PPPPPPPPPPPP 02 END\n";
   // If the location was past the range covered by source buffers or
   // is not within any of the source buffers, fail.
-  if (found == LocCache.sortedBuffers.end() || !isInBuffer(*found))
+  if (found == LocCache.sortedBuffers.end()) {
+    llvm::errs() << "PPPPPPPPPPPP 03 00 size = " << LocCache.sortedBuffers.size() << ", data = " << LocCache.sortedBuffers.data() << "\n";
     return std::nullopt;
+  }
+  if (!isInBuffer(*found)) {
+    llvm::errs() << "PPPPPPPPPPPP 03 01\n";
+    return std::nullopt;
+  }
+  llvm::errs() << "PPPPPPPPPPPP 04\n";
 
   // Cache the buffer ID we just found, because the next location is likely to
   // be close by.
@@ -541,7 +581,9 @@ SourceManager::findBufferContainingLocInternal(SourceLoc Loc) const {
 }
 
 unsigned SourceManager::findBufferContainingLoc(SourceLoc Loc) const {
+  llvm::errs() << "OOOOOOOOOOO 00\n";
   auto Id = findBufferContainingLocInternal(Loc);
+  llvm::errs() << "OOOOOOOOOOO 01\n";
   if (Id.has_value())
     return *Id;
   llvm_unreachable("no buffer containing location found");
@@ -635,10 +677,16 @@ void SourceRange::dump(const SourceManager &SM) const {
 CharSourceRange::CharSourceRange(const SourceManager &SM, SourceLoc Start,
                                  SourceLoc End)
     : Start(Start) {
+  llvm::errs() << "\nLLLLLLLLLL 00\n";
   assert(Start.isValid() == End.isValid() &&
          "Start and end should either both be valid or both be invalid!");
-  if (Start.isValid())
+  llvm::errs() << "LLLLLLLLLL 01\n";
+  if (Start.isValid()) {
+    llvm::errs() << "LLLLLLLLLL 02\n";
     ByteLength = SM.getByteDistance(Start, End);
+    llvm::errs() << "LLLLLLLLLL 03\n";
+  }
+  llvm::errs() << "LLLLLLLLLL 04\n";
 }
 
 void CharSourceRange::print(raw_ostream &OS, const SourceManager &SM,

@@ -230,16 +230,22 @@ detail::ActiveDiagnostic &InFlightDiagnostic::getActiveDiag() const {
 
 InFlightDiagnostic &InFlightDiagnostic::highlight(SourceRange R) {
   assert(IsActive && "Cannot modify an inactive diagnostic");
-  if (Engine && R.isValid())
+  if (Engine && R.isValid()) {
+    llvm::errs() << "KKKKKKKKKK 02\n";
     getDiag().addRange(toCharSourceRange(Engine->SourceMgr, R));
+    llvm::errs() << "KKKKKKKKKK 03\n";
+  }
   return *this;
 }
 
 InFlightDiagnostic &InFlightDiagnostic::highlightChars(SourceLoc Start,
                                                        SourceLoc End) {
   assert(IsActive && "Cannot modify an inactive diagnostic");
-  if (Engine && Start.isValid())
+  if (Engine && Start.isValid()) {
+    llvm::errs() << "KKKKKKKKKK 00\n";
     getDiag().addRange(toCharSourceRange(Engine->SourceMgr, Start, End));
+    llvm::errs() << "KKKKKKKKKK 01\n";
+  }
   return *this;
 }
 
@@ -545,12 +551,20 @@ InFlightDiagnostic::wrapIn(const Diagnostic &wrapper) {
 }
 
 void InFlightDiagnostic::flush() {
-  if (!IsActive)
+  llvm::errs() << "JJJJJJJJJJJ 00\n";
+  if (!IsActive) {
+    llvm::errs() << "JJJJJJJJJJJ 01\n";
     return;
+  }
+  llvm::errs() << "JJJJJJJJJJJ 02\n";
   
   IsActive = false;
-  if (Engine)
+  if (Engine) {
+    llvm::errs() << "JJJJJJJJJJJ 03\n";
     Engine->endDiagnostic(*this);
+    llvm::errs() << "JJJJJJJJJJJ 04\n";
+  }
+  llvm::errs() << "JJJJJJJJJJJ 05\n";
 }
 
 void Diagnostic::addChildNote(Diagnostic &&D) {

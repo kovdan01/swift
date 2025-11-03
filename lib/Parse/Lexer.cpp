@@ -2875,9 +2875,16 @@ Token Lexer::getTokenAtLocation(const SourceManager &SM, SourceLoc Loc,
     return Token();
 
   // Figure out which buffer contains this location.
+  llvm::errs() << "NNNNNNNNNN 00 BEGIN\n";
+  // Loc.dump(SM);
+  // llvm::errs() << "\nNNNNNNNNNN 00 END\n";
   int BufferID = SM.findBufferContainingLoc(Loc);
-  if (BufferID < 0)
+  llvm::errs() << "NNNNNNNNNN 01\n";
+  if (BufferID < 0) {
+    llvm::errs() << "NNNNNNNNNN 02\n";
     return Token();
+  }
+  llvm::errs() << "NNNNNNNNNN 03\n";
   
   // Use fake language options; language options only affect validity
   // and the exact token produced.
@@ -3015,7 +3022,12 @@ Restart:
 }
 
 SourceLoc Lexer::getLocForEndOfToken(const SourceManager &SM, SourceLoc Loc) {
-  return Loc.getAdvancedLocOrInvalid(getTokenAtLocation(SM, Loc).getLength());
+  llvm::errs() << "MMMMMMMMM 00\n";
+  auto x = getTokenAtLocation(SM, Loc);
+  llvm::errs() << "MMMMMMMMM 01\n";
+  auto y = x.getLength();
+  llvm::errs() << "MMMMMMMMM 02\n";
+  return Loc.getAdvancedLocOrInvalid(y);//getTokenAtLocation(SM, Loc).getLength());
 }
 
 

@@ -61,6 +61,7 @@ static bool hasFixFor(const Solution &solution, ConstraintLocator *locator) {
 FailureDiagnostic::~FailureDiagnostic() {}
 
 bool FailureDiagnostic::diagnose(bool asNote) {
+  llvm::errs() << "FFFFFFFFF 00\n";
   return asNote ? diagnoseAsNote() : diagnoseAsError();
 }
 
@@ -6292,6 +6293,7 @@ bool ExtraneousArgumentsFailure::diagnoseSingleExtraArgument() const {
 }
 
 bool InaccessibleMemberFailure::diagnoseAsError() {
+  llvm::errs() << "GGGGGGGGGG 00\n";
   auto anchor = getRawAnchor();
   // Let's try to avoid over-diagnosing chains of inaccessible
   // members e.g.:
@@ -6328,16 +6330,24 @@ bool InaccessibleMemberFailure::diagnoseAsError() {
   auto loc = nameLoc.isValid() ? nameLoc.getStartLoc() : ::getLoc(anchor);
   auto accessLevel = Member->getFormalAccessScope().accessLevelForDiagnostics();
   if (auto *CD = dyn_cast<ConstructorDecl>(Member)) {
+    llvm::errs() << "HHHHHHHH 00\n";
     emitDiagnosticAt(loc, diag::init_candidate_inaccessible,
                      CD->getResultInterfaceType(), accessLevel)
         .highlight(nameLoc.getSourceRange());
+    llvm::errs() << "HHHHHHHH 01\n";
   } else {
+    llvm::errs() << "HHHHHHHH 02\n";
     emitDiagnosticAt(loc, diag::candidate_inaccessible, Member,
                      accessLevel)
         .highlight(nameLoc.getSourceRange());
+    llvm::errs() << "HHHHHHHH 03\n";
   }
 
+  {
+  llvm::errs() << "HHHHHHHH 04\n";
   emitDiagnosticAt(Member, diag::decl_declared_here, Member);
+  llvm::errs() << "HHHHHHHH 05\n";
+  }
   return true;
 }
 

@@ -556,6 +556,7 @@ public:
   virtual bool coalesceAndDiagnose(const Solution &solution,
                                    ArrayRef<ConstraintFix *> secondaryFixes,
                                    bool asNote = false) const {
+    llvm::errs() << "DDDDDDDDD 00\n";
     return diagnose(solution, asNote);
   }
 
@@ -858,6 +859,7 @@ public:
   bool coalesceAndDiagnose(const Solution &solution,
                            ArrayRef<ConstraintFix *> secondaryFixes,
                            bool asNote = false) const override {
+    llvm::errs() << "DDDDDDDDD 01\n";
     // If the from type or to type is a placeholder type that corresponds to an
     // ErrorExpr, the issue has already been diagnosed. There's no need to
     // produce another diagnostic for the contextual mismatch complaining that

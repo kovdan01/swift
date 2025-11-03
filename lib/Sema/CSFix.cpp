@@ -657,6 +657,7 @@ getStructuralTypeContext(const Solution &solution, ConstraintLocator *locator) {
 bool AllowTupleTypeMismatch::coalesceAndDiagnose(
     const Solution &solution, ArrayRef<ConstraintFix *> fixes,
     bool asNote) const {
+  llvm::errs() << "DDDDDDDDD 02\n";
   llvm::SmallVector<unsigned, 4> indices;
   if (isElementMismatch())
     indices.push_back(*Index);
@@ -705,6 +706,7 @@ AllowTupleTypeMismatch::create(ConstraintSystem &cs, Type lhs, Type rhs,
 bool AllowFunctionTypeMismatch::coalesceAndDiagnose(
     const Solution &solution, ArrayRef<ConstraintFix *> fixes,
     bool asNote) const {
+  llvm::errs() << "DDDDDDDDD 03\n";
   llvm::SmallVector<unsigned, 4> indices{ParamIndex};
 
   for (auto fix : fixes) {
@@ -793,6 +795,7 @@ AllowFunctionTypeMismatch::create(ConstraintSystem &cs, Type lhs, Type rhs,
 bool GenericArgumentsMismatch::coalesceAndDiagnose(
     const Solution &solution, ArrayRef<ConstraintFix *> secondaryFixes,
     bool asNote) const {
+  llvm::errs() << "DDDDDDDDD 04\n";
   std::set<unsigned> scratch(getMismatches().begin(), getMismatches().end());
 
   for (auto *fix : secondaryFixes) {
@@ -1199,6 +1202,7 @@ MoveOutOfOrderArgument *MoveOutOfOrderArgument::create(
 bool AllowInaccessibleMember::diagnose(const Solution &solution,
                                        bool asNote) const {
   InaccessibleMemberFailure failure(solution, getMember(), getLocator());
+  llvm::errs() << "EEEEEEEEE 00\n";
   return failure.diagnose(asNote);
 }
 
@@ -1577,6 +1581,7 @@ CollectionElementContextualMismatch::create(ConstraintSystem &cs, Type srcType,
 bool DefaultGenericArgument::coalesceAndDiagnose(
     const Solution &solution, ArrayRef<ConstraintFix *> fixes,
     bool asNote) const {
+  llvm::errs() << "DDDDDDDDD 05\n";
   llvm::SmallVector<GenericTypeParamType *, 4> missingParams{Param};
 
   for (auto *otherFix : fixes) {

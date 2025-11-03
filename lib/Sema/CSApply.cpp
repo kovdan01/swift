@@ -9084,8 +9084,12 @@ bool ConstraintSystem::applySolutionFixes(const Solution &solution) {
         auto *primaryFix = fixes[0];
         ArrayRef<ConstraintFix *> secondaryFixes{fixes.begin() + 1, fixes.end()};
 
+        llvm::errs() << "CCCCCCCCC 00\n";
+        primaryFix->dump();
+        llvm::errs() << "CCCCCCCCC 01\n";
         auto diagnosed =
             primaryFix->coalesceAndDiagnose(solution, secondaryFixes);
+        llvm::errs() << "CCCCCCCCC 02\n";
         if (!primaryFix->isFatal()) {
           assert(diagnosed && "warnings should always be diagnosed");
           (void)diagnosed;
@@ -9865,7 +9869,17 @@ ConstraintSystem::applySolution(Solution &solution,
     if (shouldSuppressDiagnostics())
       return std::nullopt;
 
+    llvm::errs() << "AAAAAAA 00\n";
+    solution.dump();
+    llvm::errs() << "AAAAAAA 01\n";
+    for (const auto &[idx, fix] : llvm::enumerate(solution.Fixes)) {
+      llvm::errs() << "AAAAAAA idx = " << idx << " BEGIN\n";
+      fix->dump();
+      llvm::errs() << "AAAAAAA idx = " << idx << " END\n";
+    }
+    llvm::errs() << "AAAAAAA 02\n";
     bool diagnosedErrorsViaFixes = applySolutionFixes(solution);
+    llvm::errs() << "BBBBBBB 00\n";
     bool canApplySolution = true;
     for (const auto fix : solution.Fixes) {
       if (fix->isFatal())
