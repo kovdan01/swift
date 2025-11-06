@@ -158,6 +158,10 @@ param
   [ValidatePattern('^\d+(\.\d+)*$')]
   [string] $SCCacheVersion = "0.10.0",
 
+  # Build with CAS
+  [switch] $EnableCAS = $false,
+  [string] $CASPath = "$ImageRoot\cas",
+
   # SBoM Support
   [switch] $IncludeSBoM = $false,
   [string] $SyftVersion = "1.29.1",
@@ -559,6 +563,10 @@ if (-not $PinnedBuild) {
 }
 
 $PinnedToolchain = [IO.Path]::GetFileNameWithoutExtension($PinnedBuild)
+
+if ($EnableCAS -and ($UseHostToolchain -or ($PinnedVersion -ne "0.0.0"))) {
+  throw "CAS currently requires using a main-branch pinned toolchain."
+}
 
 $HostPlatform = switch ($HostArchName) {
   "AMD64" { $KnownPlatforms[$HostOS.ToString() + "X64"] }
@@ -1616,6 +1624,14 @@ function Build-CMakeProject {
             @("/GS-", "/Gw", "/Gy", "/Oy", "/Oi", "/Zc:inline")
           }
 
+          if ($EnableCAS -and $UsePinnedCompilers.Contains("C")) {
+            $CFLAGS += if ($UseGNUDriver) {
+              @("-fdepscan=inline", "-fdepscan-include-tree", "-Xclang", "-fcas-path", "-Xclang", $CASPath)
+            } else {
+              @("/clang:-fdepscan=inline", "/clang:-fdepscan-include-tree", "-Xclang", "-fcas-path", "-Xclang", $CASPath)
+            }
+          }
+
           if ($DebugInfo) {
             if ($UsePinnedCompilers.Contains("C") -or $UseBuiltCompilers.Contains("C")) {
               if ($CDebugFormat -eq "dwarf") {
@@ -1654,6 +1670,14 @@ function Build-CMakeProject {
           } else {
             # clang-cl does not support the /Zc:preprocessor flag.
             @("/GS-", "/Gw", "/Gy", "/Oy", "/Oi", "/Zc:inline", "/Zc:__cplusplus")
+          }
+
+          if ($EnableCAS -and $UsePinnedCompilers.Contains("CXX")) {
+            $CXXFLAGS += if ($UseGNUDriver) {
+              @("-fdepscan=inline", "-fdepscan-include-tree", "-Xclang", "-fcas-path", "-Xclang", $CASPath)
+            } else {
+              @("/clang:-fdepscan=inline", "/clang:-fdepscan-include-tree", "-Xclang", "-fcas-path", "-Xclang", $CASPath)
+            }
           }
 
           if ($DebugInfo) {
@@ -2203,6 +2227,12 @@ function Get-CompilersDefines([Hashtable] $Platform, [string] $Variant, [switch]
     $SwiftFlags += @("-use-ld=lld");
   }
 
+  $CMakeStaticLibPrefixSwiftDefine = if ((Get-PinnedToolchainVersion) -eq "0.0.0") {
+    @{ CMAKE_STATIC_LIBRARY_PREFIX_Swift = "lib"; }
+  } else {
+    @{}
+  }
+
   return $TestDefines + $DebugDefines + @{
     CLANG_TABLEGEN = (Join-Path -Path $BuildTools -ChildPath "clang-tblgen.exe");
     CLANG_TIDY_CONFUSABLE_CHARS_GEN = (Join-Path -Path $BuildTools -ChildPath "clang-tidy-confusable-chars-gen.exe");
@@ -2254,7 +2284,7 @@ function Get-CompilersDefines([Hashtable] $Platform, [string] $Variant, [switch]
     SWIFT_STDLIB_ASSERTIONS = "NO";
     SWIFTSYNTAX_ENABLE_ASSERTIONS = "NO";
     "cmark-gfm_DIR" = "$($Platform.ToolchainInstallRoot)\usr\lib\cmake";
-  }
+  } + $CMakeStaticLibPrefixSwiftDefine
 }
 
 function Build-Compilers([Hashtable] $Platform, [string] $Variant) {
@@ -3974,13 +4004,38 @@ function Build-Inspect([Hashtable] $Platform) {
     }
 }
 
-function Build-DocC() {
-  Build-SPMProject `
-    -Action Build `
+function Build-SymbolKit([hashtable] $Platform) {
+  Build-CMakeProject `
+    -Src $SourceCache\swift-docc-symbolkit `
+    -Bin $(Get-ProjectBinaryCache $Platform SymbolKit) `
+    -BuildTargets default `
+    -Platform $Platform `
+    -UseBuiltCompilers C,Swift `
+    -SwiftSDK (Get-SwiftSDK -OS $Platform.OS -Identifier $Platform.DefaultSDK) `
+    -Defines @{
+      CMAKE_STATIC_LIBRARY_PREFIX_Swift = "lib";
+    }
+}
+
+function Build-DocC([hashtable] $Platform) {
+  Build-CMakeProject `
     -Src $SourceCache\swift-docc `
-    -Bin $(Get-ProjectBinaryCache $BuildPlatform DocC) `
-    -Platform $BuildPlatform `
-    --product docc
+    -Bin (Get-ProjectBinaryCache $BuildPlatform DocC) `
+    -InstallTo "$($Platform.ToolchainInstallRoot)\usr" `
+    -Platform $Platform `
+    -UseBuiltCompilers C,Swift `
+    -SwiftSDK (Get-SwiftSDK -OS $Platform.OS -Identifier $Platform.DefaultSDK) `
+    -Defines @{
+      BUILD_SHARED_LIBS = "YES";
+      CMAKE_STATIC_LIBRARY_PREFIX_Swift = "lib";
+      ArgumentParser_DIR = (Get-ProjectCMakeModules $Platform ArgumentParser);
+      SwiftASN1_DIR = (Get-ProjectCMakeModules $Platform ASN1);
+      SwiftCrypto_DIR = (Get-ProjectCMakeModules $Platform Crypto);
+      SwiftMarkdown_DIR = (Get-ProjectCMakeModules $Platform Markdown);
+      LMDB_DIR = (Get-ProjectCMakeModules $Platform LMDB);
+      SymbolKit_DIR = (Get-ProjectCMakeModules $Platform SymbolKit);
+      "cmark-gfm_DIR" = "$($Platform.ToolchainInstallRoot)\usr\lib\cmake";
+    }
 }
 
 function Test-PackageManager() {
@@ -4351,7 +4406,8 @@ if (-not $SkipBuild -and $IncludeNoAsserts) {
   Build-NoAssertsToolchain
 }
 
-if (-not $SkipBuild -and -not $IsCrossCompiling) {
+if (-not $SkipBuild) {
+  Invoke-BuildStep Build-SymbolKit $HostPlatform
   Invoke-BuildStep Build-DocC $HostPlatform
 }
 

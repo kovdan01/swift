@@ -461,13 +461,6 @@ static void installCodingKeysIfNecessary(NominalTypeDecl *NTD) {
   (void)evaluateOrDefault(NTD->getASTContext().evaluator, req, {});
 }
 
-// TODO(distributed): same ugly hack as Codable does...
-static void installDistributedActorIfNecessary(NominalTypeDecl *NTD) {
-  auto req =
-    ResolveImplicitMemberRequest{NTD, ImplicitMemberAction::ResolveDistributedActor};
-  (void)evaluateOrDefault(NTD->getASTContext().evaluator, req, {});
-}
-
 // Check for static properties that produce empty option sets
 // using a rawValue initializer with a value of '0'
 static void checkForEmptyOptionSet(const VarDecl *VD) {
@@ -1071,8 +1064,15 @@ CheckRedeclarationRequest::evaluate(Evaluator &eval, ValueDecl *current,
                     return req->getName() == VD->getName();
                   });
             }
-            declToDiagnose->diagnose(diag::invalid_redecl_implicit, current,
-                                     isProtocolRequirement, other);
+            auto *conflictDecl = current == declToDiagnose ? other : current;
+            if (conflictDecl->isSpecialDistributedActorProperty()) {
+              declToDiagnose->diagnose(
+                  diag::distributed_actor_user_defined_special_property,
+                  other->getName());
+            } else {
+              declToDiagnose->diagnose(diag::invalid_redecl_implicit, current,
+                                       isProtocolRequirement, other);
+            }
 
             // Emit a specialized note if the one of the declarations is
             // the backing storage property ('_foo') or projected value
@@ -2388,7 +2388,7 @@ public:
     checkGlobalIsolation(VD);
 
     // Visit auxiliary decls first
-    VD->visitAuxiliaryDecls([&](VarDecl *var) {
+    VD->visitAuxiliaryVars(/*forNameLookup*/ false, [&](VarDecl *var) {
       this->visitBoundVariable(var);
     });
 
@@ -3082,7 +3082,6 @@ public:
     TypeChecker::addImplicitConstructors(SD);
 
     installCodingKeysIfNecessary(SD);
-    installDistributedActorIfNecessary(SD);
 
     TypeChecker::checkDeclAttributes(SD);
 
@@ -4125,9 +4124,10 @@ void TypeChecker::checkParameterList(ParameterList *params,
 
     if (!param->isInvalid()) {
       auto *SF = owner->getParentSourceFile();
-      param->visitAuxiliaryDecls([&](VarDecl *auxiliaryDecl) {
-        if (!isa<ParamDecl>(auxiliaryDecl))
-          DeclChecker(SF->getASTContext(), SF).visitBoundVariable(auxiliaryDecl);
+      auto &ctx = SF->getASTContext();
+      param->visitAuxiliaryVars(/*forNameLookup*/ false, [&](VarDecl *auxVar) {
+        if (!isa<ParamDecl>(auxVar))
+          DeclChecker(ctx, SF).visitBoundVariable(auxVar);
       });
     }
 

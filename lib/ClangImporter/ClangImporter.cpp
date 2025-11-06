@@ -1563,9 +1563,20 @@ std::unique_ptr<ClangImporter> ClangImporter::create(
   importer->Impl.setObjectForKeyedSubscript
     = clangContext.Selectors.getSelector(2, setObjectForKeyedSubscriptIdents);
 
+  // Can't inherit implicit modules from main module, because it isn't loaded yet.
+  // Add the Swift module, because it is important for safe interop wrappers.
+  Identifier stdlibName =
+      importer->Impl.SwiftContext.getIdentifier(STDLIB_NAME);
+  ImportPath::Raw path =
+      importer->Impl.SwiftContext.AllocateCopy<Located<Identifier>>(
+          Located<Identifier>(stdlibName, SourceLoc()));
+  ImplicitImportInfo implicitImportInfo;
+  implicitImportInfo.AdditionalUnloadedImports.emplace_back(
+      UnloadedImportedModule(ImportPath(path), ImportKind::Module));
+
   // Set up the imported header module.
   auto *importedHeaderModule = ModuleDecl::create(
-      ctx.getIdentifier(CLANG_HEADER_MODULE_NAME), ctx,
+      ctx.getIdentifier(CLANG_HEADER_MODULE_NAME), ctx, implicitImportInfo,
       [&](ModuleDecl *importedHeaderModule, auto addFile) {
         importer->Impl.ImportedHeaderUnit = new (ctx)
             ClangModuleUnit(*importedHeaderModule, importer->Impl, nullptr);
@@ -2418,10 +2429,6 @@ ModuleDecl *ClangImporter::Implementation::loadModule(
   ModuleDecl *MD = nullptr;
   ASTContext &ctx = getNameImporter().getContext();
 
-  // `CxxStdlib` is the only accepted spelling of the C++ stdlib module name.
-  if (path.front().Item.is("std") ||
-      path.front().Item.str().starts_with("std_"))
-    return nullptr;
   if (path.front().Item == ctx.Id_CxxStdlib) {
     ImportPath::Builder adjustedPath(ctx.getIdentifier("std"), importLoc);
     adjustedPath.append(path.getSubmodulePath());
@@ -8315,16 +8322,39 @@ bool importer::isViewType(const clang::CXXRecordDecl *decl) {
   return !hasOwnedValueAttr(decl) && hasPointerInSubobjects(decl);
 }
 
-static bool hasCopyTypeOperations(const clang::CXXRecordDecl *decl) {
-  if (decl->hasSimpleCopyConstructor())
-    return true;
+const clang::CXXConstructorDecl *
+importer::findCopyConstructor(const clang::CXXRecordDecl *decl) {
+  for (auto ctor : decl->ctors()) {
+    if (ctor->isCopyConstructor() &&
+        // FIXME: Support default arguments (rdar://142414553)
+        ctor->getNumParams() == 1 && ctor->getAccess() == clang::AS_public &&
+        !ctor->isDeleted() && !ctor->isIneligibleOrNotSelected())
+      return ctor;
+  }
+  return nullptr;
+}
 
-  return llvm::any_of(decl->ctors(), [](clang::CXXConstructorDecl *ctor) {
-    return ctor->isCopyConstructor() && !ctor->isDeleted() &&
-           !ctor->isIneligibleOrNotSelected() &&
-           // FIXME: Support default arguments (rdar://142414553)
-           ctor->getNumParams() == 1 &&
-           ctor->getAccess() == clang::AccessSpecifier::AS_public;
+static bool hasCopyTypeOperations(const clang::CXXRecordDecl *decl,
+                                  ClangImporter::Implementation *importerImpl) {
+  if (!decl->hasSimpleCopyConstructor()) {
+    auto *copyCtor = findCopyConstructor(decl);
+    if (!copyCtor)
+      return false;
+
+    if (!copyCtor->isDefaulted())
+      return true;
+  }
+
+  // If the copy constructor is defaulted or implicitly declared, we should only
+  // import the type as copyable if all its fields are also copyable
+  // FIXME: we should also look at the bases
+  return llvm::none_of(decl->fields(), [&](clang::FieldDecl *field) {
+    if (const auto *rd = field->getType()->getAsRecordDecl()) {
+      return (!field->getType()->isReferenceType() &&
+              !field->getType()->isPointerType() &&
+              recordHasMoveOnlySemantics(rd, importerImpl));
+    }
+    return false;
   });
 }
 
@@ -8523,8 +8553,8 @@ CxxValueSemantics::evaluate(Evaluator &evaluator,
     return CxxValueSemanticsKind::Copyable;
   }
 
-  bool isCopyable = !hasNonCopyableAttr(cxxRecordDecl) && 
-                    hasCopyTypeOperations(cxxRecordDecl);
+  bool isCopyable = !hasNonCopyableAttr(cxxRecordDecl) &&
+                    hasCopyTypeOperations(cxxRecordDecl, importerImpl);
   bool isMovable = hasMoveTypeOperations(cxxRecordDecl);
 
   if (!hasDestroyTypeOperations(cxxRecordDecl) || (!isCopyable && !isMovable)) {
@@ -8694,56 +8724,6 @@ SourceLoc swift::extractNearestSourceLoc(SafeUseOfCxxDeclDescriptor desc) {
 }
 
 void swift::simple_display(llvm::raw_ostream &out,
-                           ClangTypeExplicitSafetyDescriptor desc) {
-  auto qt = static_cast<clang::QualType>(desc.type);
-  out << "Checking if type '" << qt.getAsString() << "' is explicitly safe.\n";
-}
-
-SourceLoc swift::extractNearestSourceLoc(ClangTypeExplicitSafetyDescriptor desc) {
-  return SourceLoc();
-}
-
-ExplicitSafety ClangTypeExplicitSafety::evaluate(
-    Evaluator &evaluator, ClangTypeExplicitSafetyDescriptor desc) const {
-  auto clangType = static_cast<clang::QualType>(desc.type);
-
-  // Handle pointers.
-  auto pointeeType = clangType->getPointeeType();
-  if (!pointeeType.isNull()) {
-    // Function pointers are okay.
-    if (pointeeType->isFunctionType())
-      return ExplicitSafety::Safe;
-
-    // Pointers to record types are okay if they come in as foreign reference
-    // types.
-    if (auto *recordDecl = pointeeType->getAsRecordDecl()) {
-      if (hasImportAsRefAttr(recordDecl))
-        return ExplicitSafety::Safe;
-    }
-
-    // All other pointers are considered unsafe.
-    return ExplicitSafety::Unsafe;
-  }
-
-  // Handle records recursively.
-  if (auto recordDecl = clangType->getAsTagDecl()) {
-    // If we reached this point the types is not imported as a shared reference,
-    // so we don't need to check the bases whether they are shared references.
-    auto req = ClangDeclExplicitSafety({recordDecl, false});
-    if (evaluator.hasActiveRequest(req))
-      // Cycles are allowed in templates, e.g.:
-      //   template <typename>   class Foo { ... }; // throws away template arg
-      //   template <typename T> class Bar : Foo<Bar<T>> { ... };
-      // We need to avoid them here.
-      return ExplicitSafety::Unspecified;
-    return evaluateOrDefault(evaluator, req, ExplicitSafety::Unspecified);
-  }
-
-  // Everything else is safe.
-  return ExplicitSafety::Safe;
-}
-
-void swift::simple_display(llvm::raw_ostream &out,
                            CxxDeclExplicitSafetyDescriptor desc) {
   out << "Checking if '";
   if (auto namedDecl = dyn_cast<clang::NamedDecl>(desc.decl))
@@ -8814,13 +8794,43 @@ CustomRefCountingOperationResult CustomRefCountingOperation::evaluate(
 
 /// Check whether the given Clang type involves an unsafe type.
 static bool hasUnsafeType(Evaluator &evaluator, clang::QualType clangType) {
-  auto req = ClangTypeExplicitSafety({clangType});
-  if (evaluator.hasActiveRequest(req))
-    // If there is a cycle in a type, assume ExplicitSafety is Unspecified,
-    // i.e., not unsafe:
-    return false;
-  return evaluateOrDefault(evaluator, req, ExplicitSafety::Unspecified) ==
-         ExplicitSafety::Unsafe;
+  // Handle pointers.
+  auto pointeeType = clangType->getPointeeType();
+  if (!pointeeType.isNull()) {
+    // Function pointers are okay.
+    if (pointeeType->isFunctionType())
+      return false;
+    
+    // Pointers to record types are okay if they come in as foreign reference
+    // types.
+    if (auto recordDecl = pointeeType->getAsRecordDecl()) {
+      if (hasImportAsRefAttr(recordDecl))
+        return false;
+    }
+    
+    // All other pointers are considered unsafe.
+    return true;
+  }
+
+  // Handle records recursively.
+  if (auto recordDecl = clangType->getAsTagDecl()) {
+    // If we reached this point the types is not imported as a shared reference,
+    // so we don't need to check the bases whether they are shared references.
+    auto safety = evaluateOrDefault(
+        evaluator, ClangDeclExplicitSafety({recordDecl, false}),
+        ExplicitSafety::Unspecified);
+    switch (safety) {
+      case ExplicitSafety::Unsafe:
+        return true;
+        
+      case ExplicitSafety::Safe:
+      case ExplicitSafety::Unspecified:
+        return false;        
+    }
+  }
+    
+  // Everything else is safe.
+  return false;
 }
 
 ExplicitSafety
@@ -8858,29 +8868,6 @@ ClangDeclExplicitSafety::evaluate(Evaluator &evaluator,
           ClangTypeEscapability({recordDecl->getTypeForDecl(), nullptr}),
           CxxEscapability::Unknown) != CxxEscapability::Unknown)
     return ExplicitSafety::Safe;
-
-  // A template class is unsafe if any of its type arguments are unsafe.
-  // Note that this does not rely on the record being defined.
-  if (const auto *ctsd =
-          dyn_cast<clang::ClassTemplateSpecializationDecl>(recordDecl)) {
-    for (auto arg : ctsd->getTemplateArgs().asArray()) {
-      switch (arg.getKind()) {
-      case clang::TemplateArgument::Type:
-        if (hasUnsafeType(evaluator, arg.getAsType()))
-          return ExplicitSafety::Unsafe;
-        break;
-      case clang::TemplateArgument::Pack:
-        for (auto pkArg : arg.getPackAsArray()) {
-          if (pkArg.getKind() == clang::TemplateArgument::Type &&
-              hasUnsafeType(evaluator, pkArg.getAsType()))
-            return ExplicitSafety::Unsafe;
-        }
-        break;
-      default:
-        continue;
-      }
-    }
-  }
   
   // If we don't have a definition, leave it unspecified.
   recordDecl = recordDecl->getDefinition();
@@ -8894,7 +8881,7 @@ ClangDeclExplicitSafety::evaluate(Evaluator &evaluator,
         return ExplicitSafety::Unsafe;
     }
   }
-
+  
   // Check the fields.
   for (auto field : recordDecl->fields()) {
     if (hasUnsafeType(evaluator, field->getType()))
@@ -8986,7 +8973,7 @@ bool importer::isCxxStdModule(StringRef moduleName, bool IsSystem) {
 ImportPath::Builder ClangImporter::Implementation::getSwiftModulePath(const clang::Module *M) {
   ImportPath::Builder builder;
   while (M) {
-    if (!M->isSubModule() && isCxxStdModule(M))
+    if (!M->isSubModule() && M->Name == "std")
       builder.push_back(SwiftContext.Id_CxxStdlib);
     else
       builder.push_back(SwiftContext.getIdentifier(M->Name));

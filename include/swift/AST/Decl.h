@@ -374,6 +374,12 @@ bool conflicting(ASTContext &ctx,
                  bool *wouldConflictInSwift5 = nullptr,
                  bool skipProtocolExtensionCheck = false);
 
+/// The kind of special compiler synthesized property in a \c distributed actor,
+/// currently this includes \c id and \c actorSystem.
+enum class SpecialDistributedActorProperty {
+  Id, ActorSystem
+};
+
 /// The kind of artificial main to generate.
 enum class ArtificialMainKind : uint8_t {
   NSApplicationMain,
@@ -3056,6 +3062,12 @@ public:
   /// `distributed var get { }` accessors.
   bool isDistributedGetAccessor() const;
 
+  /// Whether this is the special synthesized 'id' or 'actorSystem' property
+  /// of a distributed actor. If \p onlyCheckName is set, then any
+  /// matching user-defined property with the name is also considered.
+  std::optional<SpecialDistributedActorProperty>
+  isSpecialDistributedActorProperty(bool onlyCheckName = false) const;
+
   bool hasName() const { return bool(Name); }
   bool isOperator() const { return Name.isOperator(); }
 
@@ -5430,7 +5442,6 @@ enum class KnownDerivableProtocolKind : uint8_t {
   Decodable,
   AdditiveArithmetic,
   Differentiable,
-  Identifiable,
   Actor,
   DistributedActor,
   DistributedActorSystem,
@@ -6724,13 +6735,18 @@ public:
     Bits.VarDecl.IsDebuggerVar = IsDebuggerVar;
   }
 
-  /// Visit all auxiliary declarations to this VarDecl.
+  /// Visit all auxiliary variables for this VarDecl.
   ///
-  /// An auxiliary declaration is a declaration synthesized by the compiler to support
-  /// this VarDecl, such as synthesized property wrapper variables.
+  /// An auxiliary variable is one that is synthesized by the compiler to
+  /// support this VarDecl, such as synthesized property wrapper variables.
   ///
-  /// \note this function only visits auxiliary decls that are not part of the AST.
-  void visitAuxiliaryDecls(llvm::function_ref<void(VarDecl *)>) const;
+  /// \param forNameLookup If \c true, will only visit auxiliary variables that
+  /// may appear in name lookup results.
+  ///
+  /// \note this function only visits auxiliary variables that are not part of
+  /// the AST.
+  void visitAuxiliaryVars(bool forNameLookup,
+                          llvm::function_ref<void(VarDecl *)>) const;
 
   /// Is this the synthesized storage for a 'lazy' property?
   bool isLazyStorageProperty() const {
@@ -8117,15 +8133,6 @@ public:
     return getBodyKind() == BodyKind::SILSynthesize &&
            getSILSynthesizeKind() == SILSynthesizeKind::DistributedActorFactory;
   }
-
-  /// Return a vector of distributed requirements that this distributed method
-  /// is implementing.
-  ///
-  /// If the method is witness to multiple requirements this is incorrect and
-  /// should be diagnosed during type-checking as it may make remoteCalls
-  /// ambiguous.
-  llvm::ArrayRef<ValueDecl *>
-  getDistributedMethodWitnessedProtocolRequirements() const;
 
   /// Determines whether this function is a 'remoteCall' function,
   /// which is used as ad-hoc protocol requirement by the

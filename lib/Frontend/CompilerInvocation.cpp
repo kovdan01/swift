@@ -536,7 +536,8 @@ static void PrintArg(raw_ostream &OS, const char *Arg, StringRef TempDir) {
 }
 
 static void ParseModuleInterfaceArgs(ModuleInterfaceOptions &Opts,
-                                     ArgList &Args) {
+                                     ArgList &Args,
+                                     DiagnosticEngine &diags) {
   using namespace options;
 
   Opts.PreserveTypesAsWritten |=
@@ -545,6 +546,7 @@ static void ParseModuleInterfaceArgs(ModuleInterfaceOptions &Opts,
     Args.hasFlag(OPT_alias_module_names_in_module_interface,
                  OPT_disable_alias_module_names_in_module_interface,
                  ::getenv("SWIFT_ALIAS_MODULE_NAMES_IN_INTERFACES"));
+
   Opts.PrintFullConvention |=
     Args.hasArg(OPT_experimental_print_full_convention);
   Opts.DebugPrintInvalidSyntax |=
@@ -557,6 +559,21 @@ static void ParseModuleInterfaceArgs(ModuleInterfaceOptions &Opts,
     if (contents == "spi") {
       Opts.setInterfaceMode(PrintOptions::InterfaceMode::Private);
     }
+  }
+
+  if (Args.hasArgNoClaim(OPT_enable_module_selectors_in_module_interface)
+      || Args.hasArgNoClaim(OPT_disable_module_selectors_in_module_interface)) {
+    Opts.UseModuleSelectors =
+      Args.hasFlag(OPT_enable_module_selectors_in_module_interface,
+                   OPT_disable_module_selectors_in_module_interface,
+                   false);
+  } else if (auto envValue = ::getenv("SWIFT_MODULE_SELECTORS_IN_INTERFACES")) {
+    Opts.UseModuleSelectors = llvm::StringSwitch<bool>(envValue)
+        .CasesLower("false", "no", "off", "0", false)
+        .Default(true);
+  } else {
+    // Any heuristics we might add would go here.
+    Opts.UseModuleSelectors = false;
   }
 }
 
@@ -782,7 +799,8 @@ static bool ParseCASArgs(CASOptions &Opts, ArgList &Args,
                          DiagnosticEngine &Diags,
                          const FrontendOptions &FrontendOpts) {
   using namespace options;
-  Opts.EnableCaching |= Args.hasArg(OPT_cache_compile_job);
+  Opts.EnableCaching |= Args.hasFlag(
+      OPT_cache_compile_job, OPT_no_cache_compile_job, /*Default=*/false);
   Opts.EnableCachingRemarks |= Args.hasArg(OPT_cache_remarks);
   Opts.CacheSkipReplay |= Args.hasArg(OPT_cache_disable_replay);
   if (const Arg *A = Args.getLastArg(OPT_cas_path))
@@ -1483,8 +1501,6 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
   Opts.EnableModuleApiImportRemarks = Args.hasArg(OPT_remark_module_api_import);
   Opts.EnableMacroLoadingRemarks = Args.hasArg(OPT_remark_macro_loading);
   Opts.EnableIndexingSystemModuleRemarks = Args.hasArg(OPT_remark_indexing_system_module);
-
-  Opts.EnableSkipExplicitInterfaceModuleBuildRemarks = Args.hasArg(OPT_remark_skip_explicit_interface_build);
 
   if (Args.hasArg(OPT_experimental_skip_non_exportable_decls)) {
     // Only allow -experimental-skip-non-exportable-decls if either library
@@ -2637,9 +2653,11 @@ static bool ParseDiagnosticArgs(DiagnosticOptions &Opts, ArgList &Args,
   // If no style options are specified, default to Swift style, unless it is
   // under swift caching, which llvm style is preferred because LLVM style
   // replays a lot faster.
-  Opts.PrintedFormattingStyle = Args.hasArg(OPT_cache_compile_job)
-                                    ? DiagnosticOptions::FormattingStyle::LLVM
-                                    : DiagnosticOptions::FormattingStyle::Swift;
+  Opts.PrintedFormattingStyle =
+      Args.hasFlag(OPT_cache_compile_job, OPT_no_cache_compile_job,
+                   /*Default=*/false)
+          ? DiagnosticOptions::FormattingStyle::LLVM
+          : DiagnosticOptions::FormattingStyle::Swift;
   if (const Arg *arg = Args.getLastArg(OPT_diagnostic_style)) {
     StringRef contents = arg->getValue();
     if (contents == "llvm") {
@@ -3389,6 +3407,7 @@ static bool ParseIRGenArgs(IRGenOptions &Opts, ArgList &Args,
                            const FrontendOptions &FrontendOpts,
                            const SILOptions &SILOpts,
                            const LangOptions &LangOpts,
+                           const CASOptions &CASOpts,
                            StringRef SDKPath,
                            StringRef ResourceDir,
                            const llvm::Triple &Triple) {
@@ -3460,6 +3479,9 @@ static bool ParseIRGenArgs(IRGenOptions &Opts, ArgList &Args,
                      A->getAsString(Args), A->getValue());
   }
 
+  if (const Arg *A = Args.getLastArg(options::OPT_debug_module_path))
+    Opts.DebugModulePath = A->getValue();
+  
   for (auto A : Args.getAllArgValues(options::OPT_file_prefix_map)) {
     auto SplitMap = StringRef(A).split('=');
     Opts.FilePrefixMap.addMapping(SplitMap.first, SplitMap.second);
@@ -3628,8 +3650,8 @@ static bool ParseIRGenArgs(IRGenOptions &Opts, ArgList &Args,
 
   Opts.PrintInlineTree |= Args.hasArg(OPT_print_llvm_inline_tree);
   // Always producing all outputs when caching is enabled.
-  Opts.AlwaysCompile |= Args.hasArg(OPT_always_compile_output_files) ||
-                        Args.hasArg(OPT_cache_compile_job);
+  Opts.AlwaysCompile |=
+      Args.hasArg(OPT_always_compile_output_files) || CASOpts.EnableCaching;
 
   Opts.EnableDynamicReplacementChaining |=
       Args.hasArg(OPT_enable_dynamic_replacement_chaining);
@@ -4169,7 +4191,7 @@ bool CompilerInvocation::parseArgs(
     setMainExecutablePath(mainExecutablePath);
   }
 
-  ParseModuleInterfaceArgs(ModuleInterfaceOpts, ParsedArgs);
+  ParseModuleInterfaceArgs(ModuleInterfaceOpts, ParsedArgs, Diags);
   SaveModuleInterfaceArgs(ModuleInterfaceOpts, FrontendOpts, ParsedArgs, Diags);
 
   if (ParseCASArgs(CASOpts, ParsedArgs, Diags, FrontendOpts)) {
@@ -4204,8 +4226,8 @@ bool CompilerInvocation::parseArgs(
   }
 
   if (ParseIRGenArgs(IRGenOpts, ParsedArgs, Diags, FrontendOpts, SILOpts,
-                     LangOpts, getSDKPath(), SearchPathOpts.RuntimeResourcePath,
-                     LangOpts.Target)) {
+                     LangOpts, CASOpts, getSDKPath(),
+                     SearchPathOpts.RuntimeResourcePath, LangOpts.Target)) {
     return true;
   }
 

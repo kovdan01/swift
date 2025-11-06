@@ -69,7 +69,6 @@
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/StmtVisitor.h"
-#include "clang/AST/TemplateBase.h"
 #include "clang/AST/Type.h"
 #include "clang/Basic/Specifiers.h"
 #include "clang/Basic/TargetInfo.h"
@@ -185,6 +184,15 @@ bool importer::recordHasReferenceSemantics(
       CxxRecordSemantics({decl, importerImpl->SwiftContext, importerImpl}),
       {});
   return semanticsKind == CxxRecordSemanticsKind::Reference;
+}
+
+bool importer::recordHasMoveOnlySemantics(
+    const clang::RecordDecl *decl,
+    ClangImporter::Implementation *importerImpl) {
+  auto semanticsKind = evaluateOrDefault(
+      importerImpl->SwiftContext.evaluator,
+      CxxValueSemantics({decl->getTypeForDecl(), importerImpl}), {});
+  return semanticsKind == CxxValueSemanticsKind::MoveOnly;
 }
 
 bool importer::hasImmortalAttrs(const clang::RecordDecl *decl) {
@@ -2096,10 +2104,7 @@ namespace {
     }
 
     bool recordHasMoveOnlySemantics(const clang::RecordDecl *decl) {
-      auto semanticsKind = evaluateOrDefault(
-          Impl.SwiftContext.evaluator,
-          CxxValueSemantics({decl->getTypeForDecl(), &Impl}), {});
-      return semanticsKind == CxxValueSemanticsKind::MoveOnly;
+      return importer::recordHasMoveOnlySemantics(decl, &Impl);
     }
 
     void markReturnsUnsafeNonescapable(AbstractFunctionDecl *fd) {
@@ -2278,13 +2283,9 @@ namespace {
             loc, ArrayRef<InheritedEntry>(), nullptr, dc);
       Impl.ImportedDecls[{decl->getCanonicalDecl(), getVersion()}] = result;
 
-      if (recordHasMoveOnlySemantics(decl)) {
-        if (decl->isInStdNamespace() && decl->getName() == "promise") {
-          // Do not import std::promise.
-          return nullptr;
-        }
-        result->addAttribute(new (Impl.SwiftContext)
-                                 MoveOnlyAttr(/*Implicit=*/true));
+      if (decl->isInStdNamespace() && decl->getName() == "promise" && recordHasMoveOnlySemantics(decl)) {
+        // Do not import std::promise.
+        return nullptr;
       }
 
       // FIXME: Figure out what to do with superclasses in C++. One possible
@@ -2295,6 +2296,34 @@ namespace {
           for (auto base : cxxRecordDecl->bases()) {
             if (auto *baseRecordDecl = base.getType()->getAsCXXRecordDecl()) {
               Impl.importDecl(baseRecordDecl, getVersion());
+            }
+          }
+        }
+      }
+
+      // We have to do this after populating ImportedDecls to avoid importing
+      // the same decl multiple times. Also after we imported the bases.
+      if (const auto *ctsd =
+              dyn_cast<clang::ClassTemplateSpecializationDecl>(decl)) {
+        for (auto arg : ctsd->getTemplateArgs().asArray()) {
+          llvm::SmallVector<clang::TemplateArgument, 1> nonPackArgs;
+          if (arg.getKind() == clang::TemplateArgument::Pack) {
+            auto pack = arg.getPackAsArray();
+            nonPackArgs.assign(pack.begin(), pack.end());
+          } else {
+            nonPackArgs.push_back(arg);
+          }
+          for (auto realArg : nonPackArgs) {
+            if (realArg.getKind() != clang::TemplateArgument::Type)
+              continue;
+            auto SwiftType = Impl.importTypeIgnoreIUO(
+                realArg.getAsType(), ImportTypeKind::Abstract,
+                [](Diagnostic &&diag) {}, false, Bridgeability::None,
+                ImportTypeAttrs());
+            if (SwiftType && SwiftType->isUnsafe()) {
+              auto attr = new (Impl.SwiftContext) UnsafeAttr(/*implicit=*/true);
+              result->getAttrs().add(attr);
+              break;
             }
           }
         }
@@ -2501,6 +2530,11 @@ namespace {
                                 !cxxRecordDecl->isAbstract() &&
                                 (!cxxRecordDecl->hasDefaultConstructor() ||
                                  cxxRecordDecl->ctors().empty());
+      }
+
+      if (recordHasMoveOnlySemantics(decl)) {
+        result->getAttrs().add(new (Impl.SwiftContext)
+                                   MoveOnlyAttr(/*Implicit=*/true));
       }
 
       // TODO: builtin "zeroInitializer" does not work with non-escapable
@@ -3098,15 +3132,13 @@ namespace {
         // instantiate its copy constructor.
         bool isExplicitlyNonCopyable = hasNonCopyableAttr(decl);
 
-        clang::CXXConstructorDecl *copyCtor = nullptr;
-        clang::CXXConstructorDecl *moveCtor = nullptr;
         clang::CXXConstructorDecl *defaultCtor = nullptr;
         if (decl->needsImplicitCopyConstructor() && !isExplicitlyNonCopyable) {
-          copyCtor = clangSema.DeclareImplicitCopyConstructor(
+          clangSema.DeclareImplicitCopyConstructor(
               const_cast<clang::CXXRecordDecl *>(decl));
         }
         if (decl->needsImplicitMoveConstructor()) {
-          moveCtor = clangSema.DeclareImplicitMoveConstructor(
+          clangSema.DeclareImplicitMoveConstructor(
               const_cast<clang::CXXRecordDecl *>(decl));
         }
         if (decl->needsImplicitDefaultConstructor()) {
@@ -3123,27 +3155,12 @@ namespace {
                 // Note: we use "doesThisDeclarationHaveABody" here because
                 // that's what "DefineImplicitCopyConstructor" checks.
                 !declCtor->doesThisDeclarationHaveABody()) {
-              if (declCtor->isCopyConstructor()) {
-                if (!copyCtor && !isExplicitlyNonCopyable)
-                  copyCtor = declCtor;
-              } else if (declCtor->isMoveConstructor()) {
-                if (!moveCtor)
-                  moveCtor = declCtor;
-              } else if (declCtor->isDefaultConstructor()) {
+              if (declCtor->isDefaultConstructor()) {
                 if (!defaultCtor)
                   defaultCtor = declCtor;
               }
             }
           }
-        }
-        if (copyCtor && !isExplicitlyNonCopyable &&
-            !decl->isAnonymousStructOrUnion()) {
-          clangSema.DefineImplicitCopyConstructor(clang::SourceLocation(),
-                                                  copyCtor);
-        }
-        if (moveCtor && !decl->isAnonymousStructOrUnion()) {
-          clangSema.DefineImplicitMoveConstructor(clang::SourceLocation(),
-                                                  moveCtor);
         }
         if (defaultCtor) {
           clangSema.DefineImplicitDefaultConstructor(clang::SourceLocation(),
@@ -3153,7 +3170,8 @@ namespace {
         if (decl->needsImplicitDestructor()) {
           auto dtor = clangSema.DeclareImplicitDestructor(
               const_cast<clang::CXXRecordDecl *>(decl));
-          clangSema.DefineImplicitDestructor(clang::SourceLocation(), dtor);
+          if (!dtor->isDeleted() && !dtor->isIneligibleOrNotSelected())
+            clangSema.DefineImplicitDestructor(clang::SourceLocation(), dtor);
         }
       }
 

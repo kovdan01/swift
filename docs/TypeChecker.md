@@ -93,151 +93,217 @@ e.g., a tuple type `(T0, Int, (T0) -> Int)` involving the type
 variable `T0`.
 
 There are a number of different kinds of constraints used to describe
-the Swift type system:
+the Swift type system. This only lists the most important kinds; for
+the full list, see `include/swift/Sema/Constraint.h`.
 
-**Equality**
-  An equality constraint requires two types to be identical. For
-  example, the constraint `T0 == T1` effectively ensures that `T0` and
-  `T1` get the same concrete type binding. There are two different
-  flavors of equality constraints:
+### Bind
 
-  - Exact equality constraints, or  "binding", written `T0 := X`
-    for some type variable `T0` and type `X`, which requires
-    that `T0` be exactly identical to `X`;
-  - Equality constraints, written `X == Y` for types `X` and
-    `Y`, which require `X` and `Y` to have the same type,
-    ignoring lvalue types in the process. For example, the
-    constraint `T0 == X` would be satisfied by assigning `T0`
-    the type `X` and by assigning `T0` the type `@lvalue X`.
+Written `X := Y` for arbitrary types `X` and `Y`, this constraint
+requires that `X` and `Y` can both be derived by performing substitution
+on some common type `Z`.
 
-**Subtyping**
-  A subtype constraint requires the first type to be equivalent to or
-  a subtype of the second. Subtyping constraints are written `X < Y`.
+### Equal
 
-  The following are the basic subtyping rules in the Swift language.
-  First, we have class inheritance relationships:
-  - If `X` is a subclass of `Y`, then `X < Y`.
-  - If `X` is an archetype, and `Y` is the superclass bound of `X`, then `X < Y`.
+Equality constraints, written `X == Y` for types `X` and `Y`, are
+satisfied if and only if erasing `@lvalue` types from `X` and `Y`
+yields a pair of types that would satisfy a **Bind** constraint.
 
-  Second, we have existential erasure:
-  - If `X` is a concrete type, and `X` conforms to a protocol `P`, then `X < any P`.
-  - If `X` is an archetype, and `X` conforms to a protocol `P`, then `X < any P`.
-  - If `X` is a class or class-bound archetype, then `X < AnyObject`.
-  - If `X` is a type, `X < any P`, and `X < any Q`, then `X < any P & Q`.
+### BindParam
 
-  Third, we have conversions between existential types:
-  - If protocol `P` inherits from protocol `Q`, then `any P < any Q`.
-  - If `any P` and `any Q` are existential types, then `any P & Q < any P` and `any P & Q < any Q`.
-  - If `P` is a protocol and `C` is a class, then `any P < any P & C`.
-  - If `P` is a protocol, then `any P<...> < any P`.
+BindParam constraints appear when type checking closures. Given two
+types `X` and `Y`, `X BindParam Y` is satisfied if `X := Y`, or if
+`X` is an `@lvalue` type, `Y` is an `inout` type, and stripping off
+the specifiers from both sides yields a pair of types that would
+satisfy a **Bind** constraint.
 
-  An existential type converts to a class in a few special cases:
-  - If `P` is a protocol and `C` is a class, then `any P & C < any P`.
-  - If `P` is a protocol and `C` is a class, then `any P & C < C`.
-  - If `P` is a protocol and `C` is the superclass bound of `P`, then `any P < C`.
+### Subtype
 
-  Functions:
-  - If `X < Y`, then `(..., Y, ...) -> Z < (..., X, ...) -> Z` (function parameters are contravariant).
-  - If `X < Y`, then `(...) -> X < (...) -> Y` (function results are covariant).
+A Subtype constraint requires the first type to be equivalent to, or
+a subtype of, the second. Subtyping constraints are written `X < Y`.
 
-  Tuples:
-  - If `X < Y`, then `(..., X, ...) < (..., Y, ...)` (tuple elements are covariant).
+However, be warned that this relation is neither anti-reflexive
+(because `X < X` for all `X`), nor is it transitive (because `X < Y`
+and `Y < Z` does not always imply that `X < Z`. For example, suppose
+that `X` does not conform to `P`, but `Optional<X>` does. Then we have
+`X < Optional<X>` and `Optional<X> < any P`, but _not_ `X < any P`).
 
-  Optionals:
-  - If `X` is an arbitrary type, then `X < Optional<X>`.
-  - If `X < Y`, then `Optional<X> < Optional<Y>`.
+The following are the basic subtyping rules in the Swift language.
 
-  Metatypes:
-  - If `X < Y` via class inheritance, existential erasure, and existential conversion, then `X.Type < Y.Type`. However, this does not hold for arbitrary subtype relationships; for example, `X.Type < Optional<X>.Type` does not hold.
+First, we have class inheritance relationships:
+- If `X` is a subclass of `Y`, then `X < Y`.
+- If `X` is an archetype, and `Y` is the superclass bound of `X`, then `X < Y`.
 
-  Collections:
-  - If `X < Y`, then `Array<X> < Array<Y>`.
-  - If `K1 < K2` and `V1 < V2`, then `Dictionary<K1, K2> < Dictionary<V1, V2>`.
-  - If `X < Y`, then `Set<X> < Set<Y>`.
+Second, we have existential erasure:
+- If `X` is a concrete type, and `X` conforms to a protocol `P`, then `X < any P`.
+- If `X` is an archetype, and `X` conforms to a protocol `P`, then `X < any P`.
+- If `X` is a class or class-bound archetype, then `X < AnyObject`.
+- If `X` is a type, `X < any P`, and `X < any Q`, then `X < any P & Q`.
 
-  Toll-free bridging:
-  - `NSString < CFString` and also `CFString < NSString`.
-  - Similar conversions exist for various other CF/NS types that
-    we won't discuss here.
+Third, we have conversions between existential types:
+- If protocol `P` inherits from protocol `Q`, then `any P < any Q`.
+- If `any P` and `any Q` are existential types, then `any P & Q < any P` and `any P & Q < any Q`.
+- If `P` is a protocol and `C` is a class, then `any P < any P & C`.
+- If `P` is a protocol, then `any P<...> < any P`.
 
-  CGFloat:
-  - `CGFloat < Double` and `Double < CGFloat`, but with certain restrictions.
+An existential type converts to a class in a few special cases:
+- If `P` is a protocol and `C` is a class, then `any P & C < any P`.
+- If `P` is a protocol and `C` is a class, then `any P & C < C`.
+- If `P` is a protocol and `C` is the superclass bound of `P`, then `any P < C`.
 
-  AnyHashable:
-  - If `X` is an archetype or concrete type that conforms to
-    `Hashable`, then `X < AnyHashable`.
+Functions:
+- If `X < Y`, then `(..., Y, ...) -> Z < (..., X, ...) -> Z` (function parameters are contravariant).
+- If `X < Y`, then `(...) -> X < (...) -> Y` (function results are covariant).
 
-  Metatype to AnyObject:
-  - If Objective-C interop is enabled and `X` is an arbitrary type,
-    then `X.Type < AnyObject`.
+Tuples:
+- If `X < Y`, then `(..., X, ...) < (..., Y, ...)` (tuple elements are covariant).
+- Tuple labels can be eliminated, so `(X, Y) < (x: X, y: Y)`.
+- Tuple labels can be introduced, so `(x: X, y: Y) < (X, Y)`.
+
+Optionals:
+- If `X` is an arbitrary type, then `X < Optional<X>`.
+- If `X < Y`, then `Optional<X> < Optional<Y>`.
+
+Metatypes:
+- If `X < Y` via class inheritance, existential erasure, and existential conversion,
+  then `X.Type < Y.Type`. However, this does not extend to other subtype
+  relationships; for example, `X.Type < Optional<X>.Type` does not hold.
+
+Collections:
+- If `X < Y`, then `Array<X> < Array<Y>`.
+- If `K1 < K2` and `V1 < V2`, then `Dictionary<K1, K2> < Dictionary<V1, V2>`.
+- If `X < Y`, then `Set<X> < Set<Y>`.
+
+Toll-free bridging:
+- `NSString < CFString` and also `CFString < NSString`.
+- Similar conversions exist for various other CF/NS types that
+  we won't discuss here.
+
+CGFloat:
+- `CGFloat < Double` and `Double < CGFloat`, but with certain restrictions.
+
+AnyHashable:
+- If `X` is an archetype or concrete type that conforms to
+  `Hashable`, then `X < AnyHashable`.
+
+Metatype to AnyObject:
+- If Objective-C interop is enabled and `X` is an arbitrary type,
+  then `X.Type < AnyObject`.
 
 **Conversion**
 
-  The conversion relation is a superset of the subtype relation. Conversion
-  constraints are written `X <c Y`, read as "`X` can be converted to `Y`".
+The conversion relation is a superset of the subtype relation. Conversion
+constraints are written `X <c Y`, read as "`X` can be converted to `Y`".
 
-  Today, the main difference is that conversion allows _tuple shuffles_, where
-  the elements of a tuple are re-ordered by considering labels. For example,
-  `(x: Int, y: String) <c (y: String, x: Int)` is true, but
-  `(x: Int, y: String) < (y: String, x: Int)` is false.
+Today, the only difference is that conversion allows _tuple shuffles_, where
+the elements of a tuple are re-ordered by considering labels. For example,
+`(x: Int, y: String) <c (y: String, x: Int)` is true, but
+`(x: Int, y: String) < (y: String, x: Int)` is false.
 
-**Argument conversion**
+### ArgumentConversion
 
-  An even more general relation, for conversions in function call argument
-  position only. This adds conversions between various standard library
-  `Unsafe*Pointer<T>` and `Unsafe*RawPointer` types.
+An even more general relation, for conversions in function call argument
+position only. Written as `X <a Y`.
 
-**Member**
-  A member constraint `X[.name] == Y` specifies that the first type
-  (`X`) have a member (or an overloaded set of members) with the
-  given name, and that the type of that member be bound to the second
-  type (`Y`).  There are two flavors of member constraint: value
-  member constraints, which refer to the member in an expression
-  context, and type member constraints, which refer to the member in a
-  type context (and therefore can only refer to types).
+1. Conversions from `String` and `Array` to pointer:
+- `Array<X> <a UnsafePointer<X>`
+- `Array<X> <a UnsafeRawPointer`
+- `String <a UnsafePointer<Int8>`
+- `String <a UnsafePointer<UInt8>`
+- `String <a UnsafePointer<Void>`
+- `String <a UnsafeRawPointer`
 
-**Conformance**
-  A conformance constraint `X conforms to Y` specifies that the
-  first type (`X`) must conform to the protocol `Y`. Note that
-  this is stricter than a subtype constraint `X < any P`, because
-  if `X` is an existential type `any P`, then in general,
-  `X` does not conform to `any P` (but there are some exceptions,
-  such as `any Error`, and Objective-C protocol existentials).
+2. Conversions from `inout String` and `inout Array` to pointer (*):
+- `inout X <a UnsafePointer<X>`
+- `inout Array<X> <a UnsafePointer<X>`
+- `inout Array<X> <a UnsafeRawPointer`
+- `inout X <a UnsafeMutablePointer<X>`
+- `inout Array<X> <a UnsafeMutablePointer<X>`
+- `inout Array<X> <a UnsafeMutableRawPointer`
 
-**Checked cast**
-  A constraint describing a checked cast from the first type to the
-  second, i.e., for `x as T`.
+3. Conversions from pointer to pointer:
+- `UnsafePointer<X> <a UnsafeRawPointer`
+- `UnsafeRawPointer <a UnsafePointer<Int8>`
+- `UnsafeRawPointer <a UnsafePointer<UInt8>`
+- `UnsafeMutablePointer<X> <a UnsafePointer<X>`
+- `UnsafeMutableRawPointer <a UnsafeRawPointer`
 
-**Applicable function**
-  An applicable function requires that both types are function types
-  with the same input and output types. It is used when the function
-  type on the left-hand side is being split into its input and output
-  types for function application purposes. Note, that it does not
-  require the type attributes to match.
+TODO: There is also `AutoreleasingUnsafeMutablePointer` on Darwin platforms.
 
-**Overload binding**
-  An overload binding constraint binds a type variable by selecting a
-  particular choice from an overload set. Multiple overloads are
-  represented by a disjunction constraint.
+TODO: When the argument is passed to the parameter of an imported C function,
+even more conversions are possible, such as
+`Unsafe[Mutable]Pointer<Int{8, 16, ...}> <-> Unsafe[Mutable]Pointer<UInt{8, 16, ...}>`.
 
-**Conjunction**
-  A constraint that is the conjunction of two or more other
-  constraints. We solve the first constraint first, and then the second,
-  and so on, in order. Conjunctions are used to model multi-statement
-  closures, as well as `if` and `switch` expressions, where type
-  information flows in one direction only.
+### OperatorArgumentConversion
 
-**Disjunction**
-  A constraint that is the disjunction of two or more constraints.
-  Disjunctions are used to model overload sets, or different potential
-  conversions, each of which might resolve in a (different) solution.
+A further special case for arguments of operators.
 
-**Self object of protocol**
-  An internal-use-only constraint that describes the conformance of a
-  `Self` type to a protocol. It is similar to a conformance
-  constraint but "looser" because it allows a protocol type to be the
-  self object of its own protocol (even when an existential type would
-  not conform to its own protocol).
+Recall that an operator like `+=` mutates the left-hand side, so the
+first parameter in the declaration is an `inout` type. However, unlike
+a call of a function that has an `inout` parameter, you write `x += y`
+and not of `x += y` at the call site. Hence, this constraint allows
+conversion of an `@lvalue` into an `inout`.
+
+On the other hand, operator argument conversion prohibits pointer conversions
+from groups (1) and (3) listed above. Only group (2) is supported.
+
+### SubclassOf
+
+A subclass constraint `X subclass Y` is satisfied if `Y` is a class type,
+and `X` is a class, class-bounded archetype, dynamic `Self` type, or similar
+that is a subtype of `X`. Subclass constraints are used to represent
+superclass requirements.
+
+### ConformsTo
+
+A "conforms to" constraint `X conforms Y` specifies that the
+first type (`X`) must conform to the protocol `Y`. Note that
+this is stricter than a subtype constraint `X < any P`, because
+if `X` is an existential type `any P`, then in general,
+`X` does not conform to `any P` (but there are some exceptions,
+such as `any Error`, and Objective-C protocol existentials).
+
+### CheckedCast
+
+A constraint describing a checked cast from the first type to the
+second, i.e., for `x as T`.
+
+### ApplicableFunction
+
+An applicable function requires that both types are function types
+with the same input and output types. It is used when the function
+type on the left-hand side is being split into its input and output
+types for function application purposes. Note, that it does not
+require the type attributes to match.
+
+### BindOverload
+
+An overload binding constraint binds a type variable by selecting a
+particular choice from an overload set. Multiple overloads are
+represented by a disjunction constraint.
+
+### ValueMember
+
+A member constraint `X[.name] == Y` specifies that the first type
+(`X`) have a member (or an overloaded set of members) with the
+given name, and that the type of that member be bound to the second
+type (`Y`).  There are two flavors of member constraint: value
+member constraints, which refer to the member in an expression
+context, and type member constraints, which refer to the member in a
+type context (and therefore can only refer to types).
+
+### Disjunction
+
+A constraint that is the disjunction of two or more constraints.
+Disjunctions are used to model overload sets, or different potential
+conversions, each of which might resolve in a (different) solution.
+
+### Conjunction
+
+A constraint that is the conjunction of two or more other
+constraints. We solve the first constraint first, and then the second,
+and so on, in order. Conjunctions are used to model multi-statement
+closures, as well as `if` and `switch` expressions, where type
+information flows in one direction only.
 
 ### Constraint Generation
 
@@ -252,7 +318,7 @@ expression, and each different kind of expression---function
 application, member access, etc.---generates a specific set of
 constraints. Here, we enumerate the primary expression kinds in the
 language and describe the type assigned to the expression and the
-constraints generated from such as expression. We use `T(a)` to
+constraints generated from such an expression. We use `T(a)` to
 refer to the type assigned to the subexpression `a`. The constraints
 and types generated from the primary expression kinds are:
 
@@ -631,9 +697,9 @@ on the type variable are categorized. Given a relational constraint of the form
 `A` is some concrete type, `A` is said to be  "above"
 `T0`. Similarly, given a constraint of the form `B <? T0` for a
 concrete type `B`, `B` is said to be "below" `T0`. The
-above/below terminologies comes from a visualization of the lattice of
+above/below terminology comes from a visualization of the lattice of
 types formed by the conversion relationship, e.g., there is an edge
-`A -> B` in the latter if `A` is convertible to `B`. `B` would
+`A -> B` in the lattice if `A` is convertible to `B`. `B` would
 therefore be higher in the lattice than `A`, and the topmost element
 of the lattice is the element to which all types can be converted,
 `Any` (often called "top").
@@ -678,15 +744,51 @@ possible that it will find multiple solutions to the constraint system
 as given. Such cases are not necessarily ambiguities, because the
 solver can then compare the solutions to determine whether one of
 the solutions is better than all of the others. To do so, it computes
-a "score" for each solution based on a number of factors:
+a "score" for each solution. The score is an integer vector with the
+following components:
 
-- How many user-defined conversions were applied.
-- How many non-trivial function conversions were applied.
-- How many literals were given "non-default" types.
+- Number of fixes applied. Fixes generally only appear in "salvage mode"
+  when emitting diagnostics.
+- Number of holes introduced. This is another diagnostic phenomenon.
+- Number of unavailable declarations referenced.
+- Number of declarations referenced from modules that were not imported.
+- Number of async declarations referenced from a sync context.
+- Number of sync declarations referenced from an async context.
+- Number of times "forward" scan for a trailing closure was performed.
+- Number of `@_disfavoredOverload` declarations referenced.
+- Number of members found via leading-dot syntax with unwrapped optional base.
+- Number of implicitly unwrapped optionals.
+- Number of implicit value conversions. Some but not all non-trivial subtype relations
+  fall into this category.
+- Number of implicit conversions. Some but not all non-trivial subtype relations
+  fall into this category.
+- Number of function conversions performed.
+- Number of literals with non-default types.
+- Number of collection conversions. (`Array<X>` to `Array<Y>`, etc. See below.)
+- Number of value-to-optional conversions (`X` to `Optional<X>`, etc. See below.)
+- Number of conversions to `Any`.
+- Number of keypath subscript applications (`foo[keyPath: \.bar`).
+- Number of pointer conversions where the destination is a function parameter
+  with type parameter type.
+- Number of function to autoclosure conversions (usually, an argument of type `X`
+  is "injected" into the `@autoclosure () -> X` parameter, which does not increase
+  the score).
+- Number of missing conformances that we might only warn about later. (For example,
+  missing `Sendable` conformance in Swift 5 language mode. Such a solution is valid,
+  but has a higher score.)
+- Number of unapplied function references. (For example, if you have a `var count`
+  and a `func count(...)` member on a type, `foo.count` will prefer the former,
+  because the latter solution has a higher score.)
 
-Solutions with smaller scores are considered better solutions. When
-two solutions have the same score, the type variables and overload
-choices of the two systems are compared to produce a relative score:
+Most fields in the score are expected to be zero at any given time. Two scores
+are compared by comparing their elements lexicographically from left to right.
+A smaller score is "better" than a larger score.
+
+### Solution Ranking
+
+When two solutions have the same score, a further ranking step considers all
+type variables and overload choices. This computes an integer for each
+solution, called the "solution rank":
 
 - If the two solutions have selected different type variable bindings
   for a type variable where a "more specific" type variable is a
@@ -699,8 +801,7 @@ choices of the two systems are compared to produce a relative score:
   the overload picked in the other solution, then first solution earns
   +1.
 
-The solution with the greater relative score is considered to be
-better than the other solution.
+The highest-ranked solution is considered to be better than the other solution.
 
 ### Solution Application
 
@@ -737,10 +838,7 @@ node based on the kind of expression:
   the body of the closure is type-checked with that
   complete function type.
 
-The solution application step cannot fail for any type checking rule
-modeled by the constraint system. However, there are some failures
-that are intentionally left to the solution application phase, such as
-a postfix '!' applied to a non-optional type.
+The solution application step cannot fail.
 
 #### Locators
 
@@ -748,62 +846,26 @@ During constraint generation and solving, numerous constraints are
 created, broken apart, and solved. During constraint application as
 well as during diagnostics emission, it is important to track the
 relationship between the constraints and the actual AST nodes from
-which they originally came. For example, consider the following type
-checking problem::
-```swift
-  struct X {
-    // user-defined conversions
-    func [conversion] __conversion () -> String { /* ... */ }
-    func [conversion] __conversion () -> Int { /* ... */ }
-  }
+which they originally came.
 
-  func f(_ i : Int, s : String) { }
+We need to map constraints back to the expressions they refer to.
 
-  var x : X
-  f(10.5, x)
-```
-This constraint system generates the constraints "`T(f)` ==Fn `T0 -> T1`"
-(for fresh variables `T0` and `T1`), "`(T2, X) <c T0`" (for fresh variable `T2`)
-and "`T2` conforms to`ExpressibleByFloatLiteral`". As part of the solution,
-after `T0` is replaced with `(i : Int, s : String)`, the second of
-these constraints is broken down into "`T2 <c Int`" and "`X <c String`".
-These two constraints are interesting for different
-reasons: the first will fail, because `Int` does not conform to
-`ExpressibleByFloatLiteral`. The second will succeed by selecting one
-of the (overloaded) conversion functions.
-
-In both of these cases, we need to map the actual constraint of
-interest back to the expressions they refer to. In the first case, we
-want to report not only that the failure occurred because `Int` is
-not `ExpressibleByFloatLiteral`, but we also want to point out where
-the `Int` type actually came from, i.e., in the parameter. In the
-second case, we want to determine which of the overloaded conversion
-functions was selected to perform the conversion, so that conversion
-function can be called by constraint application if all else succeeds.
-
-*Locators* address both issues by tracking the location and derivation
-of constraints. Each locator is anchored at a specific AST node
-(expression, pattern, declaration etc.) i.e., the function application
-`f(10.5, x)`, and contains a path of zero or more derivation steps
-from that anchor. For example, the "`T(f)` ==Fn `T0 -> T1`"
-constraint has a locator that is anchored at the function application
-and a path with the "apply function" derivation step, meaning that
-this is the function being applied. Similarly, the "`(T2, X) <c T0`
-constraint has a locator anchored at the function application and a
-path with the "apply argument" derivation step, meaning that this is
+*Locators* track the location and derivation of constraints.
+Each locator is anchored at a specific AST node
+(expression, pattern, declaration etc.). For example, an applicable
+function constraint has a locator that is anchored at the function
+application expression, and a path with the "apply function"
+derivation step. Similarly, an conversion constraint generated for
+a function argument has a locator anchored at the function application
+and a path with the "apply argument" derivation step, meaning that this is
 the argument to the function.
 
 When constraints are simplified, the resulting constraints have
 locators with longer paths. For example, when a conversion constraint between two
-tuples is simplified conversion constraints between the corresponding
-tuple elements, the resulting locators refer to specific elements. For
-example, the `T2 <c Int` constraint will be anchored at the function
-application (still), and have two derivation steps in its path: the
-"apply function" derivation step from its parent constraint followed
-by the "tuple element 0" constraint that refers to this specific tuple
-element. Similarly, the `X <c String` constraint will have the same
-locator, but with "tuple element 1" rather than "tuple element 0". The
-`ConstraintLocator` type in the constraint solver has a number of
+tuples is simplified down to conversion constraints between the corresponding
+tuple elements, the resulting locators refer to specific elements.
+
+The `ConstraintLocator` type in the constraint solver has a number of
 different derivation step kinds (called "path elements" in the source)
 that describe the various ways in which larger constraints can be
 broken down into smaller ones.
@@ -811,16 +873,9 @@ broken down into smaller ones.
 ##### Overload Choices
 
 Whenever the solver creates a new overload set, that overload set is
-associated with a particular locator. Continuing the example from the
-parent section, the solver will create an overload set containing the
-two user-defined conversions. This overload set is created while
-simplifying the constraint `X <c String`, so it uses the locator
-from that constraint extended by a "conversion member" derivation
-step. The complete locator for this overload set is, therefore::
-```
-  function application -> apply argument -> tuple element #1 -> conversion member
-```
-When the solver selects a particular overload from the overload set,
+associated with a particular locator. 
+
+When the solver selects a particular overload an the overload set,
 it records the selected overload based on the locator of the overload
 set. When it comes time to perform constraint application, the locator
 is recreated based on context (as the bottom-up traversal walks the
@@ -841,46 +896,17 @@ the path of the solver, and can be used to query and recover the
 important decisions made by the solver. However, the locators
 determined by the solver may not directly refer to the most specific
 AST node for the purposes of identifying the corresponding source
-location. For example, the failed constraint "`Int` conforms to
-`ExpressibleByFloatLiteral`" can most specifically by centered on the
-floating-point literal `10.5`, but its locator is::
-```
-  function application -> apply argument -> tuple element #0
-```
+location.
+
 The process of locator simplification maps a locator to its most
 specific AST node. Essentially, it starts at the anchor of the
-locator (in this case, the application `f(10.5, x)`) and then walks
-the path, matching derivation steps to subexpressions. The "function
-application" derivation step extracts the argument (`(10.5, x)`).
-Then, the "tuple element #0" derivation extracts the tuple
-element 0 subexpression, `10.5`, at which point we have traversed
-the entire path and now have the most specific expression for
-source-location purposes.
+locator and then walks the path, matching derivation steps to
+subexpressions.
 
-Simplification does not always exhaust the complete path. For example,
-consider a slight modification to our example, so that the argument to
-`f` is provided by another call, we get a different result
-entirely::
-```swift
-  func f(_ i : Int, s : String) { }
-  func g() -> (f : Float, x : X) { }
+For example, the "function application" derivation step extracts
+the argument list, and the "tuple element #0" derivation extracts
+the sub-expression for the first argument.
 
-  f(g())
-```
-Here, the failing constraint is `Float <c Int`, with the same
-locator::
-```
-  function application -> apply argument -> tuple element #0
-```
-When we simplify this locator, we start with `f(g())`. The "apply
-argument" derivation step takes us to the argument expression
-`g()`. Here, however, there is no subexpression for the first tuple
-element of `g()`, because it's simple part of the tuple returned
-from `g`. At this point, simplification ceases, and creates the
-simplified locator::
-```
-  function application of g -> tuple element #0
-```
 ### Performance
 
 The performance of the type checker is dependent on a number of
@@ -982,7 +1008,7 @@ in detail in this
 ## Footnotes
 
 [1]: More accurately, as of this writing, "will compute". The solver
-  doesn't current compute meets and joins properly. Rather, it
+  doesn't currently compute meets and joins properly. Rather, it
   arbitrarily picks one of the constraints "below" to start with.
 
 [2]: Again, as of this writing, the solver doesn't actually compute
