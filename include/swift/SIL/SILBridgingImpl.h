@@ -753,10 +753,6 @@ BridgedLocation BridgedFunction::getLocation() const {
   return {swift::SILDebugLocation(getFunction()->getLocation(), getFunction()->getDebugScope())};
 }
 
-BridgedNullableSourceFile BridgedFunction::getSourceFile() const {
-  return {getFunction()->getSourceFile()};
-}
-
 BridgedArrayRef BridgedFunction::getFilesForModule() const {
   return getFunction()->getModule().getSwiftModule()->getFiles();
 }
@@ -995,7 +991,7 @@ BridgedType BridgedFunction::getLoweredType(BridgedASTType type, bool maximallyA
   return BridgedType(getFunction()->getLoweredType(type.type));
 }
 
-BridgedType BridgedFunction::getLoweredType(BridgedCanType type) const {
+BridgedType BridgedFunction::getLoweredTypeWithAbstractionPattern(BridgedCanType type) const {
   swift::Lowering::AbstractionPattern pattern(
       getFunction()->getLoweredFunctionType()->getSubstGenericSignature(),
       type.unbridged());
@@ -2100,6 +2096,14 @@ BridgedDeclObj BridgedDeclRef::getDecl() const {
 
 BridgedDiagnosticArgument BridgedDeclRef::asDiagnosticArgument() const {
   return swift::DiagnosticArgument(unbridged().getDecl()->getName());
+}
+
+BridgedNullableSourceFile BridgedDeclRef::getSourceFile() const {
+  swift::SILDeclRef declRef = unbridged();
+  if (!declRef)
+    return nullptr;
+
+  return {declRef.getInnermostDeclContext()->getParentSourceFile()};
 }
 
 //===----------------------------------------------------------------------===//

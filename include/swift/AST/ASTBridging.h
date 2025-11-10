@@ -1674,10 +1674,6 @@ void BridgedTopLevelCodeDecl_dump(BridgedTopLevelCodeDecl decl);
 SWIFT_NAME("BridgedDecl.dump(self:)")
 void BridgedDecl_dump(BridgedDecl decl);
 
-SWIFT_NAME("BridgedValueDecl.setAccess(self:_:)")
-void BridgedValueDecl_setAccess(BridgedValueDecl decl,
-                                swift::AccessLevel accessLevel);
-
 //===----------------------------------------------------------------------===//
 // MARK: AbstractStorageDecl
 //===----------------------------------------------------------------------===//

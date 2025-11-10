@@ -976,14 +976,14 @@ func cloneGenericParameters(
   for type in canonicalGenericSig.genericSignature.genericParameters {
     assert(type.isGenericTypeParameter)
     params.append(
-      GenericTypeParamDecl.createImplicit(
+      GenericTypeParamDecl.create(
         declContext: declContext,
         name: type.nameOfGenericTypeParameter,
         depth: type.depthOfGenericTypeParameter,
         index: type.indexOfGenericTypeParameter,
         paramKind: type.kindOfGenericTypeParameter))
   }
-  return GenericParamList.createParsed(
+  return GenericParamList.create(
     astContext, leftAngleLoc: nil, parameters: params,
     genericWhereClause: nil,
     rightAngleLoc: nil)
@@ -1012,8 +1012,8 @@ func autodiffSpecializeBranchTracingEnum(
     debugLog("AAAAAAAA 01")
 
     let oldPL: ParameterList = oldEED.parameterList
-    assert(oldPL.size == 1)
-    let oldPD: BridgedParamDecl = oldPL[0]
+    assert(oldPL.count == 1)
+    let oldPD: ParamDecl = oldPL[0]
 
     let closureInfosMultiBB: [ClosureInfoMultiBB] = bteCaseToClosureListDict[enumCase.index] ?? []
 
@@ -1051,7 +1051,7 @@ func autodiffSpecializeBranchTracingEnum(
 
     newPD.setInterfaceType(type: newTupleType)
     let newPL =
-      ParameterList.createParsed(
+      ParameterList.create(
         astContext, leftParenLoc: nil, parameters: [newPD],
         rightParenLoc: nil)
     newPLs.append(newPL)
@@ -1069,7 +1069,7 @@ func autodiffSpecializeBranchTracingEnum(
     )
   }
 
-  let newED = EnumDecl.createParsed(
+  let newED = EnumDecl.create(
       astContext, declContext: declContext,
       enumKeywordLoc: nil,
       name: newEDNameStr,
@@ -1087,7 +1087,7 @@ func autodiffSpecializeBranchTracingEnum(
   for (idx, enumCase) in bteType.getEnumCases(in: topVJP)!.enumerated() {
     let oldEED: EnumElementDecl = enumCase.enumElementDecl
     let newPL: ParameterList = newPLs[idx]
-    let newEED = EnumElementDecl.createParsed(
+    let newEED = EnumElementDecl.create(
       astContext, declContext: newED,
       name: oldEED.baseIdentifier, nameLoc: nil,
       parameterList: newPL,

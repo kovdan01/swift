@@ -132,11 +132,6 @@ void BridgedDecl_forEachDeclToHoist(BridgedDecl cDecl,
   });
 }
 
-void BridgedValueDecl_setAccess(BridgedValueDecl decl,
-                                swift::AccessLevel accessLevel) {
-  decl.unbridged()->setAccess(accessLevel);
-}
-
 BridgedAccessorDecl BridgedAccessorDecl_createParsed(
     BridgedASTContext cContext, BridgedDeclContext cDeclContext,
     swift::AccessorKind Kind, BridgedAbstractStorageDecl cStorage,
