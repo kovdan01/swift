@@ -447,6 +447,14 @@ void LinearMapInfo::generateDifferentiationDataStructures(
 /// 3. The instruction has both an active result (direct or indirect) and an
 ///    active argument.
 bool LinearMapInfo::shouldDifferentiateApplySite(FullApplySite applySite) {
+  if (applySite.getKind() == FullApplySiteKind::ApplyInst) {
+    llvm::errs() << "KKKKKKKK 00\n";
+    if (activityInfo.getActivity(cast<ApplyInst>(applySite.getInstruction())->getCallee(), config).contains(ActivityFlags::Varied)) {
+      llvm::errs() << "KKKKKKKK 01\n";
+      return true;
+    }
+  }
+
   // Function applications with an active inout argument should be
   // differentiated.
   for (auto inoutArg : applySite.getInoutArguments())

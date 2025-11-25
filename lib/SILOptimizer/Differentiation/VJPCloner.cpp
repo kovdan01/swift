@@ -767,6 +767,14 @@ public:
       TypeSubstCloner::visitApplyInst(ai);
       return;
     }
+    // MYTODO proper check
+    if (ai->getNumArguments() == 0) {
+      LLVM_DEBUG(getADDebugStream()
+                 << "Cloning AUTOCLOSURE apply:\n"
+                 << *ai << '\n');
+      TypeSubstCloner::visitApplyInst(ai);
+      return;
+    }
     // If callee is `array.uninitialized_intrinsic`, do standard cloning.
     // `array.uninitialized_intrinsic` differentiation is handled separately.
     if (ArraySemanticsCall(ai, semantics::ARRAY_UNINITIALIZED_INTRINSIC)) {

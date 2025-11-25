@@ -988,6 +988,7 @@ public:
   ///   Original: (y0, y1, ...) = apply @fn (x0, x1, ...)
   ///    Adjoint: (adj[x0], adj[x1], ...) += apply @fn_pullback (adj[y0], ...)
   void visitApplyInst(ApplyInst *ai) {
+    llvm::errs() << "LLLLLLLL 00\n";
     assert(getPullbackInfo().shouldDifferentiateApplySite(ai));
 
     // Skip `array.uninitialized_intrinsic` applications, which have special
