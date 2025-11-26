@@ -234,7 +234,7 @@ public struct Type : TypeProperties, CustomStringConvertible, NoReflectionChildr
   }
 
   public func mapOutOfEnvironment(in function: Function) -> Type {
-    rawType.mapOutOfEnvironment().canonical.loweredType(in: function)
+    rawType.mapOutOfEnvironment().canonical.loweredTypeWithAbstractionPattern(in: function)
   }
 }
 
