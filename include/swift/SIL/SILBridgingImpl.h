@@ -466,6 +466,11 @@ BridgedType BridgedType::getEnumCasePayload(EnumElementIterator i, BridgedFuncti
   return swift::SILType();
 }
 
+BridgedStringRef BridgedType::getEnumCaseName(EnumElementIterator i) const {
+  swift::EnumElementDecl *elt = *unbridge(i);
+  return elt->getNameStr();
+}
+
 BridgedDeclObj BridgedType::getEnumElementDecl(EnumElementIterator i) const {
   swift::EnumElementDecl *elt = *unbridge(i);
   return {elt};
@@ -514,6 +519,47 @@ BridgedType BridgedType::getPackElementType(SwiftInt idx) const {
 
 BridgedCanType BridgedType::getApproximateFormalPackType() const {
   return unbridged().castTo<swift::SILPackType>()->getApproximateFormalPackType();
+}
+
+BridgedOwnedString
+BridgedType::getEnumTypeCaseName(SwiftInt caseIdx) const {
+  swift::EnumDecl *ed = unbridged().getEnumOrBoundGenericEnum();
+  SwiftInt idx = 0;
+  for (swift::EnumElementDecl *elem : ed->getAllElements()) {
+    if (idx == caseIdx)
+      return elem->getNameStr();
+    ++idx;
+  }
+  assert(false);
+}
+
+BridgedInstruction BridgedBuilder::createOptionalSome(BridgedValue value) const {
+  swift::EnumElementDecl *someEltDecl = unbridged().getASTContext().getOptionalSomeDecl();
+  swift::EnumInst *optionalSome = unbridged().createEnum(loc.getLoc().getLocation(), value.getSILValue(), someEltDecl,
+                                                  swift::SILType::getOptionalType(value.getType().unbridged()),
+                                                  value.getSILValue()->getOwnershipKind());
+  return optionalSome;
+}
+
+BridgedInstruction BridgedBuilder::createOptionalNone(BridgedValueArray tupleElements) const {
+  swift::EnumElementDecl *noneEltDecl = unbridged().getASTContext().getOptionalNoneDecl();
+
+  llvm::SmallVector<swift::SILValue, 16> elementValues;
+  llvm::ArrayRef<swift::SILValue> values = tupleElements.getValues(elementValues);
+  llvm::SmallVector<swift::TupleTypeElt, 16> tupleTyElts;
+  tupleTyElts.reserve(values.size());
+  for (const swift::SILValue &value : values) {
+    tupleTyElts.emplace_back(value->getType().getASTType());
+  }
+  swift::Type tupleTy =
+      swift::TupleType::get(tupleTyElts, unbridged().getASTContext());
+  swift::SILType silTupleTy =
+      swift::SILType::getPrimitiveObjectType(tupleTy->getCanonicalType());
+
+  swift::EnumInst *optionalNone = unbridged().createEnum(loc.getLoc().getLocation(), swift::SILValue(), noneEltDecl,
+                                                  swift::SILType::getOptionalType(silTupleTy));
+
+  return optionalNone;
 }
 
 //===----------------------------------------------------------------------===//
@@ -3147,6 +3193,10 @@ BridgedContext::getTupleTypeWithLabels(BridgedArrayRef elementTypes,
   }
   return {
       swift::TupleType::get(elements, context->getModule()->getASTContext())};
+}
+
+BridgedASTType BridgedContext::getOptionalType(BridgedASTType baseTy) const {
+  return {swift::OptionalType::get(baseTy.unbridged())};
 }
 
 BridgedDeclObj BridgedContext::getSwiftArrayDecl() const {
