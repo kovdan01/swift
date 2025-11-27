@@ -262,6 +262,37 @@ BridgedOwnedString BridgedBasicBlock::getDebugDescription() const {
   return BridgedOwnedString(str);
 }
 
+BridgedArgument
+BridgedBasicBlock::recreateOptionalBlockArgument(BridgedType optionalType) const {
+  swift::SILBasicBlock *bb = unbridged();
+  assert(!bb->isEntry());
+  SILArgument *oldArg = bb->getArgument(0);
+
+  SILModule &module = bb->getFunction()->getModule();
+
+  SILType silType = optionalType.unbridged();
+  assert(silType.getASTType()->isOptional());
+
+  swift::ValueOwnershipKind oldOwnership =
+      bb->getArgument(0)->getOwnershipKind();
+
+  CanType type = silType.getASTType()->getOptionalObjectType()->getCanonicalType();
+  Lowering::AbstractionPattern pattern(bb->getFunction()
+                                           ->getLoweredFunctionType()
+                                           ->getSubstGenericSignature(),
+                                       type);
+  SILType loweredType = module.Types.getLoweredType(
+      pattern, type, TypeExpansionContext::minimal());
+
+  swift::SILPhiArgument *newArg =
+      bb->insertPhiArgument(0, loweredType, oldOwnership);
+
+  oldArg->replaceAllUsesWith(newArg);
+  eraseArgument(1);
+
+  return {newArg};
+}
+
 //===----------------------------------------------------------------------===//
 //                                SILValue
 //===----------------------------------------------------------------------===//
