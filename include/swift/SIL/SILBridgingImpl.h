@@ -466,6 +466,11 @@ BridgedType BridgedType::getEnumCasePayload(EnumElementIterator i, BridgedFuncti
   return swift::SILType();
 }
 
+BridgedStringRef BridgedType::getEnumCaseName(EnumElementIterator i) const {
+  swift::EnumElementDecl *elt = *unbridge(i);
+  return elt->getNameStr();
+}
+
 BridgedDeclObj BridgedType::getEnumElementDecl(EnumElementIterator i) const {
   swift::EnumElementDecl *elt = *unbridge(i);
   return {elt};
@@ -514,6 +519,14 @@ BridgedType BridgedType::getPackElementType(SwiftInt idx) const {
 
 BridgedCanType BridgedType::getApproximateFormalPackType() const {
   return unbridged().castTo<swift::SILPackType>()->getApproximateFormalPackType();
+}
+
+BridgedInstruction BridgedBuilder::createOptionalSome(BridgedValue operand, BridgedType type) const {
+  return {unbridged().createOptionalSome(loc.getLoc().getLocation(), operand.getSILValue(), type.unbridged())};
+}
+
+BridgedInstruction BridgedBuilder::createOptionalNone(BridgedType type) const {
+  return {unbridged().createOptionalNone(loc.getLoc().getLocation(), type.unbridged())};
 }
 
 //===----------------------------------------------------------------------===//
@@ -3147,6 +3160,10 @@ BridgedContext::getTupleTypeWithLabels(BridgedArrayRef elementTypes,
   }
   return {
       swift::TupleType::get(elements, context->getModule()->getASTContext())};
+}
+
+BridgedASTType BridgedContext::getOptionalType(BridgedASTType baseTy) const {
+  return {swift::OptionalType::get(baseTy.unbridged())};
 }
 
 BridgedDeclObj BridgedContext::getSwiftArrayDecl() const {
