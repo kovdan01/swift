@@ -1009,7 +1009,7 @@ SILPassPipelinePlan::getPerformancePassPipeline(const SILOptions &Options) {
   if (SILPrintFinalOSSAModule) {
     addModulePrinterPipeline(P, "SIL Print Final OSSA Module");
   }
-  P.addAutodiffClosureSpecialization1();
+  P.addAutodiffClosureSpecialization();
 
   P.addOwnershipModelEliminator();
 
@@ -1017,7 +1017,7 @@ SILPassPipelinePlan::getPerformancePassPipeline(const SILOptions &Options) {
   // high-level constructs like @_semantics calls.
   addMidLevelFunctionPipeline(P);
 
-  P.addAutodiffClosureSpecialization2();
+  P.addAutodiffClosureSpecialization();
 
   // Perform optimizations that specialize.
   addClosureSpecializePassPipeline(P);

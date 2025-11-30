@@ -2320,10 +2320,6 @@ void SILCloner<ImplClass>::visitDestroyValueInst(DestroyValueInst *Inst) {
                   RefCountingInst::Atomicity::Atomic));
   }
 
-  if (getBuilder().getFunction().hasOwnership() &&
-      getOpValue(Inst->getOperand())->getOwnershipKind() == OwnershipKind::None)
-    return;
-
   recordClonedInstruction(Inst, getBuilder().createDestroyValue(
                                     getOpLocation(Inst->getLoc()),
                                     getOpValue(Inst->getOperand()),
