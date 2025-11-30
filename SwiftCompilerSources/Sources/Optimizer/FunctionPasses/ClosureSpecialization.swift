@@ -1384,6 +1384,50 @@ private func getBTEPayloadArgOfPbBBWithBTETypeAndCase(_ bb: BasicBlock, vjp: Fun
   return nil
 }
 
+private func getOptionalArgOfPbBB(_ bb: BasicBlock, vjp: Function)
+  -> Argument?
+{
+  guard let predBB = bb.predecessors.first else {
+    log("getBTEPayloadArgOfPbBBWithBTETypeAndCase: the bb has no predecessors, aborting")
+    return nil
+  }
+
+  guard let arg = bb.arguments.singleElement else {
+    return nil
+  }
+
+  if !arg.type.rawType.isFunction {
+    return nil
+  }
+
+  guard let sei = predBB.terminator as? SwitchEnumInst else {
+    return nil
+  }
+  let enumType = sei.enumOp.type
+  if !enumType.isOptional {
+    return nil
+  }
+
+  guard let (predBBPayloadArg, enumTypeAndCase) = getBTEPayloadArgOfPbBBWithBTETypeAndCase(predBB, vjp: vjp) else {
+    return nil
+  }
+
+  for use in predBBPayloadArg.uses {
+    switch use.instruction {
+    case let tei as TupleExtractInst:
+      if tei == sei.enumOp.definingInstruction {
+        return arg
+      }
+    case let dti as DestructureTupleInst:
+      if tei == sei.enumOp.definingInstruction {
+        return arg
+      }
+    }
+  }
+
+  return nil
+}
+
 extension PartialApplyInst {
   func isSubsetThunk() -> Bool {
     if self.argumentOperands.singleElement == nil {
@@ -1642,4 +1686,29 @@ func specializeOptionalBBArgInPullback(
 
   return bb.insertPhiArgument(
     atPosition: arg.index, type: wrappedType, ownership: arg.ownership, context)
+}
+
+let specializeOptionalBBArgPullbackBB = FunctionTest("autodiff_specialize_optional_arg_in_pb_bb") {
+  function, arguments, context in
+  let pullbackClosureInfo = getPullbackClosureInfoMultiBB(in: function, context)
+  let pb = pullbackClosureInfo.pullbackFn
+  let enumDict = getSpecBTEDict(vjp: function, context: context)
+
+  print("Specialized BTE payload arguments of basic blocks in pullback \(pb.name):")
+  for bb in pb.blocks {
+    guard
+      let (arg, enumTypeAndCase) = getBTEPayloadArgOfPbBBWithBTETypeAndCase(bb, vjp: function)
+    else {
+      continue
+    }
+
+    let enumType = enumDict[enumTypeAndCase.enumType]!
+    let newArg = specializePayloadTupleBBArgInPullback(
+      arg: arg,
+      enumTypeAndCase: (enumType: enumType, caseIdx: enumTypeAndCase.caseIdx),
+      context: context)
+    print("\(newArg)")
+    bb.eraseArgument(at: newArg.index, context)
+  }
+  print("")
 }
