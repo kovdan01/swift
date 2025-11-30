@@ -1082,10 +1082,11 @@ func getOrCreateSpecializedFunctionCFG(
       }
 
       if let successor = throwingSuccessor {
+        let oldArg = successor.arguments.singleElement!
         let newArg = specializeOptionalBBArgInPullback(
-          bb: successor, newOptionalType: enumTypeAndCase.enumType.getEnumCases(in: bb.parentFunction)![enumTypeAndCase.caseIdx]!.payload.tupleElements.last!, context: context)
-        arg.uses.replaceAll(with: newArg, context)
-        succ.eraseArgument(at: arg.index, context)
+          bb: successor, newOptionalType: enumTypeAndCase.enumType.getEnumCases(in: bb.parentFunction)![enumTypeAndCase.caseIdx]!.payload!.tupleElements.last!, context: cloner.context)
+        oldArg.uses.replaceAll(with: newArg, cloner.context)
+        successor.eraseArgument(at: oldArg.index, cloner.context)
       }
 
       if newArg.uses.count == 1
@@ -2609,7 +2610,7 @@ private func getBTEPayloadArgOfPbBBInfo(_ bb: BasicBlock, vjp: Function)
       guard let sei = bb.terminator as? SwitchEnumInst else {
         return nil
       }
-      guard sei.enumOp.isOptional else {
+      guard sei.enumOp.type.isOptional else {
         return nil
       }
       assert(bb.successors.count == 2)
@@ -2618,13 +2619,15 @@ private func getBTEPayloadArgOfPbBBInfo(_ bb: BasicBlock, vjp: Function)
         for use in arg.uses {
           switch use.instruction {
           case let tei as TupleExtractInst:
-            if tei == sei.enumOp.definingInstruction && tei.fieldIndex + 1 == arg.tupleElements.count {
+            if tei == sei.enumOp.definingInstruction && tei.fieldIndex + 1 == arg.type.tupleElements.count {
               return true
             }
           case let dti as DestructureTupleInst:
-            if dti == sei.enumOp.definingInstruction && dti.results.last == sei.enumOp {
+            if dti == sei.enumOp.definingInstruction && dti.results.last! == sei.enumOp {
               return true
             }
+          default:
+            continue
           }
         }
         return false
@@ -2637,7 +2640,7 @@ private func getBTEPayloadArgOfPbBBInfo(_ bb: BasicBlock, vjp: Function)
       var successorSome = BasicBlock?(nil)
       var successorNone = BasicBlock?(nil)
       for successor in bb.successors {
-        if successors.arguments.count == 1 {
+        if successor.arguments.count == 1 {
           successorSome = successor
         } else if successor.arguments.count == 0 {
           successorNone = successor
@@ -3086,7 +3089,7 @@ let specializePayloadArgInPullbackBB = FunctionTest("autodiff_specialize_payload
   print("Specialized BTE payload arguments of basic blocks in pullback \(pb.name):")
   for bb in pb.blocks {
     guard
-      let (arg, enumTypeAndCase) = getBTEPayloadArgOfPbBBInfo(bb, vjp: function)
+      let (arg, enumTypeAndCase, _) = getBTEPayloadArgOfPbBBInfo(bb, vjp: function)
     else {
       continue
     }
