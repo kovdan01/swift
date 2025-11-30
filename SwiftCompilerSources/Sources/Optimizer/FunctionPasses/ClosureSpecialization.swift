@@ -801,6 +801,24 @@ private extension PartialApplyInst {
   }
 }
 
+extension EnumInst {
+  public var caseName: StringRef {
+    return self.type.getEnumCases(in: self.parentFunction)![self.caseIndex]!.name
+  }
+
+  public var isOptionalSome: Bool {
+    assert(self.type.isOptional)
+    assert(caseName == "none" || caseName == "some")
+    return caseName == "some"
+  }
+
+  public var isOptionalNone: Bool {
+    assert(self.type.isOptional)
+    assert(caseName == "none" || caseName == "some")
+    return caseName == "none"
+  }
+}
+
 private extension Function {
   var effectAllowsSpecialization: Bool {
     switch self.effectAttribute {
@@ -839,7 +857,8 @@ typealias ClosureInfoMultiBB = (
   subsetThunk: PartialApplyInst?,
   payloadTuple: TupleInst,
   idxInPayload: Int,
-  enumTypeAndCase: EnumTypeAndCase
+  enumTypeAndCase: EnumTypeAndCase,
+  throwingWrapper: EnumInst?
 )
 
 typealias EnumTypeAndCase = (
@@ -1026,6 +1045,10 @@ func autodiffSpecializeBranchTracingEnum(
         newECDNameSuffix += "_\(idxInPayloadTuple)"
         newPayloadTupleEltType = getCapturedArgTypesTupleForClosure(
           closure: closureInfoMultiBB.closure, context: context)
+        if oldPayloadTupleType.tupleElements[idxInPayloadTuple].isOptional {
+          assert(idxInPayloadTuple + 1 == oldPayloadTupleType.tupleElements.count)
+          newPayloadTupleEltType = context.getOptionalType(baseType: newPayloadTupleEltType!)
+        }
       } else {
         newPayloadTupleEltType = oldPayloadTupleType.tupleElements[idxInPayloadTuple].rawType
         if idxInPayloadTuple == 0
@@ -1067,15 +1090,15 @@ func autodiffSpecializeBranchTracingEnum(
   }
 
   let newED = EnumDecl.create(
-      declContext: declContext,
-      enumKeywordLoc: nil,
-      name: newEDNameStr,
-      nameLoc: nil,
-      genericParamList: genericParams,
-      inheritedTypes: [],
-      genericWhereClause: nil,
-      braceRange: SourceRange(start: nil),
-      astContext)
+    declContext: declContext,
+    enumKeywordLoc: nil,
+    name: newEDNameStr,
+    nameLoc: nil,
+    genericParamList: genericParams,
+    inheritedTypes: [],
+    genericWhereClause: nil,
+    braceRange: SourceRange(start: nil),
+    astContext)
 
   newED.setImplicit()
   if !canonicalGenericSig.isEmpty {
@@ -1217,86 +1240,194 @@ private func getPullbackClosureInfoMultiBB(in vjp: Function, _ context: Function
       contentsOf: closureInfoArr.filter { $0.subsetThunk != nil }.map { $0.subsetThunk! })
   }
 
+  // Consider the following code in a VJP for a throwing function:
+  //   bbA:
+  //     %closure = ...
+  //     %throwingWrapper1 = enum $Optional<ClosureType>, #Optional.some!enumelt, %closure
+  //     %payloadTuple1 = tuple (..., %throwingWrapper1)
+  //     %bteWithSome = enum $_AD__$xxx_bbN__Pred__xxx, #_AD__$xxx_bbN__Pred__xxx.bbK!enumelt, %payloadTuple1
+  //   bbB:
+  //     %throwingWrapper2 = enum $Optional<ClosureType>, #Optional.none!enumelt
+  //     %payloadTuple2 = tuple (..., %throwingWrapper2)
+  //     %bteWithNone = enum $_AD__$xxx_bbM__Pred__xxx, #_AD__$xxx_bbM__Pred__xxx.bbK!enumelt, %payloadTuple2
+  //
+  // During specialization, we need to change the underlying type for 'none' optional value %throwingWrapper2.
+  // The code below for each 'some' optional value (%throwingWrapper1 in the example above) finds the corresponding
+  // 'none' optional value and saves info about found value to allow further specialization. Pay attention to
+  // exact same names for branch tracing enum cases used for payload tuples in both cases (bbK in the example above).
+
+  let branchTracingEnumInstArr: [EnumInst] = vjp.instructions.filter { $0 is EnumInst }.map {
+    $0 as! EnumInst
+  }.filter { $0.type.isBranchTracingEnumIn(vjp: vjp) }
+
+  var closureInfoNoneArr = [ClosureInfoMultiBB]()
+
+  for closureInfo in pullbackClosureInfo.closureInfosMultiBB {
+    if closureInfo.throwingWrapper == nil {
+      continue
+    }
+    assert(closureInfo.throwingWrapper!.isOptionalSome)
+    // In terms of the example above, we've found %closure an %throwingWrapper1.
+
+    let enumTypeAndCase = closureInfo.enumTypeAndCase
+    let bteCaseName = enumTypeAndCase.enumType.getEnumCases(in: vjp)![enumTypeAndCase.caseIdx]!.name
+    // In terms of the example above, bteCaseName is now equal to "bbK".
+
+    let bteWithNoneArr = branchTracingEnumInstArr.filter {
+      $0.caseName == bteCaseName && $0.type != enumTypeAndCase.enumType
+    }
+    assert(bteWithNoneArr.count <= 1)
+    guard let bteWithNone = bteWithNoneArr.singleElement else {
+      continue
+    }
+
+    let payloadTuple = bteWithNone.operands.singleElement!.value as! TupleInst
+    let optionalNone = payloadTuple.operands.last!.value as! EnumInst
+    assert(optionalNone.isOptionalNone)
+
+    closureInfoNoneArr.append(
+      ClosureInfoMultiBB(
+        closure: closureInfo.closure,
+        capturedArgs: closureInfo.capturedArgs,
+        subsetThunk: closureInfo.subsetThunk,
+        payloadTuple: payloadTuple,
+        idxInPayload: closureInfo.idxInPayload,
+        enumTypeAndCase: EnumTypeAndCase(
+          enumType: bteWithNone.type, caseIdx: bteWithNone.caseIndex),
+        throwingWrapper: optionalNone
+      )
+    )
+  }
+  pullbackClosureInfo.closureInfosMultiBB.append(contentsOf: closureInfoNoneArr)
+
   return pullbackClosureInfo
 }
 
-typealias BTEPayloadArgOfPbBBWithBTETypeAndCase = (arg: Argument, enumTypeAndCase: EnumTypeAndCase)
+typealias BTEPayloadArgOfPbBBInfo = (arg: Argument, enumTypeAndCase: EnumTypeAndCase, throwingSuccessor: BasicBlock?)
 
 // If the pullback's basic block has an argument which is a payload tuple of the
 // branch tracing enum corresponding to the given VJP, return this argument and any valid combination
 // of a branch tracing enum type and its case index having the same payload tuple type as the argument.
 // The function assumes that no more than one such argument is present.
-private func getBTEPayloadArgOfPbBBWithBTETypeAndCase(_ bb: BasicBlock, vjp: Function)
-  -> BTEPayloadArgOfPbBBWithBTETypeAndCase?
+private func getBTEPayloadArgOfPbBBInfo(_ bb: BasicBlock, vjp: Function)
+  -> BTEPayloadArgOfPbBBInfo?
 {
   log(
-    "getBTEPayloadArgOfPbBBWithBTETypeAndCase: basic block \(bb.shortDescription) in pullback \(bb.parentFunction.name)"
+    "getBTEPayloadArgOfPbBBInfo: basic block \(bb.shortDescription) in pullback \(bb.parentFunction.name)"
   )
   guard let predBB = bb.predecessors.first else {
-    log("getBTEPayloadArgOfPbBBWithBTETypeAndCase: the bb has no predecessors, aborting")
+    log("getBTEPayloadArgOfPbBBInfo: the bb has no predecessors, aborting")
     return nil
   }
 
-  log("getBTEPayloadArgOfPbBBWithBTETypeAndCase: start iterating over bb args")
+  log("getBTEPayloadArgOfPbBBInfo: start iterating over bb args")
   for arg in bb.arguments {
-    log("getBTEPayloadArgOfPbBBWithBTETypeAndCase: \(arg)")
+    log("getBTEPayloadArgOfPbBBInfo: \(arg)")
     if !arg.type.isTuple {
-      log("getBTEPayloadArgOfPbBBWithBTETypeAndCase: arg is not a tuple, skipping")
+      log("getBTEPayloadArgOfPbBBInfo: arg is not a tuple, skipping")
       continue
     }
 
+    func getThrowingSuccessor(arg: Argument) -> BasicBlock? {
+      guard let sei = bb.terminator as? SwitchEnumInst else {
+        return nil
+      }
+      guard sei.enumOp.type.isOptional else {
+        return nil
+      }
+      assert(bb.successors.count == 2)
+
+      func isElementOfPayloadTuple() -> Bool {
+        for use in arg.uses {
+          switch use.instruction {
+          case let tei as TupleExtractInst:
+            if tei == sei.enumOp.definingInstruction && tei.fieldIndex + 1 == arg.type.tupleElements.count {
+              return true
+            }
+          case let dti as DestructureTupleInst:
+            if dti == sei.enumOp.definingInstruction && dti.results.last! == sei.enumOp {
+              return true
+            }
+          default:
+            continue
+          }
+        }
+        return false
+      }
+
+      guard isElementOfPayloadTuple() else {
+        return nil
+      }
+
+      var successorSome = BasicBlock?(nil)
+      var successorNone = BasicBlock?(nil)
+      for successor in bb.successors {
+        if successor.arguments.count == 1 {
+          successorSome = successor
+        } else if successor.arguments.count == 0 {
+          successorNone = successor
+        } else {
+          assert(false)
+        }
+      }
+      assert(successorSome != nil && successorNone != nil)
+      return successorSome!
+    }
+
     if let bi = predBB.terminator as? BranchInst {
-      log("getBTEPayloadArgOfPbBBWithBTETypeAndCase: terminator of pred bb is branch instruction")
+      log("getBTEPayloadArgOfPbBBInfo: terminator of pred bb is branch instruction")
       guard let uedi = bi.operands[arg.index].value.definingInstruction as? UncheckedEnumDataInst
       else {
         log(
-          "getBTEPayloadArgOfPbBBWithBTETypeAndCase: operand corresponding to the argument is not defined by unchecked_enum_data instruction"
+          "getBTEPayloadArgOfPbBBInfo: operand corresponding to the argument is not defined by unchecked_enum_data instruction"
         )
         continue
       }
       let enumType = uedi.`enum`.type
       if !enumType.isBranchTracingEnumIn(vjp: vjp) {
         log(
-          "getBTEPayloadArgOfPbBBWithBTETypeAndCase: enum type \(enumType) is not a branch tracing enum in VJP \(vjp.name)"
+          "getBTEPayloadArgOfPbBBInfo: enum type \(enumType) is not a branch tracing enum in VJP \(vjp.name)"
         )
         continue
       }
 
-      log("getBTEPayloadArgOfPbBBWithBTETypeAndCase: success")
-      return BTEPayloadArgOfPbBBWithBTETypeAndCase(
+      log("getBTEPayloadArgOfPbBBInfo: success")
+      return BTEPayloadArgOfPbBBInfo(
         arg: arg,
         enumTypeAndCase: (
           enumType: enumType,
           caseIdx: uedi.caseIndex
-        )
+        ),
+        throwingSuccessor: getThrowingSuccessor(arg: arg)
       )
     }
 
     if let sei = predBB.terminator as? SwitchEnumInst {
       log(
-        "getBTEPayloadArgOfPbBBWithBTETypeAndCase: terminator of pred bb is switch_enum instruction"
+        "getBTEPayloadArgOfPbBBInfo: terminator of pred bb is switch_enum instruction"
       )
       let enumType = sei.enumOp.type
       if !enumType.isBranchTracingEnumIn(vjp: vjp) {
         log(
-          "getBTEPayloadArgOfPbBBWithBTETypeAndCase: enum type \(enumType) is not a branch tracing enum in VJP \(vjp.name)"
+          "getBTEPayloadArgOfPbBBInfo: enum type \(enumType) is not a branch tracing enum in VJP \(vjp.name)"
         )
         continue
       }
 
-      log("getBTEPayloadArgOfPbBBWithBTETypeAndCase: success")
-      return BTEPayloadArgOfPbBBWithBTETypeAndCase(
+      log("getBTEPayloadArgOfPbBBInfo: success")
+      return BTEPayloadArgOfPbBBInfo(
         arg: arg,
         enumTypeAndCase: (
           enumType: enumType,
           caseIdx: sei.getUniqueCase(forSuccessor: bb)!
-        )
+        ),
+        throwingSuccessor: getThrowingSuccessor(arg: arg)
       )
     }
   }
 
   log(
-    "getBTEPayloadArgOfPbBBWithBTETypeAndCase: finish iterating over bb args; branch tracing enum arg not found"
+    "getBTEPayloadArgOfPbBBInfo: finish iterating over bb args; branch tracing enum arg not found"
   )
   return nil
 }
@@ -1325,12 +1456,18 @@ private func handleNonAppliesMultiBB(
 
   var closure = rootClosure
   var subsetThunk = PartialApplyInst?(nil)
+  var throwingWrapper = EnumInst?(nil)
   if rootClosure.uses.singleElement != nil {
-    if let pai = closure.uses.singleElement!.instruction as? PartialApplyInst {
+    if let pai = rootClosure.uses.singleElement!.instruction as? PartialApplyInst {
       if pai.isSubsetThunk() {
         log("handleNonAppliesMultiBB: found subset thunk \(pai)")
         subsetThunk = pai
         closure = pai
+      }
+    } else if let ei = rootClosure.uses.singleElement!.instruction as? EnumInst {
+      if ei.operands.count == 1 && ei.type.isOptional {
+        throwingWrapper = ei
+        closure = ei
       }
     }
   }
@@ -1366,7 +1503,8 @@ private func handleNonAppliesMultiBB(
           subsetThunk: subsetThunk,
           payloadTuple: ti,
           idxInPayload: use.index,
-          enumTypeAndCase: enumTypeAndCase
+          enumTypeAndCase: enumTypeAndCase,
+          throwingWrapper: throwingWrapper
         ))
     }
   }
@@ -1455,6 +1593,7 @@ func specializeBranchTracingEnumBBArgInVJP(
     atPosition: arg.index, type: newType, ownership: arg.ownership, context)
 }
 
+// Use this to make test output predictable
 extension SIL.`Type`: Comparable {
   public static func < (lhs: SIL.`Type`, rhs: SIL.`Type`) -> Bool {
     return "\(lhs)" < "\(rhs)"
@@ -1523,7 +1662,7 @@ let specializePayloadArgInPullbackBB = FunctionTest("autodiff_specialize_payload
   print("Specialized BTE payload arguments of basic blocks in pullback \(pb.name):")
   for bb in pb.blocks {
     guard
-      let (arg, enumTypeAndCase) = getBTEPayloadArgOfPbBBWithBTETypeAndCase(bb, vjp: function)
+      let (arg, enumTypeAndCase, _) = getBTEPayloadArgOfPbBBInfo(bb, vjp: function)
     else {
       continue
     }
@@ -1537,4 +1676,19 @@ let specializePayloadArgInPullbackBB = FunctionTest("autodiff_specialize_payload
     bb.eraseArgument(at: newArg.index, context)
   }
   print("")
+}
+
+func specializeOptionalBBArgInPullback(
+  bb: BasicBlock,
+  newOptionalType: Type,
+  context: FunctionPassContext
+) -> Argument {
+  assert(bb.arguments.count == 1)
+  let arg = bb.arguments.singleElement!
+
+  let wrappedType = newOptionalType.rawType.optionalObjectType.loweredTypeWithAbstractionPattern(
+    in: bb.parentFunction)
+
+  return bb.insertPhiArgument(
+    atPosition: arg.index, type: wrappedType, ownership: arg.ownership, context)
 }
