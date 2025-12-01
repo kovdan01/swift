@@ -1256,6 +1256,7 @@ void NodePrinter::printFunctionSigSpecializationParams(NodePointer Node,
       print(Node->getChild(Idx++), depth + 1);
       Printer << "]";
       break;
+    // TODO: case FunctionSigSpecializationParamKind::AutoDiffBranchTracingEnum
     default:
       assert(
        ((V & unsigned(FunctionSigSpecializationParamKind::OwnedToGuaranteed)) ||
@@ -1986,6 +1987,9 @@ NodePointer NodePrinter::print(NodePointer Node, unsigned depth,
       return nullptr;
     case FunctionSigSpecializationParamKind::ClosurePropPreviousArg:
       Printer << "Same As Argument";
+      return nullptr;
+    case FunctionSigSpecializationParamKind::AutoDiffBranchTracingEnum:
+      Printer << "AutoDiff Branch Tracing Enum Propagated";
       return nullptr;
     case FunctionSigSpecializationParamKind::ExistentialToGeneric:
     case FunctionSigSpecializationParamKind::Dead:
