@@ -289,6 +289,7 @@ public struct NominalFieldsArray : RandomAccessCollection, FormattedLikeArray {
 
 public struct EnumCase {
   public let enumElementDecl : EnumElementDecl
+  public var enumType: AST.`Type` { enumElementDecl.parentEnum.declaredInterfaceType }
   public let payload: Type?
   public let index: Int
   public var name: StringRef { enumElementDecl.name }
