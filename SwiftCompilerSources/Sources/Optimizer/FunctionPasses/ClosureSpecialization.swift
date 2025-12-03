@@ -788,6 +788,12 @@ extension EnumInst {
   }
 }
 
+extension EnumCase {
+  func enumType(in function: Function) -> Type {
+    remapType(ty: self.enumElementDecl.parentEnum.declaredInterfaceType.loweredTypeWithAbstractionPattern(in: function), function: function)
+  }
+}
+
 private extension Function {
   var effectAllowsSpecialization: Bool {
     switch self.effectAttribute {
@@ -826,13 +832,8 @@ typealias ClosureInfoMultiBB = (
   subsetThunk: PartialApplyInst?,
   payloadTuple: TupleInst,
   idxInPayload: Int,
-  enumTypeAndCase: EnumTypeAndCase,
+  enumCase: EnumCase,
   throwingWrapper: EnumInst?
-)
-
-typealias EnumTypeAndCase = (
-  enumType: Type,
-  caseIdx: Int
 )
 
 typealias BTEToPredsDict = [SIL.`Type`: [SIL.`Type`]]
@@ -1110,13 +1111,13 @@ func autodiffSpecializeBranchTracingEnums(
 
     var bteCaseToClosureListDict = BTECaseToClosureListDict()
     for closureInfoMultiBB in closureInfosMultiBB {
-      if closureInfoMultiBB.enumTypeAndCase.enumType != bteType {
+      if closureInfoMultiBB.enumCase.enumType(in: topVJP) != bteType {
         continue
       }
-      if bteCaseToClosureListDict[closureInfoMultiBB.enumTypeAndCase.caseIdx] == nil {
-        bteCaseToClosureListDict[closureInfoMultiBB.enumTypeAndCase.caseIdx] = []
+      if bteCaseToClosureListDict[closureInfoMultiBB.enumCase.index] == nil {
+        bteCaseToClosureListDict[closureInfoMultiBB.enumCase.index] = []
       }
-      bteCaseToClosureListDict[closureInfoMultiBB.enumTypeAndCase.caseIdx]!.append(
+      bteCaseToClosureListDict[closureInfoMultiBB.enumCase.index]!.append(
         closureInfoMultiBB)
     }
 
@@ -1238,12 +1239,12 @@ private func getPullbackClosureInfoMultiBB(in vjp: Function, _ context: Function
     assert(closureInfo.throwingWrapper!.isOptionalSome)
     // In terms of the example above, we've found %closure an %throwingWrapper1.
 
-    let enumTypeAndCase = closureInfo.enumTypeAndCase
-    let bteCaseName = enumTypeAndCase.enumType.getEnumCases(in: vjp)![enumTypeAndCase.caseIdx]!.name
+    let enumCase = closureInfo.enumCase
+    let bteCaseName = enumCase.enumType(in: vjp).getEnumCases(in: vjp)![enumCase.index]!.name
     // In terms of the example above, bteCaseName is now equal to "bbK".
 
     let bteWithNoneArr = branchTracingEnumInstArr.filter {
-      $0.caseName == bteCaseName && $0.type != enumTypeAndCase.enumType
+      $0.caseName == bteCaseName && $0.type != enumCase.enumType(in: vjp)
     }
     assert(bteWithNoneArr.count <= 1)
     guard let bteWithNone = bteWithNoneArr.singleElement else {
@@ -1261,8 +1262,7 @@ private func getPullbackClosureInfoMultiBB(in vjp: Function, _ context: Function
         subsetThunk: closureInfo.subsetThunk,
         payloadTuple: payloadTuple,
         idxInPayload: closureInfo.idxInPayload,
-        enumTypeAndCase: EnumTypeAndCase(
-          enumType: bteWithNone.type, caseIdx: bteWithNone.caseIndex),
+        enumCase: bteWithNone.type.getEnumCases(in: vjp)![bteWithNone.caseIndex]!,
         throwingWrapper: optionalNone
       )
     )
@@ -1272,7 +1272,7 @@ private func getPullbackClosureInfoMultiBB(in vjp: Function, _ context: Function
   return pullbackClosureInfo
 }
 
-typealias BTEPayloadArgOfPbBBInfo = (arg: Argument, enumTypeAndCase: EnumTypeAndCase, throwingSuccessor: BasicBlock?)
+typealias BTEPayloadArgOfPbBBInfo = (arg: Argument, enumCase: EnumCase, throwingSuccessor: BasicBlock?)
 
 // If the pullback's basic block has an argument which is a payload tuple of the
 // branch tracing enum corresponding to the given VJP, return this argument and any valid combination
@@ -1363,10 +1363,7 @@ private func getBTEPayloadArgOfPbBBInfo(_ bb: BasicBlock, vjp: Function)
       log("getBTEPayloadArgOfPbBBInfo: success")
       return BTEPayloadArgOfPbBBInfo(
         arg: arg,
-        enumTypeAndCase: (
-          enumType: enumType,
-          caseIdx: uedi.caseIndex
-        ),
+        enumCase: enumType.getEnumCases(in: vjp)![uedi.caseIndex]!,
         throwingSuccessor: getThrowingSuccessor(arg: arg)
       )
     }
@@ -1386,10 +1383,7 @@ private func getBTEPayloadArgOfPbBBInfo(_ bb: BasicBlock, vjp: Function)
       log("getBTEPayloadArgOfPbBBInfo: success")
       return BTEPayloadArgOfPbBBInfo(
         arg: arg,
-        enumTypeAndCase: (
-          enumType: enumType,
-          caseIdx: sei.getUniqueCase(forSuccessor: bb)!
-        ),
+        enumCase: enumType.getEnumCases(in: vjp)![sei.getUniqueCase(forSuccessor: bb)!]!,
         throwingSuccessor: getThrowingSuccessor(arg: arg)
       )
     }
@@ -1464,7 +1458,7 @@ private func handleNonAppliesMultiBB(
       log(
         "handleNonAppliesMultiBB: creating closure info with enum type \(ei.type), case index \(ei.caseIndex), index in payload tuple \(use.index) and payload tuple \(ti)"
       )
-      let enumTypeAndCase = (enumType: ei.type, caseIdx: ei.caseIndex)
+      let enumCase = ei.type.getEnumCases(in: vjp)![ei.caseIndex]!
       closureInfoArr.append(
         ClosureInfoMultiBB(
           closure: rootClosure,
@@ -1472,7 +1466,7 @@ private func handleNonAppliesMultiBB(
           subsetThunk: subsetThunk,
           payloadTuple: ti,
           idxInPayload: use.index,
-          enumTypeAndCase: enumTypeAndCase,
+          enumCase: enumCase,
           throwingWrapper: throwingWrapper
         ))
     }
@@ -1536,7 +1530,8 @@ let getPullbackClosureInfoMultiBBTest = FunctionTest(
     print("      subsetThunk: \(subsetThunkStr)")
     print("      payloadTuple: \(closureInfoMultiBB.payloadTuple)")
     print("      idxInPayload: \(closureInfoMultiBB.idxInPayload)")
-    print("      enumTypeAndCase: \(closureInfoMultiBB.enumTypeAndCase)")
+    let enumCase = closureInfoMultiBB.enumCase
+    print("      enumCase: \(enumCase.enumType(in: function)).\(enumCase.name)")
     print("      throwingWrapper: \(closureInfoMultiBB.throwingWrapper)")
     print("    )")
   }
@@ -1604,23 +1599,14 @@ let specializeBTEArgInVjpBB = FunctionTest("autodiff_specialize_bte_arg_in_vjp_b
 
 func specializePayloadTupleBBArgInPullback(
   arg: Argument,
-  enumTypeAndCase: EnumTypeAndCase,
+  enumCase: EnumCase,
   context: FunctionPassContext
 ) -> Argument {
   let bb = arg.parentBlock
-  let newEnumType = enumTypeAndCase.enumType
-
-  var newPayloadTupleTy = SIL.`Type`?(nil)
-  for enumCase in newEnumType.getEnumCases(in: arg.parentFunction)! {
-    if enumCase.index == enumTypeAndCase.caseIdx {
-      newPayloadTupleTy = enumCase.payload!
-      break
-    }
-  }
-  assert(newPayloadTupleTy != nil)
+  let newPayloadTupleTy = enumCase.payload!
 
   return bb.insertPhiArgument(
-    atPosition: arg.index, type: newPayloadTupleTy!, ownership: arg.ownership, context)
+    atPosition: arg.index, type: newPayloadTupleTy, ownership: arg.ownership, context)
 }
 
 let specializePayloadArgInPullbackBB = FunctionTest("autodiff_specialize_payload_arg_in_pb_bb") {
@@ -1632,15 +1618,15 @@ let specializePayloadArgInPullbackBB = FunctionTest("autodiff_specialize_payload
   print("Specialized BTE payload arguments of basic blocks in pullback \(pb.name):")
   for bb in pb.blocks {
     guard
-      let (arg, enumTypeAndCase, throwingSuccessor) = getBTEPayloadArgOfPbBBInfo(bb, vjp: function)
+      let (arg, enumCase, throwingSuccessor) = getBTEPayloadArgOfPbBBInfo(bb, vjp: function)
     else {
       continue
     }
 
-    let enumType = enumDict[enumTypeAndCase.enumType]!
+    let enumType = enumDict[enumCase.enumType(in: function)]!
     let newArg = specializePayloadTupleBBArgInPullback(
       arg: arg,
-      enumTypeAndCase: (enumType: enumType, caseIdx: enumTypeAndCase.caseIdx),
+      enumCase: enumType.getEnumCases(in: function)![enumCase.index]!,
       context: context)
     print("\(newArg)")
     bb.eraseArgument(at: newArg.index, context)
@@ -1648,7 +1634,7 @@ let specializePayloadArgInPullbackBB = FunctionTest("autodiff_specialize_payload
     if let successor = throwingSuccessor {
       let newArg = specializeOptionalBBArgInPullback(
         bb: successor,
-        newOptionalType: enumType.getEnumCases(in: pb)![enumTypeAndCase.caseIdx]!.payload!.tupleElements.last!,
+        newOptionalType: enumType.getEnumCases(in: pb)![enumCase.index]!.payload!.tupleElements.last!,
         context: context)
       print("\(newArg)")
       successor.eraseArgument(at: newArg.index, context)
