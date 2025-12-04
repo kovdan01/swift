@@ -163,7 +163,9 @@ PASS(PackSpecialization, "pack-specialization",
 
 PASS(ClosureSpecialization, "closure-specialization",
      "Specialize functions with closure arguments")
-PASS(AutodiffClosureSpecialization, "autodiff-closure-specialization",
+PASS(AutodiffClosureSpecialization1, "autodiff-closure-specialization1",
+     "Autodiff specific closure-specialization pass")
+PASS(AutodiffClosureSpecialization2, "autodiff-closure-specialization2",
      "Autodiff specific closure-specialization pass")
 
 MODULE_PASS(MandatoryAllocBoxToStack, "mandatory-allocbox-to-stack",
