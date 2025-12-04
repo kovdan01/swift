@@ -311,7 +311,7 @@ bb0(%0 : $Class):
   // TRUNNER-NEXT:        payloadTuple: %[[#]] = tuple (%[[#]] : $@callee_guaranteed (Float) -> Float, %[[#]] : $@callee_guaranteed (Class.TangentVector) -> (Float, Optional<Float>.TangentVector))
   // TRUNNER-NEXT:        idxInPayload: 0{{$}}
   // TRUNNER-NEXT:        enumCase: $_AD__$s4test5ClassV6methodSfyF_bb2__Pred__src_0_wrt_0.bb0
-  // TRUNNER-NEXT:        throwingWrapper: nil
+  // TRUNNER-NEXT:        optionalWrapper: nil
   // TRUNNER-NEXT:      ){{$}}
   // TRUNNER-NEXT:      ClosureInfoMultiBB(
   // TRUNNER-NEXT:        closure:      %[[#]] = partial_apply [callee_guaranteed] %[[#]](%[[#]], %[[#]]) : $@convention(thin) (Float, Float, Float) -> (Float, Float)
@@ -319,7 +319,7 @@ bb0(%0 : $Class):
   // TRUNNER-NEXT:        payloadTuple: %[[#]] = tuple (%[[#]] : $@callee_guaranteed (Float) -> Float, %[[#]] : $@callee_guaranteed (Class.TangentVector) -> (Float, Optional<Float>.TangentVector))
   // TRUNNER-NEXT:        idxInPayload: 0{{$}}
   // TRUNNER-NEXT:        enumCase: $_AD__$s4test5ClassV6methodSfyF_bb1__Pred__src_0_wrt_0.bb0
-  // TRUNNER-NEXT:        throwingWrapper: nil
+  // TRUNNER-NEXT:        optionalWrapper: nil
   // TRUNNER-NEXT:      ){{$}}
   // TRUNNER-NEXT:      ClosureInfoMultiBB(
   // TRUNNER-NEXT:        closure:      %[[#]] = thin_to_thick_function %[[#]] : $@convention(thin) (Class.TangentVector) -> (Float, Optional<Float>.TangentVector) to $@callee_guaranteed (Class.TangentVector) -> (Float, Optional<Float>.TangentVector)
@@ -327,7 +327,7 @@ bb0(%0 : $Class):
   // TRUNNER-NEXT:        payloadTuple: %[[#]] = tuple (%[[#]] : $@callee_guaranteed (Float) -> Float, %[[#]] : $@callee_guaranteed (Class.TangentVector) -> (Float, Optional<Float>.TangentVector))
   // TRUNNER-NEXT:        idxInPayload: 1{{$}}
   // TRUNNER-NEXT:        enumCase: $_AD__$s4test5ClassV6methodSfyF_bb2__Pred__src_0_wrt_0.bb0
-  // TRUNNER-NEXT:        throwingWrapper: nil
+  // TRUNNER-NEXT:        optionalWrapper: nil
   // TRUNNER-NEXT:      ){{$}}
   // TRUNNER-NEXT:      ClosureInfoMultiBB(
   // TRUNNER-NEXT:        closure:      %[[#]] = thin_to_thick_function %[[#]] : $@convention(thin) (Class.TangentVector) -> (Float, Optional<Float>.TangentVector) to $@callee_guaranteed (Class.TangentVector) -> (Float, Optional<Float>.TangentVector)
@@ -335,7 +335,7 @@ bb0(%0 : $Class):
   // TRUNNER-NEXT:        payloadTuple: %[[#]] = tuple (%[[#]] : $@callee_guaranteed (Float) -> Float, %[[#]] : $@callee_guaranteed (Class.TangentVector) -> (Float, Optional<Float>.TangentVector))
   // TRUNNER-NEXT:        idxInPayload: 1{{$}}
   // TRUNNER-NEXT:        enumCase: $_AD__$s4test5ClassV6methodSfyF_bb1__Pred__src_0_wrt_0.bb0
-  // TRUNNER-NEXT:        throwingWrapper: nil
+  // TRUNNER-NEXT:        optionalWrapper: nil
   // TRUNNER-NEXT:      ){{$}}
   // TRUNNER-NEXT:      ClosureInfoMultiBB(
   // TRUNNER-NEXT:        closure:      %[[#]] = partial_apply [callee_guaranteed] %[[#]](%[[#]], %[[#]]) : $@convention(thin) (Float, Float, Float) -> (Float, Float)
@@ -343,7 +343,7 @@ bb0(%0 : $Class):
   // TRUNNER-NEXT:        payloadTuple: %[[#]] = tuple $(predecessor: _AD__$s4test5ClassV6methodSfyF_bb1__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> (Float, Float)) (%[[#]], %[[#]])
   // TRUNNER-NEXT:        idxInPayload: 1{{$}}
   // TRUNNER-NEXT:        enumCase: $_AD__$s4test5ClassV6methodSfyF_bb3__Pred__src_0_wrt_0.bb1
-  // TRUNNER-NEXT:        throwingWrapper: nil
+  // TRUNNER-NEXT:        optionalWrapper: nil
   // TRUNNER-NEXT:      ){{$}}
   // TRUNNER-NEXT:      ClosureInfoMultiBB(
   // TRUNNER-NEXT:        closure:      %[[#]] = partial_apply [callee_guaranteed] %[[#]](%[[#]], %[[#]]) : $@convention(thin) (Float, Float, Float) -> (Float, Float)
@@ -351,7 +351,7 @@ bb0(%0 : $Class):
   // TRUNNER-NEXT:        payloadTuple: %[[#]] = tuple $(predecessor: _AD__$s4test5ClassV6methodSfyF_bb2__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float) (%[[#]], %[[#]])
   // TRUNNER-NEXT:        idxInPayload: 1{{$}}
   // TRUNNER-NEXT:        enumCase: $_AD__$s4test5ClassV6methodSfyF_bb3__Pred__src_0_wrt_0.bb2
-  // TRUNNER-NEXT:        throwingWrapper: nil
+  // TRUNNER-NEXT:        optionalWrapper: nil
   // TRUNNER-NEXT:      ){{$}}
   // TRUNNER-NEXT:    ]{{$}}
   // TRUNNER-NEXT:  ){{$}}
@@ -640,7 +640,7 @@ bb0(%0 : $Float):
   // TRUNNER-NEXT:        payloadTuple: %[[#]] = tuple (%[[#]] : $@callee_guaranteed (Float) -> (Float, Float), %[[#]] : $@callee_guaranteed (Float) -> (Float, Float))
   // TRUNNER-NEXT:        idxInPayload: 0{{$}}
   // TRUNNER-NEXT:        enumCase: $_AD__$s4test14cond_tuple_varyS2fF_bb2__Pred__src_0_wrt_0.bb0
-  // TRUNNER-NEXT:        throwingWrapper: nil
+  // TRUNNER-NEXT:        optionalWrapper: nil
   // TRUNNER-NEXT:      ){{$}}
   // TRUNNER-NEXT:      ClosureInfoMultiBB(
   // TRUNNER-NEXT:        closure:      %[[#]] = thin_to_thick_function %[[#]] : $@convention(thin) (Float) -> (Float, Float) to $@callee_guaranteed (Float) -> (Float, Float)
@@ -648,7 +648,7 @@ bb0(%0 : $Float):
   // TRUNNER-NEXT:        payloadTuple: %[[#]] = tuple (%[[#]] : $@callee_guaranteed (Float) -> (Float, Float), %[[#]] : $@callee_guaranteed (Float) -> (Float, Float))
   // TRUNNER-NEXT:        idxInPayload: 0{{$}}
   // TRUNNER-NEXT:        enumCase: $_AD__$s4test14cond_tuple_varyS2fF_bb1__Pred__src_0_wrt_0.bb0
-  // TRUNNER-NEXT:        throwingWrapper: nil
+  // TRUNNER-NEXT:        optionalWrapper: nil
   // TRUNNER-NEXT:      ){{$}}
   // TRUNNER-NEXT:      ClosureInfoMultiBB(
   // TRUNNER-NEXT:        closure:      %[[#]] = thin_to_thick_function %[[#]] : $@convention(thin) (Float) -> (Float, Float) to $@callee_guaranteed (Float) -> (Float, Float)
@@ -656,7 +656,7 @@ bb0(%0 : $Float):
   // TRUNNER-NEXT:        payloadTuple: %[[#]] = tuple (%[[#]] : $@callee_guaranteed (Float) -> (Float, Float), %[[#]] : $@callee_guaranteed (Float) -> (Float, Float))
   // TRUNNER-NEXT:        idxInPayload: 1{{$}}
   // TRUNNER-NEXT:        enumCase: $_AD__$s4test14cond_tuple_varyS2fF_bb2__Pred__src_0_wrt_0.bb0
-  // TRUNNER-NEXT:        throwingWrapper: nil
+  // TRUNNER-NEXT:        optionalWrapper: nil
   // TRUNNER-NEXT:      ){{$}}
   // TRUNNER-NEXT:      ClosureInfoMultiBB(
   // TRUNNER-NEXT:        closure:      %[[#]] = thin_to_thick_function %[[#]] : $@convention(thin) (Float) -> (Float, Float) to $@callee_guaranteed (Float) -> (Float, Float)
@@ -664,7 +664,7 @@ bb0(%0 : $Float):
   // TRUNNER-NEXT:        payloadTuple: %[[#]] = tuple (%[[#]] : $@callee_guaranteed (Float) -> (Float, Float), %[[#]] : $@callee_guaranteed (Float) -> (Float, Float))
   // TRUNNER-NEXT:        idxInPayload: 1{{$}}
   // TRUNNER-NEXT:        enumCase: $_AD__$s4test14cond_tuple_varyS2fF_bb1__Pred__src_0_wrt_0.bb0
-  // TRUNNER-NEXT:        throwingWrapper: nil
+  // TRUNNER-NEXT:        optionalWrapper: nil
   // TRUNNER-NEXT:      ){{$}}
   // TRUNNER-NEXT:      ClosureInfoMultiBB(
   // TRUNNER-NEXT:        closure:      %[[#]] = thin_to_thick_function %[[#]] : $@convention(thin) (Float) -> (Float, Float) to $@callee_guaranteed (Float) -> (Float, Float)
@@ -672,7 +672,7 @@ bb0(%0 : $Float):
   // TRUNNER-NEXT:        payloadTuple: %[[#]] = tuple $(predecessor: _AD__$s4test14cond_tuple_varyS2fF_bb1__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> (Float, Float), @callee_guaranteed (Float) -> (Float, Float)) (%[[#]], %[[#]], %[[#]])
   // TRUNNER-NEXT:        idxInPayload: 1{{$}}
   // TRUNNER-NEXT:        enumCase: $_AD__$s4test14cond_tuple_varyS2fF_bb3__Pred__src_0_wrt_0.bb1
-  // TRUNNER-NEXT:        throwingWrapper: nil
+  // TRUNNER-NEXT:        optionalWrapper: nil
   // TRUNNER-NEXT:      ){{$}}
   // TRUNNER-NEXT:      ClosureInfoMultiBB(
   // TRUNNER-NEXT:        closure:      %[[#]] = thin_to_thick_function %[[#]] : $@convention(thin) (Float) -> (Float, Float) to $@callee_guaranteed (Float) -> (Float, Float)
@@ -680,7 +680,7 @@ bb0(%0 : $Float):
   // TRUNNER-NEXT:        payloadTuple: %[[#]] = tuple $(predecessor: _AD__$s4test14cond_tuple_varyS2fF_bb1__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> (Float, Float), @callee_guaranteed (Float) -> (Float, Float)) (%[[#]], %[[#]], %[[#]])
   // TRUNNER-NEXT:        idxInPayload: 2{{$}}
   // TRUNNER-NEXT:        enumCase: $_AD__$s4test14cond_tuple_varyS2fF_bb3__Pred__src_0_wrt_0.bb1
-  // TRUNNER-NEXT:        throwingWrapper: nil
+  // TRUNNER-NEXT:        optionalWrapper: nil
   // TRUNNER-NEXT:      ){{$}}
   // TRUNNER-NEXT:      ClosureInfoMultiBB(
   // TRUNNER-NEXT:        closure:   %[[#]] = partial_apply [callee_guaranteed] %[[#]](%0, %[[#]]) : $@convention(thin) (Float, Float, Float) -> (Float, Float)
@@ -688,7 +688,7 @@ bb0(%0 : $Float):
   // TRUNNER-NEXT:        payloadTuple: %[[#]] = tuple $(predecessor: _AD__$s4test14cond_tuple_varyS2fF_bb2__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float) (%[[#]], %[[#]])
   // TRUNNER-NEXT:        idxInPayload: 1{{$}}
   // TRUNNER-NEXT:        enumCase: $_AD__$s4test14cond_tuple_varyS2fF_bb3__Pred__src_0_wrt_0.bb2
-  // TRUNNER-NEXT:        throwingWrapper: nil
+  // TRUNNER-NEXT:        optionalWrapper: nil
   // TRUNNER-NEXT:      ){{$}}
   // TRUNNER-NEXT:    ]{{$}}
   // TRUNNER-NEXT:  ){{$}}
@@ -891,7 +891,7 @@ bb0(%0 : $Float):
   // TRUNNER-NEXT:        payloadTuple:   %[[#]] = tuple $(predecessor: _AD__$s5throw8catching5inputS2f_tF_bb1__Pred__src_0_wrt_0, Optional<@callee_guaranteed (Float) -> Float>) (%[[#]], %[[#]])
   // TRUNNER-NEXT:        idxInPayload: 1{{$}}
   // TRUNNER-NEXT:        enumCase: $_AD__$s5throw8catching5inputS2f_tF_bb2__Pred__src_0_wrt_0.bb1
-  // TRUNNER-NEXT:        throwingWrapper: Optional( %[[#]] = enum $Optional<@callee_guaranteed (Float) -> Float>, #Optional.some!enumelt, %[[#]] : $@callee_guaranteed (Float) -> Float // user: %[[#]])
+  // TRUNNER-NEXT:        optionalWrapper: Optional( %[[#]] = enum $Optional<@callee_guaranteed (Float) -> Float>, #Optional.some!enumelt, %[[#]] : $@callee_guaranteed (Float) -> Float // user: %[[#]])
   // TRUNNER-NEXT:      ){{$}}
   // TRUNNER-NEXT:    ]{{$}}
   // TRUNNER-NEXT:  ){{$}}
