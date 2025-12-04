@@ -1163,9 +1163,7 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
 
   let ri = exitBB.terminator as! ReturnInst
   guard let retValDefiningInstr = ri.returnedValue.definingInstruction else {
-    log(
-      "getPartialApplyOfPullbackInExitVJPBB: return value is not defined by an instruction, aborting"
-    )
+    log("getPartialApplyOfPullbackInExitVJPBB: return value is not defined by an instruction, aborting")
     return nil
   }
 
@@ -1179,9 +1177,7 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
         log("getPartialApplyOfPullbackInExitVJPBB: success")
         return pai
       }
-      log(
-        "getPartialApplyOfPullbackInExitVJPBB: fromFunction operand of convert_function instruction is not defined by partial_apply instruction, aborting"
-      )
+      log("getPartialApplyOfPullbackInExitVJPBB: fromFunction operand of convert_function instruction is not defined by partial_apply instruction, aborting")
       return nil
     }
     log("getPartialApplyOfPullbackInExitVJPBB: unexpected instruction type, aborting")
@@ -1191,15 +1187,11 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
   if let ti = retValDefiningInstr as? TupleInst {
     log("getPartialApplyOfPullbackInExitVJPBB: return value is defined by tuple instruction")
     if ti.operands.count < 2 {
-      log(
-        "getPartialApplyOfPullbackInExitVJPBB: tuple instruction has \(ti.operands.count) operands, but at least 2 expected, aborting"
-      )
+      log("getPartialApplyOfPullbackInExitVJPBB: tuple instruction has \(ti.operands.count) operands, but at least 2 expected, aborting")
       return nil
     }
     guard let lastTupleElemDefiningInst = ti.operands.last!.value.definingInstruction else {
-      log(
-        "getPartialApplyOfPullbackInExitVJPBB: last tuple element is not defined by an instruction, aborting"
-      )
+      log("getPartialApplyOfPullbackInExitVJPBB: last tuple element is not defined by an instruction, aborting")
       return nil
     }
     return handleConvertFunctionOrPartialApply(inst: lastTupleElemDefiningInst)
@@ -1302,9 +1294,7 @@ typealias BTEPayloadArgOfPbBBInfo = (arg: Argument, enumCase: EnumCase, throwing
 private func getBTEPayloadArgOfPbBBInfo(_ bb: BasicBlock, vjp: Function)
   -> BTEPayloadArgOfPbBBInfo?
 {
-  log(
-    "getBTEPayloadArgOfPbBBInfo: basic block \(bb.shortDescription) in pullback \(bb.parentFunction.name)"
-  )
+  log("getBTEPayloadArgOfPbBBInfo: basic block \(bb.shortDescription) in pullback \(bb.parentFunction.name)")
   guard let predBB = bb.predecessors.first else {
     log("getBTEPayloadArgOfPbBBInfo: the bb has no predecessors, aborting")
     return nil
@@ -1386,9 +1376,7 @@ private func getBTEPayloadArgOfPbBBInfo(_ bb: BasicBlock, vjp: Function)
     }
 
     if let sei = predBB.terminator as? SwitchEnumInst {
-      log(
-        "getBTEPayloadArgOfPbBBInfo: terminator of pred bb is switch_enum instruction"
-      )
+      log("getBTEPayloadArgOfPbBBInfo: terminator of pred bb is switch_enum instruction")
       let enumType = sei.enumOp.type
       if !enumType.isBranchTracingEnumIn(vjp: vjp) {
         log("getBTEPayloadArgOfPbBBInfo: enum type \(enumType) is not a branch tracing enum in VJP \(vjp.name)")
@@ -1481,9 +1469,7 @@ private func handleNonAppliesMultiBB(
     }
     closureInfoArr.append(contentsOf: closureInfoForPayloadArr)
   }
-  log(
-    "handleNonAppliesMultiBB: created \(closureInfoArr.count) closure info entries for \(rootClosure)"
-  )
+  log("handleNonAppliesMultiBB: created \(closureInfoArr.count) closure info entries for \(rootClosure)")
   return closureInfoArr
 }
 
