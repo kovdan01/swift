@@ -223,7 +223,7 @@ func autodiffClosureSpecialization(function: Function, context: FunctionPassCont
     repeat {
       log("Remaining specialization rounds: " + String(remainingSpecializationRounds))
       let pullbackClosureInfo = getPullbackClosureInfoMultiBB(in: function, context)
-      if pullbackClosureInfo.closureInfosMultiBB.count == 0 {
+      if pullbackClosureInfo.closureInfosMultiBB.isEmpty {
         // TODO: it looks like that we do not have more than 1 round, at least for multi BB case
         log(
             "Unable to detect closures to be specialized in " + function.name.string
@@ -369,7 +369,7 @@ private func rewriteApplyInstructionCFG(
 
   for payload in payloads {
     let ti = payload
-    if ti.operands.count == 0 {
+    if ti.operands.isEmpty {
       continue
     }
 
@@ -441,7 +441,7 @@ private func rewriteApplyInstructionCFG(
         continue
       }
       let enumOpt = svi as? EnumInst
-      if enumOpt != nil && enumOpt!.type.isOptional && enumOpt!.uses.count == 0 {
+      if enumOpt != nil && enumOpt!.type.isOptional && enumOpt!.uses.isEmpty {
         context.erase(instruction: enumOpt!)
         wasUpdated = true
         continue
@@ -1037,7 +1037,7 @@ func getOrCreateSpecializedFunctionCFG(
       arg.uses.replaceAll(with: newArg, cloner.context)
       bb.eraseArgument(at: arg.index, cloner.context)
 
-      if newArg.uses.count == 0 {
+      guard !newArg.uses.isEmpty else {
         continue
       }
 
@@ -1280,7 +1280,7 @@ extension EnumInst {
 
 extension EnumCase {
   func enumType(in function: Function) -> Type {
-    remapType(ty: self.enumElementDecl.parentEnum.declaredInterfaceType.loweredTypeWithAbstractionPattern(in: function), function: function)
+    remapType(type: self.enumElementDecl.parentEnum.declaredInterfaceType.loweredTypeWithAbstractionPattern(in: function), function: function)
   }
 }
 
@@ -1362,7 +1362,7 @@ enum PayloadValues {
 }
 
 func getPayloadValues(payload: Argument, vjp: Function) -> PayloadValues {
-  if payload.uses.count == 0 {
+  guard !payload.uses.isEmpty else {
     return PayloadValues.ZeroUses
   }
 
@@ -1373,7 +1373,7 @@ func getPayloadValues(payload: Argument, vjp: Function) -> PayloadValues {
   {
     let dti = payload.uses.singleUse!.instruction as! DestructureTupleInst
     // TODO: do we need to check that results is not empty?
-    if dti.operands[0].value.type.tupleElements.count != 0
+    if !dti.operands[0].value.type.tupleElements.isEmpty
       && dti.results[0].type.isBranchTracingEnumIn(vjp: vjp) && dti.results[0].uses.count > 1
     {
       return PayloadValues.Unsupported
@@ -1635,7 +1635,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     log(
         "Pullback: single-bb; \(bteArgOfPb.uses.count) uses of branch tracing enum pullback argument found."
     )
-    if bteArgOfPb.uses.count != 0 {
+    if !bteArgOfPb.uses.isEmpty {
       log(
         prefixFail +
         "single-bb pullback has uses of BTE arg")
@@ -1658,7 +1658,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
       }
     }
   } else {
-    if bteArgOfPb.uses.count == 0 {
+    if bteArgOfPb.uses.isEmpty {
       log(prefixFail + "no uses of pullback bte arg found")
       return false
     }
@@ -1789,7 +1789,7 @@ private func multiBBHelper(
   repeat {
     oldSetSize = closuresSet.count
     for closure in closuresSet {
-      if closure.uses.count == 0 {
+      if closure.uses.isEmpty {
         specializedClosures += 1
         // TODO: do we need to manually delete the related function_ref instruction?
         context.erase(instruction: closure)
@@ -1840,20 +1840,20 @@ func getCapturedArgTypesTupleForClosure(
 //     case bbC((predecessor: _AD__$xxx_bbC__Pred__xxx, /* closure types */))
 //   }
 func getBranchTracingEnumPreds(bteType: SIL.`Type`, vjp: Function) -> [SIL.`Type`] {
-  var btePreds = [SIL.`Type`]()
   guard let enumCases = bteType.getEnumCases(in: vjp) else {
-    return btePreds
+    return []
   }
+
+  var btePreds = [SIL.`Type`]()
   for enumCase in enumCases {
-    let payloadType: SIL.`Type` = enumCase.payload!
-    if payloadType.tupleElements.count == 0 {
+    guard let firstTupleElementType = enumCase.payload!.tupleElements.first else {
       continue
     }
-    let firstTupleElementType: SIL.`Type` = payloadType.tupleElements[0]
     if firstTupleElementType.isBranchTracingEnumIn(vjp: vjp) {
       btePreds.append(firstTupleElementType)
     }
   }
+
   return btePreds
 }
 
@@ -1906,26 +1906,22 @@ func getBranchTracingEnumQueue(topBTEType: SIL.`Type`, vjp: Function) -> [SIL.`T
     currentBTEType: topBTEType,
     vjp: vjp)
   var bteQueue = [SIL.`Type`]()
-  let totalEnums = bteToPredsDict.count
+  let bteCount = bteToPredsDict.count
 
-  for i in 0..<totalEnums {
-    for bteType in bteToPredsDict.keys {
-      let btePreds: [SIL.`Type`] = bteToPredsDict[bteType]!
-      if btePreds.count != 0 {
+  for _ in 0..<bteCount {
+    for (bteType, btePreds) in bteToPredsDict {
+      guard btePreds.isEmpty else {
         continue
       }
-      assert(!bteQueue.contains(bteType))
       bteQueue.append(bteType)
       break
     }
-    assert(bteQueue.count == i + 1)
     bteToPredsDict.removeValue(forKey: bteQueue.last!)
-    for bteType in bteToPredsDict.keys {
-      let btePreds: [SIL.`Type`] = bteToPredsDict[bteType]!
+    for (bteType, btePreds) in bteToPredsDict {
       bteToPredsDict[bteType] = btePreds.filter { $0 != bteQueue.last! }
     }
   }
-  assert(bteQueue.count == totalEnums)
+  assert(bteQueue.count == bteCount)
 
   return bteQueue
 }
@@ -1933,11 +1929,10 @@ func getBranchTracingEnumQueue(topBTEType: SIL.`Type`, vjp: Function) -> [SIL.`T
 // NOTE: this is adopted from
 // lib/SILOptimizer/Differentiation/PullbackCloner.cpp.
 /// Remap any archetypes into the current function's context.
-func remapType(ty: SIL.`Type`, function: Function) -> SIL.`Type` {
-  var silType = ty
-  if silType.rawType.hasArchetype {
-    silType = silType.mapOutOfEnvironment(in: function)
-  }
+func remapType(type: SIL.`Type`, function: Function) -> SIL.`Type` {
+  let silType =
+    if type.rawType.hasArchetype { type.mapOutOfEnvironment(in: function) }
+    else { type }
   let remappedCanType = silType.rawType.getReducedType(
     of: function.loweredFunctionType.substitutedGenericSignatureOfFunctionType.genericSignature)
   let remappedSILType = remappedCanType.loweredTypeWithAbstractionPattern(in: function)
@@ -1986,6 +1981,58 @@ func cloneGenericParameters(
     rightAngleLoc: nil, astContext)
 }
 
+func getSpecializedParamDeclForEnumCase(
+  enumCase: EnumCase,
+  closureInfosForBTE: [ClosureInfoMultiBB],
+  newEDName: inout String,
+  specBTEDict: SpecBTEDict,
+  topVJP: Function,
+  context: FunctionPassContext
+) -> ParamDecl {
+  let oldPayloadTupleElementTypes = enumCase.payload!.tupleElements
+
+  let closureInfosForCase = closureInfosForBTE.filter{ $0.enumCase.index == enumCase.index }
+
+  var nameSuffix: String = ""
+  var newPayloadTupleElementTypes = [(label: Identifier, type: AST.`Type`)]()
+
+  for (elementIndex, oldElementType) in oldPayloadTupleElementTypes.enumerated() {
+    var newElementType = AST.`Type`?(nil)
+    if let closureInfo = closureInfosForCase.filter({ $0.idxInPayload == elementIndex }).getExactlyOneOrNil() {
+      nameSuffix += "_\(elementIndex)"
+      newElementType = getCapturedArgTypesTupleForClosure(
+        closure: closureInfo.closure, context: context)
+      if oldElementType.isOptional {
+        assert(elementIndex + 1 == oldPayloadTupleElementTypes.count)
+        newElementType = newElementType!.optionalType
+      }
+    } else {
+      newElementType = oldElementType.rawType
+      if elementIndex == 0 && oldElementType.isBranchTracingEnumIn(vjp: topVJP) {
+        let predED = newElementType!.nominal as! EnumDecl
+        let predBTEType: SIL.`Type` = remapType(
+          type: getBranchingTraceEnumLoweredType(ed: predED, vjp: topVJP),
+          function: topVJP)
+        newElementType = specBTEDict[predBTEType]!.rawType
+      }
+    }
+    newPayloadTupleElementTypes.append((label: oldPayloadTupleElementTypes.label(at: elementIndex), type: newElementType!))
+  }
+
+  let enumElementDecl = enumCase.enumElementDecl
+
+  if !nameSuffix.isEmpty {
+    newEDName += "_\(enumElementDecl.name)\(nameSuffix)"
+  }
+
+  let newParamDecl = enumElementDecl.parameterList.singleElement!.cloneWithoutType()
+  newParamDecl.setInterfaceType(type:
+    context.getTupleType(elements: newPayloadTupleElementTypes)
+    .mapOutOfEnvironment())
+
+  return newParamDecl
+}
+
 func autodiffSpecializeBranchTracingEnum(
   bteType: SIL.`Type`, topVJP: Function,
   closureInfosForBTE: [ClosureInfoMultiBB],
@@ -1999,62 +2046,22 @@ func autodiffSpecializeBranchTracingEnum(
   let astContext = declContext.astContext
 
   var newEDNameStr: String = oldED.name.string + "_spec"
-  var newPLs = [ParameterList]()
 
-  for enumCase in bteType.getEnumCases(in: topVJP)! {
-    let oldPayloadTupleType: Type = enumCase.payload!
-    let oldEED: EnumElementDecl = enumCase.enumElementDecl
-
-    let oldPL: ParameterList = oldEED.parameterList
-    assert(oldPL.count == 1)
-    let oldPD: ParamDecl = oldPL[0]
-
-    let closureInfosForCase = closureInfosForBTE.filter{ $0.enumCase.index == enumCase.index }
-
-    var newECDNameSuffix: String = ""
-    var newPayloadTupleElementTypes = [(label: Identifier, type: AST.`Type`)]()
-
-    for idxInPayloadTuple in 0..<oldPayloadTupleType.tupleElements.count {
-      let label: Identifier = oldPayloadTupleType.tupleElements.label(at: idxInPayloadTuple)
-      var newPayloadTupleEltType = AST.`Type`?(nil)
-      if let closureInfo = closureInfosForCase.filter({ $0.idxInPayload == idxInPayloadTuple }).getExactlyOneOrNil() {
-        newECDNameSuffix += "_\(idxInPayloadTuple)"
-        newPayloadTupleEltType = getCapturedArgTypesTupleForClosure(
-          closure: closureInfo.closure, context: context)
-        if oldPayloadTupleType.tupleElements[idxInPayloadTuple].isOptional {
-          assert(idxInPayloadTuple + 1 == oldPayloadTupleType.tupleElements.count)
-          newPayloadTupleEltType = newPayloadTupleEltType!.optionalType
-        }
-      } else {
-        newPayloadTupleEltType = oldPayloadTupleType.tupleElements[idxInPayloadTuple].rawType
-        if idxInPayloadTuple == 0
-          && oldPayloadTupleType.tupleElements[idxInPayloadTuple].isBranchTracingEnumIn(vjp: topVJP)
-        {
-          let predED = newPayloadTupleEltType!.nominal as! EnumDecl
-          let predBTEType: SIL.`Type` = remapType(
-            ty: getBranchingTraceEnumLoweredType(ed: predED, vjp: topVJP),
-            function: topVJP)
-          newPayloadTupleEltType = specBTEDict[predBTEType]!.rawType
-        }
-      }
-      newPayloadTupleElementTypes.append((label: label, type: newPayloadTupleEltType!))
-    }
-    let newTupleType =
-      context.getTupleType(elements: newPayloadTupleElementTypes)
-      .mapOutOfEnvironment()
-
-    let newPD = oldPD.cloneWithoutType()
-
-    newPD.setInterfaceType(type: newTupleType)
-    let newPL =
-      ParameterList.create(
-        leftParenLoc: nil, parameters: [newPD],
-        rightParenLoc: nil, astContext)
-    newPLs.append(newPL)
-
-    if newECDNameSuffix.count != 0 {
-      newEDNameStr += "_\(oldEED.name)\(newECDNameSuffix)"
-    }
+  let newPLs = bteType.getEnumCases(in: topVJP)!.map{
+    ParameterList.create(
+      leftParenLoc: nil,
+      parameters: [
+        getSpecializedParamDeclForEnumCase(
+          enumCase: $0,
+          closureInfosForBTE: closureInfosForBTE,
+          newEDName: &newEDNameStr,
+          specBTEDict: specBTEDict,
+          topVJP: topVJP,
+          context: context
+        )
+      ],
+      rightParenLoc: nil, astContext
+    )
   }
 
   let canonicalGenericSig = topVJP.genericSignature.canonicalSignature
@@ -2082,12 +2089,10 @@ func autodiffSpecializeBranchTracingEnum(
   }
 
   for (idx, enumCase) in bteType.getEnumCases(in: topVJP)!.enumerated() {
-    let oldEED: EnumElementDecl = enumCase.enumElementDecl
-    let newPL: ParameterList = newPLs[idx]
     let newEED = EnumElementDecl.create(
       declContext: newED,
-      name: oldEED.baseIdentifier, nameLoc: nil,
-      parameterList: newPL,
+      name: enumCase.enumElementDecl.baseIdentifier, nameLoc: nil,
+      parameterList: newPLs[idx],
       equalsLoc: nil, rawValue: nil, astContext)
     newEED.setImplicit()
     newED.add(member: newEED)
@@ -2099,7 +2104,7 @@ func autodiffSpecializeBranchTracingEnum(
   getSourceFileFor(derivative: topVJP).addTopLevelDecl(newED.bridgedDecl)
 
   let newEnumType: SIL.`Type` = remapType(
-    ty: getBranchingTraceEnumLoweredType(ed: newED, vjp: topVJP),
+    type: getBranchingTraceEnumLoweredType(ed: newED, vjp: topVJP),
     function: topVJP)
 
   return newEnumType
@@ -2115,7 +2120,7 @@ func autodiffSpecializeBranchTracingEnums(
   for bteType in bteQueue {
     let ed = bteType.nominal as! EnumDecl
     let silType = remapType(
-      ty: getBranchingTraceEnumLoweredType(ed: ed, vjp: topVJP), function: topVJP)
+      type: getBranchingTraceEnumLoweredType(ed: ed, vjp: topVJP), function: topVJP)
 
     specBTEDict[silType] = autodiffSpecializeBranchTracingEnum(
       bteType: silType, topVJP: topVJP,
