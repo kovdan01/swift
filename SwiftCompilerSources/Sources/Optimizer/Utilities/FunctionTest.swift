@@ -43,7 +43,7 @@ public func registerOptimizerTests() {
   registerFunctionTests(
     addressOwnershipLiveRangeTest,
     argumentConventionsTest,
-    getAutoDiffSpecializationInfoTest,
+    getPullbackClosureInfoMultiBBTest,
     interiorLivenessTest,
     lifetimeDependenceRootTest,
     lifetimeDependenceScopeTest,
