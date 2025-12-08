@@ -1283,7 +1283,22 @@ func findOptionalNoneMatchingOptionalSome(in vjp: Function, closuresInBTE: [Clos
 
 typealias BTEPayloadArgOfPbBBInfo = (arg: Argument, enumCase: EnumCase, throwingSuccessor: BasicBlock?)
 
-
+// Consider a basic block argument which is a payload tuple of a branch tracing enum payload case.
+// The last element type of this tuple might be not a closure type, but an optional of a closure type.
+// Such optionals are unwrapped with switch_enum instruction. This function finds the successor basic
+// block for 'some' case of the switch_enum accepting this optional closure (given that the optional
+// closure comes from the last element of branch tracing enum payload tuple BB argument).
+//
+// For the example below, find bbM successor when given %arg argument:
+//
+//   bbN(..., %arg : $(predecessor: _AD__$xxx_bbA__Pred__xxx, ClosureType1, ..., Optional<ClosureTypeNum>)):
+//     // ...
+//     %last_closure = tuple_extract %arg, num
+//     // Alternatively, we might have (..., %last_closure) = destructure_tuple %arg
+//     switch_enum %last_closure, case #Optional.some!enumelt: bbM, case #Optional.none!enumelt: bbK
+//
+//   bbM(%closure: ClosureTypeNum):
+//     // ...
 func getSuccessorForOptionalSome(arg: Argument) -> BasicBlock? {
   let bb = arg.parentBlock
   guard let sei = bb.terminator as? SwitchEnumInst,
@@ -1314,6 +1329,28 @@ func getSuccessorForOptionalSome(arg: Argument) -> BasicBlock? {
 // branch tracing enum corresponding to the given VJP, return this argument and any valid combination
 // of a branch tracing enum type and its case index having the same payload tuple type as the argument.
 // The function assumes that no more than one such argument is present.
+//
+// To find the payload tuple argument, we look at any of the predecessor blocks and see how
+// a particular argument is calculated. We consider the argument to be a payload tuple of a branch
+// tracing enum if it is calculated as a result of unchecked_enum_data or switch_enum instruction
+// accepting a branch tracing enum.
+//
+// For the example below, find %argB and %argD arguments in bbB and bbD basic blocks correspondingly.
+//
+//   bbA(...):
+//     // Consider %bteA having branch tracing enum type in given vjp, e.g. _AD__$xxx_bbA__Pred__xxx
+//     %payloadA = unchecked_enum_data %bteA, #_AD__$xxx_bbA__Pred__xxx.bbX!enumelt
+//     br bbB(..., %payloadA, ...)
+//
+//   bbB(..., %argB : $(..., ..., ...), ...):
+//     // ...
+//
+//   bbC(...):
+//     // Consider %bteC having branch tracing enum type in given vjp, e.g. _AD__$xxx_bbC__Pred__xxx
+//     switch_enum %bteC, #_AD__$xxx_bbC__Pred__xxx.bbY!enumelt: bbD, ...
+//
+//   bbD(%argD : $(..., ..., ...)):
+//     // ...
 private func getBTEPayloadArgOfPbBBInfo(_ bb: BasicBlock, vjp: Function)
   -> BTEPayloadArgOfPbBBInfo?
 {
@@ -1396,6 +1433,43 @@ extension Instruction {
   }
 }
 
+// For a closure which might potentially be a part of a branch tracing enum payload tuple
+// (or a part of multiple such tuples) find actual uses in these tuples. Note that at this point
+// we do not support cases when closure has any unexpected uses which are not branch tracing
+// enum payloads. So, if any non-BTE payload use is found, we consider the given closure
+// non-specializable and return no uses as for now.
+//
+// Also note that the closure might be used in a BTE payload not directly but after
+// "wrapping" it in either an optional or an autodiff subset parameters thunk. If such a "wrapper"
+// is detected, we only allow it as a single direct use of closure and then search for BTE payload
+// uses of that wrapper.
+//
+// Considering the code below, the function will find:
+// - for %closure1: uses in %payload11 and %payload12;
+// - for %closure2: uses in %payload21 and %payload22 with %subsetThunk
+// - for %closure3: uses in %payload31 and %payload32 with %optionalWrapper
+//
+//   %closure1 = partial_apply %foo1(...)
+//   %payload11 = tuple (..., %closure1, ...)
+//   %bte11 = enum $_AD__$xxx, #_AD__$xxx.bbXXX!enumelt, %payload11
+//   %payload12 = tuple (..., %closure1, ...)
+//   %bte12 = enum $_AD__$xxx, #_AD__$xxx.bbXXX!enumelt, %payload12
+//
+//   %closure2 = partial_apply %foo2(...) // user: %subsetThunk
+//   // function_ref autodiff subset parameters thunk for ...
+//   %subsetThunkFn = function_ref @$xxx
+//   %subsetThunk = partial_apply %subsetThunkFn(%closure2)
+//   %payload21 = tuple (..., %subsetThunk, ...)
+//   %bte21 = enum $_AD__$xxx, #_AD__$xxx.bbXXX!enumelt, %payload21
+//   %payload22 = tuple (..., %subsetThunk, ...)
+//   %bte22 = enum $_AD__$xxx, #_AD__$xxx.bbXXX!enumelt, %payload22
+//
+//   %closure3 = thin_to_thick_function %foo3
+//   %optionalWrapper12 = enum $Optional<...>, #Optional.some!enumelt, %closure3
+//   %payload31 = tuple (..., %optionalWrapper, ...)
+//   %bte31 = enum $_AD__$xxx, #_AD__$xxx.bbXXX!enumelt, %payload31
+//   %payload32 = tuple (..., %optionalWrapper, ...)
+//   %bte32 = enum $_AD__$xxx, #_AD__$xxx.bbXXX!enumelt, %payload32
 private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInBTE] {
   log("findBTEUses: running for \(rootClosure)")
   let vjp = rootClosure.parentFunction
