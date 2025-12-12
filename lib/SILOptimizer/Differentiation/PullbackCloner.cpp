@@ -1016,6 +1016,13 @@ public:
     // If no `NestedApplyInfo` was found, then this task doesn't need to be
     // differentiated.
     if (applyInfoLookup == nestedApplyInfo.end()) {
+      // MYTODO proper check
+      if (ai->getNumArguments() == 0) {
+        LLVM_DEBUG(getADDebugStream()
+                   << "visitApplyInst for autoclosure:\n"
+                   << *ai << '\n');
+        return;
+      }
       // Must not be active.
       assert(!getActivityInfo().isActive(ai, getConfig()));
       return;

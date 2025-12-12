@@ -75,6 +75,9 @@ class VJPCloner::Implementation final
   /// The linear map info.
   LinearMapInfo pullbackInfo;
 
+  /// MYTODO
+  SILValue pullbackOfAutoclosureArgument;
+
   /// Caches basic blocks whose phi arguments have been remapped (adding a
   /// predecessor enum argument).
   SmallPtrSet<SILBasicBlock *, 4> remappedBasicBlocks;
@@ -1738,12 +1741,21 @@ bool VJPCloner::Implementation::run() {
   // Clone.
   SmallVector<SILValue, 4> entryArgs;
   entryArgs.assign(entry->getArguments().begin(),
-                   entry->getArguments().end());
+                   entry->getArguments().end());  
 
   cloneFunctionBody(original, entry, entryArgs);
   // If errors occurred, back out.
   if (errorOccurred)
     return true;
+
+  // MYTODO
+  for (const SILValue &entryArg : entryArgs) {
+    if (entryArg->getType().isFunction()) {
+      LLVM_DEBUG(getADDebugStream() << "AUTOCLOSURES one more copy of entry arg " << entryArg << '\n');
+      entry->insertFunctionArgument(vjp->getArguments().size(), entryArg->getType(), entryArg->getOwnershipKind());
+      break;
+    }
+  }
 
   // Merge VJP basic blocks. This is significant for control flow
   // differentiation: trampoline destination bbs are merged into trampoline bbs.
