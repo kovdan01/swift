@@ -190,8 +190,13 @@ void collectAllDirectResultsInTypeOrder(SILFunction &function,
 void collectAllActualResultsInTypeOrder(
     FullApplySite fai, ArrayRef<SILValue> extractedDirectResults,
     SmallVectorImpl<SILValue> &results) {
+
   auto calleeConvs = fai.getSubstCalleeConv();
   unsigned indResIdx = 0, dirResIdx = 0;
+  LLVM_DEBUG(getADDebugStream() << "AAAAAA collectAllActualResultsInTypeOrder\n"
+                                << "fai = " << *fai.getInstruction() << "\n"
+                                << "calleeConvs.getResults().size = "
+                                << calleeConvs.getResults().size() << "\n");
   for (auto &resInfo : calleeConvs.getResults()) {
     results.push_back(resInfo.isFormalDirect()
                           ? extractedDirectResults[dirResIdx++]
