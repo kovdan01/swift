@@ -447,14 +447,6 @@ void LinearMapInfo::generateDifferentiationDataStructures(
 /// 3. The instruction has both an active result (direct or indirect) and an
 ///    active argument.
 bool LinearMapInfo::shouldDifferentiateApplySite(FullApplySite applySite) {
-  if (applySite.getKind() == FullApplySiteKind::ApplyInst) {
-    llvm::errs() << "KKKKKKKK 00\n";
-    if (activityInfo.getActivity(cast<ApplyInst>(applySite.getInstruction())->getCallee(), config).contains(ActivityFlags::Varied)) {
-      llvm::errs() << "KKKKKKKK 01\n";
-      return true;
-    }
-  }
-
   // Function applications with an active inout argument should be
   // differentiated.
   for (auto inoutArg : applySite.getInoutArguments())
@@ -519,24 +511,10 @@ bool LinearMapInfo::shouldDifferentiateInstruction(SILInstruction *inst) {
   // differentiated.
   auto hasActiveOperands =
       llvm::any_of(inst->getAllOperands(), [&](Operand &op) {
-        LLVM_DEBUG(llvm::dbgs() << "AAAAAA is active op? " << op.get() << '\n');
-        if (activityInfo.isActive(op.get(), config)) {
-          LLVM_DEBUG(llvm::dbgs() << "AAAAAA YES!!!\n");
-          return true;
-        }
-        LLVM_DEBUG(llvm::dbgs() << "AAAAAA NO!!!\n");
-        return false;
-        //return activityInfo.isActive(op.get(), config);
+        return activityInfo.isActive(op.get(), config);
       });
   auto hasActiveResults = llvm::any_of(inst->getResults(), [&](SILValue val) {
-    LLVM_DEBUG(llvm::dbgs() << "AAAAAA is active result? " << val << '\n');
-    if (activityInfo.isActive(val, config)) {
-      LLVM_DEBUG(llvm::dbgs() << "AAAAAA YES!!!\n");
-      return true;
-    }
-    LLVM_DEBUG(llvm::dbgs() << "AAAAAA NO!!!\n");
-    return false;
-    //return activityInfo.isActive(val, config);
+    return activityInfo.isActive(val, config);
   });
   if (hasActiveOperands && hasActiveResults)
     return true;
