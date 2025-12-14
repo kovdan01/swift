@@ -519,10 +519,24 @@ bool LinearMapInfo::shouldDifferentiateInstruction(SILInstruction *inst) {
   // differentiated.
   auto hasActiveOperands =
       llvm::any_of(inst->getAllOperands(), [&](Operand &op) {
-        return activityInfo.isActive(op.get(), config);
+        LLVM_DEBUG(llvm::dbgs() << "AAAAAA is active op? " << op.get() << '\n');
+        if (activityInfo.isActive(op.get(), config)) {
+          LLVM_DEBUG(llvm::dbgs() << "AAAAAA YES!!!\n");
+          return true;
+        }
+        LLVM_DEBUG(llvm::dbgs() << "AAAAAA NO!!!\n");
+        return false;
+        //return activityInfo.isActive(op.get(), config);
       });
   auto hasActiveResults = llvm::any_of(inst->getResults(), [&](SILValue val) {
-    return activityInfo.isActive(val, config);
+    LLVM_DEBUG(llvm::dbgs() << "AAAAAA is active result? " << val << '\n');
+    if (activityInfo.isActive(val, config)) {
+      LLVM_DEBUG(llvm::dbgs() << "AAAAAA YES!!!\n");
+      return true;
+    }
+    LLVM_DEBUG(llvm::dbgs() << "AAAAAA NO!!!\n");
+    return false;
+    //return activityInfo.isActive(val, config);
   });
   if (hasActiveOperands && hasActiveResults)
     return true;

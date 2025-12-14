@@ -564,10 +564,23 @@ private:
     assert(originalValue->getType().isObject());
     assert(getTangentValueCategory(originalValue) == SILValueCategory::Object);
     assert(originalValue->getFunction() == &getOriginal());
+    LLVM_DEBUG(getADDebugStream()
+               << "AAAAAAA getAdjointValue for " << originalValue << '\n');
     auto insertion = valueMap.try_emplace(
         {origBB, originalValue},
         makeZeroAdjointValue(getRemappedTangentType(originalValue->getType())));
     auto it = insertion.first;
+    if (insertion.second) {
+      LLVM_DEBUG(getADDebugStream() << "AAAAAAA inserted zero\n");
+    } else {
+      LLVM_DEBUG(getADDebugStream() << "AAAAAAA already got adj");
+      if (it->getSecond().isConcrete()) {
+        LLVM_DEBUG(getADDebugStream()
+                   << " concrete "  << it->getSecond().getConcreteValue());
+      }
+      LLVM_DEBUG(getADDebugStream() << '\n');
+    }
+
     return it->getSecond();
   }
 
@@ -1021,6 +1034,7 @@ public:
         LLVM_DEBUG(getADDebugStream()
                    << "visitApplyInst for autoclosure:\n"
                    << *ai << '\n');
+        visitValueOwnershipInst(ai);
         return;
       }
       // Must not be active.
@@ -3203,8 +3217,12 @@ void PullbackCloner::Implementation::visitSILBasicBlock(SILBasicBlock *bb) {
 
   // Visit each instruction in reverse order.
   for (auto &inst : llvm::reverse(*bb)) {
-    if (!getPullbackInfo().shouldDifferentiateInstruction(&inst))
+    LLVM_DEBUG(llvm::dbgs() << "AAAAAA PullbackCloner: should diff? " << inst << '\n');
+    if (!getPullbackInfo().shouldDifferentiateInstruction(&inst)) {
+      LLVM_DEBUG(llvm::dbgs() << "NO!!!\n");
       continue;
+    }
+    LLVM_DEBUG(llvm::dbgs() << "YES!!!\n");
     // Differentiate instruction.
     builder.setCurrentDebugScope(remapScope(inst.getDebugScope()));
     visit(&inst);

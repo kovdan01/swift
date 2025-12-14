@@ -1732,6 +1732,7 @@ bool VJPCloner::Implementation::run() {
   LLVM_DEBUG(getADDebugStream() << "Cloning original @" << original->getName()
                                 << " to vjp @" << vjp->getName() << '\n');
 
+  LLVM_DEBUG(getADDebugStream() << "AAAAAAA vjp.conv.getNumSILArguments() = " << vjp->getConventions().getNumSILArguments() << "\n");
   // Create entry BB and arguments.
   auto *entry = vjp->createBasicBlock();
   createEntryArguments(vjp);
@@ -1748,14 +1749,14 @@ bool VJPCloner::Implementation::run() {
   if (errorOccurred)
     return true;
 
-  // MYTODO
-  for (const SILValue &entryArg : entryArgs) {
-    if (entryArg->getType().isFunction()) {
-      LLVM_DEBUG(getADDebugStream() << "AUTOCLOSURES one more copy of entry arg " << entryArg << '\n');
-      entry->insertFunctionArgument(vjp->getArguments().size(), entryArg->getType(), entryArg->getOwnershipKind());
-      break;
-    }
-  }
+  // // MYTODO
+  // for (const SILValue &entryArg : entryArgs) {
+  //   if (entryArg->getType().isFunction()) {
+  //     LLVM_DEBUG(getADDebugStream() << "AUTOCLOSURES one more copy of entry arg " << entryArg << '\n');
+  //     entry->insertFunctionArgument(vjp->getArguments().size(), entryArg->getType(), entryArg->getOwnershipKind());
+  //     break;
+  //   }
+  // }
 
   // Merge VJP basic blocks. This is significant for control flow
   // differentiation: trampoline destination bbs are merged into trampoline bbs.
