@@ -362,6 +362,11 @@ void DifferentiableActivityInfo::propagateUseful(
     // Propagate usefulness through apply site arguments.
     for (auto arg : applySite.getArgumentsWithoutIndirectResults())
       setUsefulAndPropagateToOperands(arg, i);
+
+    // MYTODO: proper handling of closures
+    if (applySite.getArguments().size() == 0) {
+      setUsefulAndPropagateToOperands(applySite.getCallee(), i);
+    }
   }
   // Handle store-like instructions:
   //   `store`, `store_borrow`, `copy_addr`, `unconditional_checked_cast`

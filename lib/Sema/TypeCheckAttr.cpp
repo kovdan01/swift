@@ -5977,8 +5977,14 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
   if (auto resultFnType = functionType->getResult()->getAs<AnyFunctionType>())
     for (auto &param : resultFnType->getParams())
       allParamTypes.push_back(param.getPlainType());
-  for (auto &param : functionType->getParams())
-    allParamTypes.push_back(param.getPlainType());
+  for (auto &param : functionType->getParams()) {
+    // MYTODO: proper handling of closures
+    if (param.isAutoClosure()) {
+      allParamTypes.push_back(param.getPlainType()->getAs<AnyFunctionType>()->getResult());
+    } else {
+      allParamTypes.push_back(param.getPlainType());
+    }
+  }
 
   // Set differentiability parameters.
   for (unsigned i : range(parameterBits.size()))

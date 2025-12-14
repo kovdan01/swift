@@ -759,6 +759,11 @@ public:
       TypeSubstCloner::visitApplyInst(ai);
       return;
     }
+    // MYTODO: proper handling of closures
+    if (ai->getNumArguments() == 0) {
+      TypeSubstCloner::visitApplyInst(ai);
+      return;
+    }
     // If callee is `array.uninitialized_intrinsic`, do standard cloning.
     // `array.uninitialized_intrinsic` differentiation is handled separately.
     if (ArraySemanticsCall(ai, semantics::ARRAY_UNINITIALIZED_INTRINSIC)) {
@@ -1557,8 +1562,13 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
       continue;
     origParam = origParam.getWithInterfaceType(
         origParam.getInterfaceType()->getReducedType(witnessCanGenSig));
+    Type paramType = origParam.getInterfaceType();
+    // MYTODO: proper handling of closures
+    if (auto *sft = paramType->getAs<SILFunctionType>()) {
+      paramType = sft->getResults().front().getInterfaceType();
+    }
     adjResults.push_back(getTangentResultInfoForOriginalParameter(
-        origParam.getInterfaceType()
+        paramType
             ->getAutoDiffTangentSpace(lookupConformance)
             ->getType()
             ->getReducedType(witnessCanGenSig),

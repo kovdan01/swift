@@ -605,12 +605,17 @@ static CanSILFunctionType getAutoDiffDifferentialType(
   getDifferentiabilityParameters(originalFnTy, parameterIndices, diffParams);
   SmallVector<SILParameterInfo, 8> differentialParams;
   for (auto &param : diffParams) {
+    CanType paramType = param.getInterfaceType();
+    // MYTODO: proper handling of closures
+    if (auto *sft = paramType->getAs<SILFunctionType>()) {
+      paramType = sft->getResults().front().getInterfaceType();
+    }
     auto paramTanType = getAutoDiffTangentTypeForLinearMap(
-        param.getInterfaceType(), lookupConformance,
+        paramType, lookupConformance,
         substGenericParams, substReplacements, ctx);
     auto paramConv = getTangentParameterConvention(
         // FIXME(rdar://82549134): Use `resultTanType` to compute it instead.
-        param.getInterfaceType()
+        paramType
             ->getAutoDiffTangentSpace(lookupConformance)
             ->getCanonicalType(),
         param.getConvention());
@@ -841,12 +846,19 @@ static CanSILFunctionType getAutoDiffPullbackType(
     // results and always appear as pullback parameters.
     if (param.isAutoDiffSemanticResult())
       continue;
+
+    CanType paramType = param.getInterfaceType();
+    // MYTODO: proper handling of closures
+    if (auto *sft = paramType->getAs<SILFunctionType>()) {
+      paramType = sft->getResults().front().getInterfaceType();
+    }
+
     auto paramTanType = getAutoDiffTangentTypeForLinearMap(
-        param.getInterfaceType(), lookupConformance,
+        paramType, lookupConformance,
         substGenericParams, substReplacements, ctx);
     auto resultTanConvention = getTangentResultConventionForOriginalParameter(
         // FIXME(rdar://82549134): Use `resultTanType` to compute it instead.
-        param.getInterfaceType()
+        paramType
             ->getAutoDiffTangentSpace(lookupConformance)
             ->getCanonicalType(),
         param.getConvention());
