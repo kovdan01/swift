@@ -4777,6 +4777,16 @@ TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
     return tangentSpace;
   };
 
+  // MYTODO: proper handling for closures
+  if (getAs<AnyFunctionType>() || getAs<SILFunctionType>()) {
+    auto a = ctx.getFloatType();
+    auto b = a->getAutoDiffTangentSpace(lookupConformance);
+    auto c = b->getType();
+    auto d = TangentSpace::getTangentVector(c);
+    auto e = cache(d);
+    return e;
+  }
+
   // For tuple types: the tangent space is a tuple of the elements'  tangent
   // space types, for the elements that have a tangent space.
   if (auto *tupleTy = getAs<TupleType>()) {
@@ -5033,6 +5043,10 @@ AnyFunctionType::getAutoDiffDerivativeFunctionLinearMapType(
     for (auto i : range(diffParams.size())) {
       auto diffParam = diffParams[i];
       auto paramType = diffParam.getPlainType();
+      // MYTODO: proper closure handling
+      if (diffParam.isAutoClosure()) {
+        paramType = paramType->getAs<AnyFunctionType>()->getResult();
+      }
       auto paramTan = paramType->getAutoDiffTangentSpace(lookupConformance);
       // Error if parameter has no tangent space.
       if (!paramTan)

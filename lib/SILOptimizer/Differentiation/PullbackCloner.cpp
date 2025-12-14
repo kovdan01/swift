@@ -982,6 +982,22 @@ public:
     errorOccurred = true;
   }
 
+  // MYTODO: proper handling of closures
+  void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *cetnei) {
+    visitValueOwnershipInst(cetnei);
+  }
+
+  // MYTODO: proper handling of closures
+  void visitPartialApplyInst(PartialApplyInst *pai) {
+    assert(pai->getArgumentOperands().size() == 1);
+    auto *bb = pai->getParent();
+    const Operand &op = pai->getArgumentOperands().front();
+    SILValue val = op.get();
+    assert(getTangentValueCategory(pai) == SILValueCategory::Object);
+    auto adj = getAdjointValue(bb, pai);
+    addAdjointValue(bb, val, adj, pai->getLoc());
+  }
+
   /// Handle `apply` instruction.
   ///   Original: (y0, y1, ...) = apply @fn (x0, x1, ...)
   ///    Adjoint: (adj[x0], adj[x1], ...) += apply @fn_pullback (adj[y0], ...)
@@ -1013,6 +1029,12 @@ public:
     // If no `NestedApplyInfo` was found, then this task doesn't need to be
     // differentiated.
     if (applyInfoLookup == nestedApplyInfo.end()) {
+      // MYTODO proper closure handling
+      if (ai->getNumArguments() == 0) {
+        visitValueOwnershipInst(ai);
+        return;
+      }
+
       // Must not be active.
       assert(!getActivityInfo().isActive(ai, getConfig()));
       return;
