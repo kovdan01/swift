@@ -989,6 +989,7 @@ public:
 
   // MYTODO: proper handling of closures
   void visitPartialApplyInst(PartialApplyInst *pai) {
+    LLVM_DEBUG(getADDebugStream() << "AAAAAA PullbackCloner::visitPartialApplyInst " << *pai << '\n');
     assert(pai->getArgumentOperands().size() == 1);
     auto *bb = pai->getParent();
     const Operand &op = pai->getArgumentOperands().front();
