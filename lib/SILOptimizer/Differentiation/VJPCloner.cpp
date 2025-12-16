@@ -750,6 +750,12 @@ public:
     // The rest of the cloning magic happens during `end_apply` cloning.
   }
 
+  // MYTODO: proper handling of closures
+  void visitPartialApplyInst(PartialApplyInst *pai) {
+    LLVM_DEBUG(getADDebugStream() << "AAAAAA VJPCloner::visitPartialApplyInst: " << *pai << '\n');
+    TypeSubstCloner::visitPartialApplyInst(pai);
+  }
+
   // If an `apply` has active results or active inout arguments, replace it
   // with an `apply` of its VJP.
   void visitApplyInst(ApplyInst *ai) {
