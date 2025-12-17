@@ -753,7 +753,56 @@ public:
   // MYTODO: proper handling of closures
   void visitPartialApplyInst(PartialApplyInst *pai) {
     LLVM_DEBUG(getADDebugStream() << "AAAAAA VJPCloner::visitPartialApplyInst: " << *pai << '\n');
-    TypeSubstCloner::visitPartialApplyInst(pai);
+    //TypeSubstCloner::visitPartialApplyInst(pai);
+
+    auto origCallee = getOpValue(pai->getCallee());
+    // MYTODO: support non-empty
+    assert(pai->getSubstitutionMap().empty());
+
+    auto loc = pai->getLoc();
+
+    // MYTODO: index subset
+    auto *diffFuncInst = context.createDifferentiableFunction(
+        getBuilder(), pai->getLoc(),
+        IndexSubset::get(context.getASTContext(), 1, {0}),
+        IndexSubset::get(context.getASTContext(), 1, {0}),
+        origCallee);
+
+    // Record the `differentiable_function` instruction.
+    context.getDifferentiableFunctionInstWorklist().push_back(diffFuncInst);
+
+    SILValue vjpValue;
+
+    getBuilder().emitScopedBorrowOperation(
+        loc, diffFuncInst, [&](SILValue borrowedADFunc) {
+          auto extractedVJP =
+              getBuilder().createDifferentiableFunctionExtract(
+                  loc, NormalDifferentiableFunctionTypeComponent::VJP,
+                  borrowedADFunc);
+          vjpValue = getBuilder().emitCopyValueOperation(loc, extractedVJP);
+        });
+
+    getBuilder().emitDestroyValueOperation(loc, diffFuncInst);
+
+    llvm::SmallVector<SILValue, 8> vjpArgs;
+    for (auto origArg : pai->getArguments())
+      vjpArgs.push_back(getOpValue(origArg));
+    auto *newPai = getBuilder().createPartialApply(loc, vjpValue, SubstitutionMap(),
+                                             vjpArgs, pai->getCalleeConvention());
+
+    mapValue(pai, newPai);
+  }
+
+  // MYTODO: proper handling of closures
+  void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *cetnei) {
+    SILType type = getOpValue(cetnei->getOperand())->getType();
+    auto functionType = type.getAs<SILFunctionType>();
+    auto noEscapeFunctionType = swift::SILType::getPrimitiveObjectType(functionType->getWithExtInfo(functionType->getExtInfo().withNoEscape(true)));
+    auto *newInst = getBuilder().createConvertEscapeToNoEscape(cetnei->getLoc(),
+                                               getOpValue(cetnei->getOperand()),
+                                               noEscapeFunctionType,
+                                               cetnei->isLifetimeGuaranteed());
+    mapValue(cetnei, newInst);
   }
 
   // If an `apply` has active results or active inout arguments, replace it
@@ -767,7 +816,28 @@ public:
     }
     // MYTODO: proper handling of closures
     if (ai->getNumArguments() == 0) {
-      TypeSubstCloner::visitApplyInst(ai);
+
+      llvm::SmallVector<SILValue, 8> vjpArgs;
+      for (auto origArg : ai->getArguments())
+        vjpArgs.push_back(getOpValue(origArg));
+      auto origCallee = getOpValue(ai->getCallee());
+      auto *vjpCall = getBuilder().createApply(ai->getLoc(), origCallee, SubstitutionMap(),
+                                               vjpArgs, ai->getApplyOptions());
+
+      // Get the VJP results (original results and pullback).
+      SmallVector<SILValue, 8> vjpDirectResults;
+      extractAllElements(vjpCall, getBuilder(), vjpDirectResults);
+      ArrayRef<SILValue> originalDirectResults =
+          ArrayRef<SILValue>(vjpDirectResults).drop_back(1);
+      SILValue originalDirectResult =
+          joinElements(originalDirectResults, getBuilder(), vjpCall->getLoc());
+      SILValue pullback = vjpDirectResults.back();
+
+      getBuilder().emitDestroyValueOperation(vjpCall->getLoc(), pullback);
+      // MYTODO: perform actual operations with pullback
+
+      mapValue(ai, originalDirectResult);
+
       return;
     }
     // If callee is `array.uninitialized_intrinsic`, do standard cloning.

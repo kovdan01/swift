@@ -1024,9 +1024,9 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
 
       CanType canFloatType = ctx.getFloatType()->getCanonicalType();
       SmallVector<SILParameterInfo, 1> singleFloatParam;
-      singleFloatParam.emplace_back(canFloatType, ParameterConvention::Direct_Owned);
+      singleFloatParam.emplace_back(canFloatType, ParameterConvention::Direct_Unowned);
       SmallVector<SILResultInfo, 1> singleFloatResult;
-      singleFloatResult.emplace_back(canFloatType, ResultConvention::Owned);
+      singleFloatResult.emplace_back(canFloatType, ResultConvention::Unowned);
 
       CanSILFunctionType pullbackType = SILFunctionType::get(
             silFunctionType->getInvocationGenericSignature(),
