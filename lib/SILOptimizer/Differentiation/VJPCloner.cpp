@@ -257,6 +257,7 @@ public:
     SILValue partialApplyArg;
     PartialApplyInst *pullbackPartialApply;
     if (borrowedPullbackContextValue) {
+      LLVM_DEBUG(llvm::dbgs() << "AAAAAAAA pullbackPartialApply 1\n");
       auto *pbTupleVal = buildPullbackValueTupleValue(ri);
       // Initialize the top-level subcontext buffer with the top-level pullback
       // tuple.
@@ -272,6 +273,7 @@ public:
         loc, pullbackRef, vjpSubstMap, {pullbackContextValue},
         ParameterConvention::Direct_Guaranteed);
     } else {
+      LLVM_DEBUG(llvm::dbgs() << "AAAAAAAA pullbackPartialApply 2\n");
       pullbackPartialApply = Builder.createPartialApply(
         loc, pullbackRef, vjpSubstMap, getPullbackValues(origExit),
         ParameterConvention::Direct_Guaranteed);
@@ -293,6 +295,8 @@ public:
           Builder.createConvertFunction(loc, pullbackPartialApply, pullbackType,
                                         /*withoutActuallyEscaping*/ false);
     } else {
+      LLVM_DEBUG(llvm::dbgs() << "AAAAAAAA " << pullbackSubstType << '\n'
+                              << "AAAAAAAA " << pullbackFnType << '\n');
       llvm::report_fatal_error("Pullback value type is not ABI-compatible "
                                "with the returned pullback type");
     }
@@ -816,6 +820,19 @@ public:
     }
     // MYTODO: proper handling of closures
     if (ai->getNumArguments() == 0) {
+      // MYTODO: proper indexes
+      AutoDiffConfig config(
+          IndexSubset::get(getASTContext(),
+                           1,
+                           {0}),
+          IndexSubset::get(getASTContext(),
+                           1,
+                           {0}));
+
+      NestedApplyInfo info{config, /*originalPullbackType*/ std::nullopt};
+      auto insertion = context.getNestedApplyInfo().try_emplace(ai, info);
+      auto &nestedApplyInfo = insertion.first->getSecond();
+      nestedApplyInfo = info;
 
       llvm::SmallVector<SILValue, 8> vjpArgs;
       for (auto origArg : ai->getArguments())
@@ -837,6 +854,9 @@ public:
       // MYTODO: perform actual operations with pullback
 
       mapValue(ai, originalDirectResult);
+
+      nestedApplyInfo.pullbackIdx = pullbackValues[ai->getParent()].size();
+      pullbackValues[ai->getParent()].push_back(pullback);
 
       return;
     }
