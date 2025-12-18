@@ -175,6 +175,19 @@ void LinearMapInfo::populateBranchingTraceDecl(SILBasicBlock *originalBB,
 
 
 Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
+  // MYTODO proper handling of closures
+  if (fai.getArguments().empty()) {
+    FunctionType::ExtInfo info;
+    SmallVector<AnyFunctionType::Param, 1> params =
+        {AnyFunctionType::Param(context.getASTContext().getFloatType())};
+    AnyFunctionType *astFnTy = FunctionType::get(
+          params, context.getASTContext().getFloatType(), info);
+
+    Type resultType = astFnTy;
+    return resultType;
+  }
+
+
   SmallVector<SILValue, 4> allResults;
   SmallVector<unsigned, 8> activeParamIndices;
   SmallVector<unsigned, 8> activeResultIndices;
@@ -200,10 +213,14 @@ Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
         hasActiveSemanticResultArgument = true;
     }
   }
-  if (!hasActiveArguments)
+  if (!hasActiveArguments) {
+    LLVM_DEBUG(llvm::dbgs() << "AAAAAAA getLinearMapType !hasActiveArguments\n");
     return {};
-  if (!hasActiveResults && !hasActiveSemanticResultArgument)
+  }
+  if (!hasActiveResults && !hasActiveSemanticResultArgument) {
+    LLVM_DEBUG(llvm::dbgs() << "AAAAAAA getLinearMapType !hasActiveResults && !hasActiveSemanticResultArgument\n");
     return {};
+  }
 
   // Compute differentiability parameters.
   // - If the callee has `@differentiable` function type, use differentiation
@@ -267,8 +284,10 @@ Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
     }
     return false;
   };
-  if (checkNondifferentiableOriginalFunctionType(remappedOrigFnSubstTy))
+  if (checkNondifferentiableOriginalFunctionType(remappedOrigFnSubstTy)) {
+    LLVM_DEBUG(llvm::dbgs() << "AAAAAAA getLinearMapType checkNondifferentiableOriginalFunctionType\n");
     return nullptr;
+  }
 
   AutoDiffDerivativeFunctionKind derivativeFnKind(kind);
   auto derivativeFnType =
