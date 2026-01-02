@@ -850,8 +850,8 @@ public:
           joinElements(originalDirectResults, getBuilder(), vjpCall->getLoc());
       SILValue pullback = vjpDirectResults.back();
 
-      getBuilder().emitDestroyValueOperation(vjpCall->getLoc(), pullback);
-      // MYTODO: perform actual operations with pullback
+      // getBuilder().emitDestroyValueOperation(vjpCall->getLoc(), pullback);
+      //  MYTODO: perform actual operations with pullback
 
       mapValue(ai, originalDirectResult);
 
