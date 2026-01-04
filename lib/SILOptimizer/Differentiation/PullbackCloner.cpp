@@ -982,6 +982,38 @@ public:
     errorOccurred = true;
   }
 
+  // MYTODO: proper handling of closures
+  void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *cetnei) {
+    visitValueOwnershipInst(cetnei);
+  }
+
+  // MYTODO: proper handling of closures
+  void visitPartialApplyInst(PartialApplyInst *pai) {
+    auto origCalleeType = pai->getOrigCalleeType();
+    auto a = getASTContext().getFloatType();
+    if (!(origCalleeType->getNumParameters() == 1 &&
+          origCalleeType->getParameters()[0].getInterfaceType() ==
+              a->getCanonicalType() &&
+          origCalleeType->getIndirectMutatingParameters().empty() &&
+          origCalleeType->getNumResults() == 1 &&
+          origCalleeType->getSingleResult().getInterfaceType() ==
+              a->getCanonicalType() &&
+          pai->getArguments().size() == 1 &&
+          pai->getArguments()[0]->getType().getASTType() ==
+              a->getCanonicalType())) {
+      SILInstructionVisitor::visitPartialApplyInst(pai);
+      return;
+    }
+
+    assert(pai->getArgumentOperands().size() == 1);
+    auto *bb = pai->getParent();
+    const Operand &op = pai->getArgumentOperands().front();
+    SILValue val = op.get();
+    assert(getTangentValueCategory(pai) == SILValueCategory::Object);
+    auto adj = getAdjointValue(bb, pai);
+    addAdjointValue(bb, val, adj, pai->getLoc());
+  }
+
   /// Handle `apply` instruction.
   ///   Original: (y0, y1, ...) = apply @fn (x0, x1, ...)
   ///    Adjoint: (adj[x0], adj[x1], ...) += apply @fn_pullback (adj[y0], ...)
@@ -1013,6 +1045,12 @@ public:
     // If no `NestedApplyInfo` was found, then this task doesn't need to be
     // differentiated.
     if (applyInfoLookup == nestedApplyInfo.end()) {
+      // MYTODO proper closure handling
+      if (ai->getNumArguments() == 0) {
+        visitValueOwnershipInst(ai);
+        return;
+      }
+
       // Must not be active.
       assert(!getActivityInfo().isActive(ai, getConfig()));
       return;
@@ -1154,15 +1192,19 @@ public:
     });
     SmallVector<SILValue, 8> origAllResults;
     collectAllActualResultsInTypeOrder(fai, origDirectResults, origAllResults);
-    // Append semantic result arguments after original results.
-    for (auto paramIdx : applyInfo.config.parameterIndices->getIndices()) {
-      unsigned argIdx = fai.getNumIndirectSILResults() +
-                        fai.getNumIndirectSILErrorResults() + paramIdx;
-      auto paramInfo = conv.getParamInfoForSILArg(argIdx);
-      if (!paramInfo.isAutoDiffSemanticResult())
-        continue;
-      origAllResults.push_back(
-          fai.getArgumentsWithoutIndirectResults()[paramIdx]);
+
+    // MYTODO: proper closure handling
+    if (!fai.getArguments().empty()) {
+      // Append semantic result arguments after original results.
+      for (auto paramIdx : applyInfo.config.parameterIndices->getIndices()) {
+        unsigned argIdx = fai.getNumIndirectSILResults() +
+                          fai.getNumIndirectSILErrorResults() + paramIdx;
+        auto paramInfo = conv.getParamInfoForSILArg(argIdx);
+        if (!paramInfo.isAutoDiffSemanticResult())
+          continue;
+        origAllResults.push_back(
+            fai.getArgumentsWithoutIndirectResults()[paramIdx]);
+      }
     }
 
     // Get callee pullback arguments.
@@ -1194,6 +1236,7 @@ public:
       if (resultIndex >= firstYieldResultIndex)
         continue;
       assert(resultIndex < origAllResults.size());
+
       auto origResult = origAllResults[resultIndex];
 
       // Get the seed (i.e. adjoint value of the original result).
@@ -1266,25 +1309,35 @@ public:
     for (unsigned i : applyInfo.config.parameterIndices->getIndices()) {
       unsigned argIdx = fai.getNumIndirectSILResults() +
                         fai.getNumIndirectSILErrorResults() + i;
-      auto origArg = fai.getArgument(argIdx);
-      // Skip adjoint accumulation for semantic results arguments.
-      auto paramInfo = fai.getSubstCalleeConv().getParamInfoForSILArg(argIdx);
-      if (paramInfo.isAutoDiffSemanticResult())
-        continue;
-      auto tan = *allResultsIt++;
-      if (tan->getType().isAddress()) {
-        addToAdjointBuffer(bb, origArg, tan, loc);
+
+      // MYTODO: proper closure handling
+      if (fai.getArguments().empty()) {
+        auto origArg = fai.getCallee();
+        auto tan = *allResultsIt++;
+        assert(!tan->getType().isAddress());
+        recordTemporary(tan);
+        addAdjointValue(bb, origArg, makeConcreteAdjointValue(tan), loc);
       } else {
-        if (origArg->getType().isAddress()) {
-          auto *tmpBuf = builder.createAllocStack(loc, tan->getType());
-          builder.emitStoreValueOperation(loc, tan, tmpBuf,
-                                          StoreOwnershipQualifier::Init);
-          addToAdjointBuffer(bb, origArg, tmpBuf, loc);
-          builder.emitDestroyAddrAndFold(loc, tmpBuf);
-          builder.createDeallocStack(loc, tmpBuf);
+        auto origArg = fai.getArgument(argIdx);
+        // Skip adjoint accumulation for semantic results arguments.
+        auto paramInfo = fai.getSubstCalleeConv().getParamInfoForSILArg(argIdx);
+        if (paramInfo.isAutoDiffSemanticResult())
+          continue;
+        auto tan = *allResultsIt++;
+        if (tan->getType().isAddress()) {
+          addToAdjointBuffer(bb, origArg, tan, loc);
         } else {
-          recordTemporary(tan);
-          addAdjointValue(bb, origArg, makeConcreteAdjointValue(tan), loc);
+          if (origArg->getType().isAddress()) {
+            auto *tmpBuf = builder.createAllocStack(loc, tan->getType());
+            builder.emitStoreValueOperation(loc, tan, tmpBuf,
+                                            StoreOwnershipQualifier::Init);
+            addToAdjointBuffer(bb, origArg, tmpBuf, loc);
+            builder.emitDestroyAddrAndFold(loc, tmpBuf);
+            builder.createDeallocStack(loc, tmpBuf);
+          } else {
+            recordTemporary(tan);
+            addAdjointValue(bb, origArg, makeConcreteAdjointValue(tan), loc);
+          }
         }
       }
     }
