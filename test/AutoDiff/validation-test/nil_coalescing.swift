@@ -2,6 +2,7 @@
 
 // REQUIRES: executable_test
 
+import _Differentiation
 import DifferentiationUnittest
 import StdlibUnittest
 
@@ -32,8 +33,15 @@ NilCoalescingTests.test("Test") {
     return coalesce(x, y * y)
   }
 
-  expectEqual(pullback(at: nil, 3, of: fooFloat)(1),   (0.0, 6.0))
-  expectEqual(pullback(at: nil, 3, of: fooClosure)(1), (0.0, 6.0))
+  let pbClosure = pullback(at: Float?(nil), Float(3), of: fooClosure)
+  let resultGotClosure = pbClosure(Float(1))
+
+  let pbFloat = pullback(at: Float?(nil), Float(3), of: fooFloat)
+  let resultGotFloat = pbFloat(Float(1))
+
+  let resultExpected = (Optional<Float>.TangentVector(0), Float(6))
+  expectEqual(resultGotClosure, resultExpected)
+  expectEqual(resultGotFloat, resultExpected)
 }
 
 runAllTests()
