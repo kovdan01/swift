@@ -759,7 +759,24 @@ public:
     LLVM_DEBUG(getADDebugStream() << "AAAAAA VJPCloner::visitPartialApplyInst: " << *pai << '\n');
     //TypeSubstCloner::visitPartialApplyInst(pai);
 
+    auto origCalleeType = pai->getOrigCalleeType();
+    auto a = getASTContext().getFloatType();
+    if (!(origCalleeType->getNumParameters() == 1 &&
+        origCalleeType->getParameters()[0].getInterfaceType() == a->getCanonicalType() &&
+        origCalleeType->getNumResults() == 1 &&
+          origCalleeType->getSingleResult().getInterfaceType() == a->getCanonicalType() &&
+        pai->getArguments().size() == 1 &&
+        pai->getArguments()[0]->getType().getASTType() == a->getCanonicalType())) {
+      TypeSubstCloner::visitPartialApplyInst(pai);
+      return;
+    }
+
     auto origCallee = getOpValue(pai->getCallee());
+
+    LLVM_DEBUG(getADDebugStream() << "AAAAAA VJPCloner::visitPartialApplyInst: origCallee = \n" << origCallee << '\n');
+    // errorOccurred = true;
+    // return;
+
     // MYTODO: support non-empty
     assert(pai->getSubstitutionMap().empty());
 

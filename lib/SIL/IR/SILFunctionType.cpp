@@ -1039,52 +1039,57 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
 
     LLVM_DEBUG(llvm::dbgs() << "AAAAAA param " << param << '\n');
     if (auto *silFunctionType = interfaceType->getAs<SILFunctionType>()) {
-      LLVM_DEBUG(llvm::dbgs() << "AAAAAA param is SILFunctionType\n");
+      if (silFunctionType->getNumParameters() == 0 && silFunctionType->getNumResults() == 1 &&
+          silFunctionType->getSingleResult().getInterfaceType() == ctx.getFloatType()->getCanonicalType()) {
+        LLVM_DEBUG(llvm::dbgs() << "AAAAAA param is SILFunctionType\n");
 
-      CanType canFloatType = ctx.getFloatType()->getCanonicalType();
-      SmallVector<SILParameterInfo, 1> singleFloatParam;
-      singleFloatParam.emplace_back(canFloatType, ParameterConvention::Direct_Unowned);
-      SmallVector<SILResultInfo, 1> singleFloatResult;
-      singleFloatResult.emplace_back(canFloatType, ResultConvention::Unowned);
+        CanType canFloatType = ctx.getFloatType()->getCanonicalType();
+        SmallVector<SILParameterInfo, 1> singleFloatParam;
+        singleFloatParam.emplace_back(canFloatType, ParameterConvention::Direct_Unowned);
+        SmallVector<SILResultInfo, 1> singleFloatResult;
+        singleFloatResult.emplace_back(canFloatType, ResultConvention::Unowned);
 
-      CanSILFunctionType pullbackType = SILFunctionType::get(
+        CanSILFunctionType pullbackType = SILFunctionType::get(
+              silFunctionType->getInvocationGenericSignature(),
+              ExtInfo(),
+              SILCoroutineKind::None,
+              silFunctionType->getCalleeConvention(),
+              singleFloatParam,
+              {},
+              singleFloatResult,
+              std::nullopt,
+              silFunctionType->getPatternSubstitutions(),
+              /*invocationSubstitutions*/ SubstitutionMap(),
+              silFunctionType->getASTContext());
+
+        LLVM_DEBUG(llvm::dbgs() << "AAAAAA pullback type for function param: " << pullbackType << "\n");
+
+        SmallVector<SILResultInfo, 2> vjpResults;
+        vjpResults.reserve(silFunctionType->getNumResults() + 1);
+        for (auto &result : silFunctionType->getResults())
+          vjpResults.push_back(result);
+        vjpResults.emplace_back(pullbackType, ResultConvention::Owned);
+
+        CanSILFunctionType vjpType = SILFunctionType::get(
             silFunctionType->getInvocationGenericSignature(),
-            ExtInfo(),
-            SILCoroutineKind::None,
+            silFunctionType->getExtInfo(),
+            silFunctionType->getCoroutineKind(),
             silFunctionType->getCalleeConvention(),
-            singleFloatParam,
-            {},
-            singleFloatResult,
-            std::nullopt,
+            silFunctionType->getParameters(),
+            silFunctionType->getYields(),
+            vjpResults,
+            silFunctionType->getOptionalErrorResult(),
             silFunctionType->getPatternSubstitutions(),
             /*invocationSubstitutions*/ SubstitutionMap(),
-            silFunctionType->getASTContext());
+            silFunctionType->getASTContext(),
+            silFunctionType->getWitnessMethodConformanceOrInvalid());
 
-      LLVM_DEBUG(llvm::dbgs() << "AAAAAA pullback type for function param: " << pullbackType << "\n");
+        LLVM_DEBUG(llvm::dbgs() << "AAAAAA vjp type for function param: " << vjpType << "\n");
 
-      SmallVector<SILResultInfo, 2> vjpResults;
-      vjpResults.reserve(silFunctionType->getNumResults() + 1);
-      for (auto &result : silFunctionType->getResults())
-        vjpResults.push_back(result);
-      vjpResults.emplace_back(pullbackType, ResultConvention::Owned);
-
-      CanSILFunctionType vjpType = SILFunctionType::get(
-          silFunctionType->getInvocationGenericSignature(),
-          silFunctionType->getExtInfo(),
-          silFunctionType->getCoroutineKind(),
-          silFunctionType->getCalleeConvention(),
-          silFunctionType->getParameters(),
-          silFunctionType->getYields(),
-          vjpResults,
-          silFunctionType->getOptionalErrorResult(),
-          silFunctionType->getPatternSubstitutions(),
-          /*invocationSubstitutions*/ SubstitutionMap(),
-          silFunctionType->getASTContext(),
-          silFunctionType->getWitnessMethodConformanceOrInvalid());
-
-      LLVM_DEBUG(llvm::dbgs() << "AAAAAA vjp type for function param: " << vjpType << "\n");
-
-      newParameters.emplace_back(vjpType, param.getConvention());
+        newParameters.emplace_back(vjpType, param.getConvention());
+      } else {
+        newParameters.push_back(param);
+      }
     } else {
       newParameters.push_back(param);
     }
