@@ -990,13 +990,40 @@ public:
   // MYTODO: proper handling of closures
   void visitPartialApplyInst(PartialApplyInst *pai) {
     LLVM_DEBUG(getADDebugStream() << "AAAAAA PullbackCloner::visitPartialApplyInst " << *pai << '\n');
+
+    auto origCalleeType = pai->getOrigCalleeType();
+
+    auto a = getASTContext().getFloatType();
+    if (!(origCalleeType->getNumParameters() == 1 &&
+          origCalleeType->getParameters()[0].getInterfaceType() == a->getCanonicalType() &&
+          origCalleeType->getIndirectMutatingParameters().empty() &&
+          origCalleeType->getNumResults() == 1 &&
+          origCalleeType->getSingleResult().getInterfaceType() == a->getCanonicalType() &&
+          pai->getArguments().size() == 1 &&
+          pai->getArguments()[0]->getType().getASTType() == a->getCanonicalType())) {
+      LLVM_DEBUG(getADDebugStream() << "AAAAAA PullbackCloner::SILInstructionVisitor::visitPartialApplyInst: pai = \n" << *pai << '\n');
+
+      SILInstructionVisitor::visitPartialApplyInst(pai);
+      return;
+    }
+
     assert(pai->getArgumentOperands().size() == 1);
+    LLVM_DEBUG(getADDebugStream() << "AAAAAA PullbackCloner::visitPartialApplyInst 00\n");
     auto *bb = pai->getParent();
     const Operand &op = pai->getArgumentOperands().front();
     SILValue val = op.get();
+    LLVM_DEBUG(getADDebugStream() << "AAAAAA PullbackCloner::visitPartialApplyInst 01\n");
     assert(getTangentValueCategory(pai) == SILValueCategory::Object);
+    LLVM_DEBUG(getADDebugStream() << "AAAAAA PullbackCloner::visitPartialApplyInst 02\n");
+
+    LLVM_DEBUG(getADDebugStream() << "AAAAAA PullbackCloner::visitPartialApplyInst 03\n");
+    // if (val->getType().isAddress()) {
+    //   addToAdjointBuffer(bb, val, adj, pai->getLoc());
+    // } else {
     auto adj = getAdjointValue(bb, pai);
     addAdjointValue(bb, val, adj, pai->getLoc());
+    //}
+    LLVM_DEBUG(getADDebugStream() << "AAAAAA PullbackCloner::visitPartialApplyInst 04\n");
   }
 
   /// Handle `apply` instruction.

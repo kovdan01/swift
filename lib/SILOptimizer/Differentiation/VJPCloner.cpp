@@ -760,13 +760,17 @@ public:
     //TypeSubstCloner::visitPartialApplyInst(pai);
 
     auto origCalleeType = pai->getOrigCalleeType();
+
     auto a = getASTContext().getFloatType();
     if (!(origCalleeType->getNumParameters() == 1 &&
         origCalleeType->getParameters()[0].getInterfaceType() == a->getCanonicalType() &&
+          origCalleeType->getIndirectMutatingParameters().empty() &&
         origCalleeType->getNumResults() == 1 &&
           origCalleeType->getSingleResult().getInterfaceType() == a->getCanonicalType() &&
         pai->getArguments().size() == 1 &&
         pai->getArguments()[0]->getType().getASTType() == a->getCanonicalType())) {
+      LLVM_DEBUG(getADDebugStream() << "AAAAAA VJPCloner::TypeSubstCloner::visitPartialApplyInst: pai = \n" << *pai << '\n');
+
       TypeSubstCloner::visitPartialApplyInst(pai);
       return;
     }
