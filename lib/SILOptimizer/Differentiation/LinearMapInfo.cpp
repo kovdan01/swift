@@ -173,8 +173,28 @@ void LinearMapInfo::populateBranchingTraceDecl(SILBasicBlock *originalBB,
   }
 }
 
+// static bool isApplySiteOfDifferentiableClosure(FullApplySite applySite) {
+//   if (applySite.getKind() != FullApplySiteKind::ApplyInst)
+//     return false;
+//   auto callee = cast<ApplyInst>(applySite.getInstruction())->getCallee();
+//   auto silFunctionType = callee->getType().getAs<SILFunctionType>();
+//   return silFunctionType->isSupportedAsDifferentiableClosure();
+// }
 
 Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
+  // MYTODO proper handling of closures
+  if (isApplySiteOfDifferentiableClosure(fai)) {
+    auto callee = cast<ApplyInst>(fai.getInstruction())->getCallee();
+    auto silFunctionType = callee->getType().getAs<SILFunctionType>();
+    auto singleResultType =
+        silFunctionType->getSingleResult().getInterfaceType();
+    auto singleParamType = singleResultType;
+    FunctionType::ExtInfo info;
+    SmallVector<AnyFunctionType::Param, 1> params = {
+        AnyFunctionType::Param(singleParamType)};
+    return FunctionType::get(params, singleResultType, info);
+  }
+
   SmallVector<SILValue, 4> allResults;
   SmallVector<unsigned, 8> activeParamIndices;
   SmallVector<unsigned, 8> activeResultIndices;
@@ -447,6 +467,15 @@ void LinearMapInfo::generateDifferentiationDataStructures(
 /// 3. The instruction has both an active result (direct or indirect) and an
 ///    active argument.
 bool LinearMapInfo::shouldDifferentiateApplySite(FullApplySite applySite) {
+  // MYTODO: proper handling of closures
+  if (isApplySiteOfDifferentiableClosure(applySite) &&
+      activityInfo
+          .getActivity(cast<ApplyInst>(applySite.getInstruction())->getCallee(),
+                       config)
+          .contains(ActivityFlags::Varied)) {
+    return true;
+  }
+
   // Function applications with an active inout argument should be
   // differentiated.
   for (auto inoutArg : applySite.getInoutArguments())
