@@ -4814,6 +4814,22 @@ TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
   if (!assocTy->hasError())
     return cache(TangentSpace::getTangentVector(assocTy));
 
+  // MYTODO: proper handling for closures
+  if (auto *silFunctionType = getAs<SILFunctionType>()) {
+    if (!silFunctionType->isSupportedAsDifferentiableClosure())
+      return std::nullopt;
+
+    // Tangent of closure is tangent of captured arguments.
+    // As for now, assume that we capture exactly 1 argument and its type is
+    // equal to the result type.
+    auto singleResultType =
+        silFunctionType->getSingleResult().getInterfaceType();
+    auto capturedArgsType = singleResultType;
+    auto tangentOfCapturedArgs =
+        capturedArgsType->getAutoDiffTangentSpace(lookupConformance)->getType();
+    return cache(TangentSpace::getTangentVector(tangentOfCapturedArgs));
+  }
+
   // Otherwise, there is no associated tangent space. Return `None`.
   return cache(std::nullopt);
 }
@@ -5033,6 +5049,10 @@ AnyFunctionType::getAutoDiffDerivativeFunctionLinearMapType(
     for (auto i : range(diffParams.size())) {
       auto diffParam = diffParams[i];
       auto paramType = diffParam.getPlainType();
+      // // MYTODO: proper closure handling
+      // if (diffParam.isAutoClosure()) {
+      //   paramType = paramType->getAs<AnyFunctionType>()->getResult();
+      // }
       auto paramTan = paramType->getAutoDiffTangentSpace(lookupConformance);
       // Error if parameter has no tangent space.
       if (!paramTan)

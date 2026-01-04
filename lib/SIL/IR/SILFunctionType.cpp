@@ -149,6 +149,24 @@ CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
                               getWitnessMethodConformanceOrInvalid());
 }
 
+// MYTODO: comment
+bool SILFunctionType::isSupportedAsDifferentiableClosure() const {
+  if (getNumParameters() != 0)
+    return false;
+  if (getNumResults() != 1)
+    return false;
+  if (hasIndirectFormalResults())
+    return false;
+  // MYTODO: value category object
+  if (getSingleResult().getInterfaceType() !=
+      getASTContext().getFloatType()->getCanonicalType())
+    return false;
+  if (getSubstGenericSignature())
+    return false;
+
+  return true;
+}
+
 CanType SILParameterInfo::getArgumentType(SILFunction *fn) const {
   return getArgumentType(fn->getModule(), fn->getLoweredFunctionType(),
                          fn->getTypeExpansionContext());
@@ -605,13 +623,17 @@ static CanSILFunctionType getAutoDiffDifferentialType(
   getDifferentiabilityParameters(originalFnTy, parameterIndices, diffParams);
   SmallVector<SILParameterInfo, 8> differentialParams;
   for (auto &param : diffParams) {
+    CanType paramType = param.getInterfaceType();
+    // MYTODO: proper handling of closures
+    if (auto *sft = paramType->getAs<SILFunctionType>()) {
+      paramType = sft->getResults().front().getInterfaceType();
+    }
     auto paramTanType = getAutoDiffTangentTypeForLinearMap(
-        param.getInterfaceType(), lookupConformance,
-        substGenericParams, substReplacements, ctx);
+        paramType, lookupConformance, substGenericParams, substReplacements,
+        ctx);
     auto paramConv = getTangentParameterConvention(
         // FIXME(rdar://82549134): Use `resultTanType` to compute it instead.
-        param.getInterfaceType()
-            ->getAutoDiffTangentSpace(lookupConformance)
+        paramType->getAutoDiffTangentSpace(lookupConformance)
             ->getCanonicalType(),
         param.getConvention());
     differentialParams.push_back({paramTanType, paramConv});
@@ -841,13 +863,17 @@ static CanSILFunctionType getAutoDiffPullbackType(
     // results and always appear as pullback parameters.
     if (param.isAutoDiffSemanticResult())
       continue;
+    CanType paramType = param.getInterfaceType();
+    // MYTODO: proper handling of closures
+    if (auto *sft = paramType->getAs<SILFunctionType>()) {
+      paramType = sft->getResults().front().getInterfaceType();
+    }
     auto paramTanType = getAutoDiffTangentTypeForLinearMap(
-        param.getInterfaceType(), lookupConformance,
-        substGenericParams, substReplacements, ctx);
+        paramType, lookupConformance, substGenericParams, substReplacements,
+        ctx);
     auto resultTanConvention = getTangentResultConventionForOriginalParameter(
         // FIXME(rdar://82549134): Use `resultTanType` to compute it instead.
-        param.getInterfaceType()
-            ->getAutoDiffTangentSpace(lookupConformance)
+        paramType->getAutoDiffTangentSpace(lookupConformance)
             ->getCanonicalType(),
         param.getConvention());
     pullbackResults.push_back({paramTanType, resultTanConvention});
@@ -998,7 +1024,51 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
   SmallVector<SILParameterInfo, 4> newParameters;
   newParameters.reserve(constrainedOriginalFnTy->getNumParameters());
   for (auto &param : constrainedOriginalFnTy->getParameters()) {
-    newParameters.push_back(param);
+    // MYTODO: proper handling of closures
+    CanType interfaceType = param.getInterfaceType();
+
+    if (auto *silFunctionType = interfaceType->getAs<SILFunctionType>()) {
+      if (silFunctionType->isSupportedAsDifferentiableClosure()) {
+        // MYTODO: param and result equal
+        auto singleResultType =
+            silFunctionType->getSingleResult().getInterfaceType();
+        auto singleParamType = singleResultType;
+        SmallVector<SILParameterInfo, 1> singleParam;
+        singleParam.emplace_back(singleParamType,
+                                 ParameterConvention::Direct_Unowned);
+        SmallVector<SILResultInfo, 1> singleResult;
+        singleResult.emplace_back(singleResultType, ResultConvention::Unowned);
+
+        CanSILFunctionType pullbackType = SILFunctionType::get(
+            silFunctionType->getInvocationGenericSignature(), ExtInfo(),
+            SILCoroutineKind::None, silFunctionType->getCalleeConvention(),
+            singleParam, {}, singleResult, std::nullopt,
+            silFunctionType->getPatternSubstitutions(),
+            /*invocationSubstitutions*/ SubstitutionMap(),
+            silFunctionType->getASTContext());
+
+        SmallVector<SILResultInfo, 2> vjpResults;
+        vjpResults.emplace_back(silFunctionType->getSingleResult());
+        vjpResults.emplace_back(pullbackType, ResultConvention::Owned);
+
+        CanSILFunctionType vjpType = SILFunctionType::get(
+            silFunctionType->getInvocationGenericSignature(),
+            silFunctionType->getExtInfo(), silFunctionType->getCoroutineKind(),
+            silFunctionType->getCalleeConvention(),
+            silFunctionType->getParameters(), silFunctionType->getYields(),
+            vjpResults, silFunctionType->getOptionalErrorResult(),
+            silFunctionType->getPatternSubstitutions(),
+            /*invocationSubstitutions*/ SubstitutionMap(),
+            silFunctionType->getASTContext(),
+            silFunctionType->getWitnessMethodConformanceOrInvalid());
+
+        newParameters.emplace_back(vjpType, param.getConvention());
+      } else {
+        newParameters.push_back(param);
+      }
+    } else {
+      newParameters.push_back(param);
+    }
   }
   // Reabstraction thunks have a function-typed parameter (the function to
   // reabstract) as their last parameter. Reabstraction thunk JVPs/VJPs have a
