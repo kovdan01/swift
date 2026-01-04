@@ -5952,12 +5952,24 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
   }
   llvm::SmallBitVector parameterBits(numUncurriedParams);
   SmallVector<Type, 4> allParamTypes;
+  SmallVector<size_t, 1> autoclosureIndexes;
 
   // Returns true if the i-th parameter type is differentiable.
   auto isDifferentiableParam = [&](unsigned i) -> bool {
     if (i >= allParamTypes.size())
       return false;
     auto paramType = allParamTypes[i];
+    // MYTODO: proper handling of closures
+    if (llvm::find(autoclosureIndexes, i) != autoclosureIndexes.end()) {
+      auto *anyFunctionType = paramType->getAs<AnyFunctionType>();
+      assert(anyFunctionType != nullptr);
+      if (anyFunctionType->getNumParams() != 0)
+        return false;
+      auto a = ctx.getFloatType();
+      if (anyFunctionType->getResult()->getCanonicalType() != a->getCanonicalType())
+        return false;
+      paramType = anyFunctionType->getResult();
+    }
     if (derivativeGenEnv)
       paramType = derivativeGenEnv->mapTypeIntoEnvironment(paramType);
     else
@@ -5969,6 +5981,8 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
     return conformsToDifferentiable(paramType);
   };
 
+
+
   // Get all parameter types.
   // NOTE: To be robust, result function type parameters should be added only if
   // `functionType` comes from a static/instance method, and not a free function
@@ -5979,11 +5993,12 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
       allParamTypes.push_back(param.getPlainType());
   for (auto &param : functionType->getParams()) {
     // MYTODO: proper handling of closures
-    if (param.isAutoClosure()) {
-      allParamTypes.push_back(param.getPlainType()->getAs<AnyFunctionType>()->getResult());
-    } else {
-      allParamTypes.push_back(param.getPlainType());
-    }
+    if (param.isAutoClosure())
+      autoclosureIndexes.emplace_back(allParamTypes.size());
+    //   allParamTypes.push_back(param.getPlainType()->getAs<AnyFunctionType>()->getResult());
+    // } else {
+    allParamTypes.push_back(param.getPlainType());
+//    }
   }
 
   // Set differentiability parameters.

@@ -467,7 +467,9 @@ void LinearMapInfo::generateDifferentiationDataStructures(
 ///    active argument.
 bool LinearMapInfo::shouldDifferentiateApplySite(FullApplySite applySite) {
   // MYTODO: proper handling of closures
-  if (applySite.getKind() == FullApplySiteKind::ApplyInst) {
+  if (applySite.getKind() == FullApplySiteKind::ApplyInst && applySite.getNumArguments() == 0 &&
+      applySite->getNumResults() == 1 &&
+      applySite->getResults()[0]->getType().getASTType() == original->getASTContext().getFloatType()->getCanonicalType()) {
     if (activityInfo.getActivity(cast<ApplyInst>(applySite.getInstruction())->getCallee(), config).contains(ActivityFlags::Varied)) {
       return true;
     }

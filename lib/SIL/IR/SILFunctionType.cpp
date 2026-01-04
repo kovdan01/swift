@@ -324,22 +324,17 @@ IndexSubset *SILFunctionType::getDifferentiabilityResultIndices() {
 }
 
 CanSILFunctionType SILFunctionType::getDifferentiableComponentType(
-    NormalDifferentiableFunctionTypeComponent component, Lowering::TypeConverter &TC) {
+    NormalDifferentiableFunctionTypeComponent component, SILModule &module) {
   assert(getDifferentiabilityKind() == DifferentiabilityKind::Reverse &&
          "Must be a `@differentiable(reverse)` function");
   auto originalFnTy = getWithoutDifferentiability();
   if (auto derivativeKind = component.getAsDerivativeFunctionKind()) {
     return originalFnTy->getAutoDiffDerivativeFunctionType(
         getDifferentiabilityParameterIndices(),
-        getDifferentiabilityResultIndices(), *derivativeKind, TC,
+        getDifferentiabilityResultIndices(), *derivativeKind, module.Types,
         LookUpConformanceInModule());
   }
   return originalFnTy;
-}
-
-CanSILFunctionType SILFunctionType::getDifferentiableComponentType(
-    NormalDifferentiableFunctionTypeComponent component, SILModule &module) {
-  return getDifferentiableComponentType(component, module.Types);
 }
 
 CanSILFunctionType SILFunctionType::getLinearComponentType(
@@ -753,13 +748,18 @@ static CanSILFunctionType getAutoDiffPullbackType(
   auto getTangentResultConventionForOriginalParameter =
       [&](CanType tanType,
           ParameterConvention origParamConv) -> ResultConvention {
+    LLVM_DEBUG(llvm::dbgs() << "BBBBBBBB 00 00\n");
     auto sig = buildDifferentiableGenericSignature(
       originalFnTy->getSubstGenericSignature(), tanType, origTypeOfAbstraction);
 
+    LLVM_DEBUG(llvm::dbgs() << "BBBBBBBB 00 01 tanType = " << tanType << "\n");
     tanType = tanType->getReducedType(sig);
+    LLVM_DEBUG(llvm::dbgs() << "BBBBBBBB 00 02 tanType = " << tanType << "\n");
     AbstractionPattern pattern(sig, tanType);
+    LLVM_DEBUG(llvm::dbgs() << "BBBBBBBB 00 03\n");
     auto props =
         TC.getTypeProperties(pattern, tanType, TypeExpansionContext::minimal());
+    LLVM_DEBUG(llvm::dbgs() << "BBBBBBBB 01\n");
     ResultConvention conv;
     switch (origParamConv) {
     case ParameterConvention::Direct_Owned:
@@ -785,8 +785,11 @@ static CanSILFunctionType getAutoDiffPullbackType(
       conv = ResultConvention::Indirect;
       break;
     }
+    LLVM_DEBUG(llvm::dbgs() << "BBBBBBBB 02\n");
     return conv;
   };
+
+  LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 00\n");
 
   // Collect pullback parameters & yields
   SmallVector<SILParameterInfo, 1> pullbackParams;
@@ -794,9 +797,12 @@ static CanSILFunctionType getAutoDiffPullbackType(
   unsigned firstSemanticParamResultIdx = originalFnTy->getNumResults();
   unsigned firstYieldResultIndex = originalFnTy->getNumResults() +
       originalFnTy->getNumAutoDiffSemanticResultsParameters();
+  LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 01\n");
   for (auto resultIndex : resultIndices->getIndices()) {
+    LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 02\n");
     // Handle formal original result.
     if (resultIndex < firstSemanticParamResultIdx) {
+      LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 03\n");
       auto &origRes = originalResults[resultIndex];
       auto resultTanType = getAutoDiffTangentTypeForLinearMap(
           origRes.getInterfaceType(), lookupConformance,
@@ -809,6 +815,7 @@ static CanSILFunctionType getAutoDiffPullbackType(
           origRes.getConvention());
       pullbackParams.emplace_back(resultTanType, paramConv);
     } else if (resultIndex < firstYieldResultIndex) {
+      LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 04\n");
       // Handle original semantic result parameters.
       auto resultParamIndex = resultIndex - firstSemanticParamResultIdx;
       auto resultParamIt = std::next(
@@ -829,6 +836,7 @@ static CanSILFunctionType getAutoDiffPullbackType(
         paramTanConvention = ParameterConvention::Indirect_In_Guaranteed;
       pullbackParams.emplace_back(resultParamTanType, paramTanConvention);
     } else {
+      LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 04\n");
       assert(originalFnTy->isCoroutine());
       assert(originalFnTy->getCoroutineKind() == SILCoroutineKind::YieldOnce);
       auto yieldResultIndex = resultIndex - firstYieldResultIndex;
@@ -840,38 +848,48 @@ static CanSILFunctionType getAutoDiffPullbackType(
       assert(yieldResult.getConvention() == ParameterConvention::Indirect_Inout);
       pullbackYields.emplace_back(resultParamTanType, paramTanConvention);
     }
+    LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 05\n");
   }
+  LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 06\n");
 
   // Collect pullback results.
   SmallVector<SILParameterInfo, 4> diffParams;
   getDifferentiabilityParameters(originalFnTy, parameterIndices, diffParams);
   SmallVector<SILResultInfo, 8> pullbackResults;
+  LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 07\n");
   for (auto &param : diffParams) {
+    LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 08\n");
     // Skip semantic result parameters, which semantically behave as original
     // results and always appear as pullback parameters.
     if (param.isAutoDiffSemanticResult())
       continue;
-
+    LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 09\n");
     CanType paramType = param.getInterfaceType();
     // MYTODO: proper handling of closures
     if (auto *sft = paramType->getAs<SILFunctionType>()) {
       paramType = sft->getResults().front().getInterfaceType();
     }
-
+    LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 10\n");
     auto paramTanType = getAutoDiffTangentTypeForLinearMap(
         paramType, lookupConformance,
         substGenericParams, substReplacements, ctx);
+    LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 11\n");
     auto resultTanConvention = getTangentResultConventionForOriginalParameter(
         // FIXME(rdar://82549134): Use `resultTanType` to compute it instead.
         paramType
             ->getAutoDiffTangentSpace(lookupConformance)
             ->getCanonicalType(),
         param.getConvention());
+    LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 11\n");
     pullbackResults.push_back({paramTanType, resultTanConvention});
+    LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 12\n");
   }
+
+  LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 13\n");
 
   SubstitutionMap substitutions;
   if (!substGenericParams.empty()) {
+    LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 14\n");
     auto genericSig =
         GenericSignature::get(substGenericParams, substRequirements)
             .getCanonicalSignature();
@@ -879,6 +897,7 @@ static CanSILFunctionType getAutoDiffPullbackType(
         SubstitutionMap::get(genericSig, llvm::ArrayRef(substReplacements),
                              llvm::ArrayRef(substConformances));
   }
+  LLVM_DEBUG(llvm::dbgs() << "CCCCCCCCC 15\n");
   return SILFunctionType::get(
       GenericSignature(), SILFunctionType::ExtInfo(), originalFnTy->getCoroutineKind(),
       ParameterConvention::Direct_Guaranteed,

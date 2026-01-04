@@ -1661,6 +1661,7 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
     Type paramType = origParam.getInterfaceType();
     // MYTODO: proper handling of closures
     if (auto *sft = paramType->getAs<SILFunctionType>()) {
+      // MYTODO: assertions for zero params and single float result
       paramType = sft->getResults().front().getInterfaceType();
     }
     adjResults.push_back(getTangentResultInfoForOriginalParameter(

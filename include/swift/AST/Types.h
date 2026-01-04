@@ -5867,10 +5867,6 @@ public:
   CanSILFunctionType getDifferentiableComponentType(
       NormalDifferentiableFunctionTypeComponent component, SILModule &module);
 
-  // MYTODO
-  CanSILFunctionType getDifferentiableComponentType(
-      NormalDifferentiableFunctionTypeComponent component, Lowering::TypeConverter &TC);
-
   /// Given that `this` is a `@differentiable(linear)` function type, returns
   /// the type of the given `@differentiable(linear)` function type component.
   CanSILFunctionType
