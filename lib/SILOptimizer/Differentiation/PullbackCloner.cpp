@@ -982,6 +982,63 @@ public:
     errorOccurred = true;
   }
 
+  // MYTODO: proper handling of closures
+  void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *cetnei) {
+    visitValueOwnershipInst(cetnei);
+  }
+
+  // MYTODO: proper handling of closures
+  void visitPartialApplyInst(PartialApplyInst *pai) {
+    LLVM_DEBUG(getADDebugStream()
+               << "AAAAAA PullbackCloner::visitPartialApplyInst " << *pai
+               << '\n');
+
+    auto origCalleeType = pai->getOrigCalleeType();
+
+    auto a = getASTContext().getFloatType();
+    if (!(origCalleeType->getNumParameters() == 1 &&
+          origCalleeType->getParameters()[0].getInterfaceType() ==
+              a->getCanonicalType() &&
+          origCalleeType->getIndirectMutatingParameters().empty() &&
+          origCalleeType->getNumResults() == 1 &&
+          origCalleeType->getSingleResult().getInterfaceType() ==
+              a->getCanonicalType() &&
+          pai->getArguments().size() == 1 &&
+          pai->getArguments()[0]->getType().getASTType() ==
+              a->getCanonicalType())) {
+      LLVM_DEBUG(getADDebugStream() << "AAAAAA "
+                                       "PullbackCloner::SILInstructionVisitor::"
+                                       "visitPartialApplyInst: pai = \n"
+                                    << *pai << '\n');
+
+      SILInstructionVisitor::visitPartialApplyInst(pai);
+      return;
+    }
+
+    assert(pai->getArgumentOperands().size() == 1);
+    LLVM_DEBUG(getADDebugStream()
+               << "AAAAAA PullbackCloner::visitPartialApplyInst 00\n");
+    auto *bb = pai->getParent();
+    const Operand &op = pai->getArgumentOperands().front();
+    SILValue val = op.get();
+    LLVM_DEBUG(getADDebugStream()
+               << "AAAAAA PullbackCloner::visitPartialApplyInst 01\n");
+    assert(getTangentValueCategory(pai) == SILValueCategory::Object);
+    LLVM_DEBUG(getADDebugStream()
+               << "AAAAAA PullbackCloner::visitPartialApplyInst 02\n");
+
+    LLVM_DEBUG(getADDebugStream()
+               << "AAAAAA PullbackCloner::visitPartialApplyInst 03\n");
+    // if (val->getType().isAddress()) {
+    //   addToAdjointBuffer(bb, val, adj, pai->getLoc());
+    // } else {
+    auto adj = getAdjointValue(bb, pai);
+    addAdjointValue(bb, val, adj, pai->getLoc());
+    //}
+    LLVM_DEBUG(getADDebugStream()
+               << "AAAAAA PullbackCloner::visitPartialApplyInst 04\n");
+  }
+
   /// Handle `apply` instruction.
   ///   Original: (y0, y1, ...) = apply @fn (x0, x1, ...)
   ///    Adjoint: (adj[x0], adj[x1], ...) += apply @fn_pullback (adj[y0], ...)
@@ -1013,6 +1070,12 @@ public:
     // If no `NestedApplyInfo` was found, then this task doesn't need to be
     // differentiated.
     if (applyInfoLookup == nestedApplyInfo.end()) {
+      // MYTODO proper closure handling
+      if (ai->getNumArguments() == 0) {
+        visitValueOwnershipInst(ai);
+        return;
+      }
+
       // Must not be active.
       assert(!getActivityInfo().isActive(ai, getConfig()));
       return;
@@ -1141,6 +1204,8 @@ public:
 
   void buildPullbackCall(FullApplySite fai, NestedApplyInfo &applyInfo,
                          SILValue pullback = SILValue()) {
+    LLVM_DEBUG(getADDebugStream() << "RUN buildPullbackCall for fai = "
+                                  << *fai.getInstruction() << '\n');
     auto loc = fai->getLoc();
     auto *bb = fai->getParent();
     if (!pullback)
@@ -1154,15 +1219,19 @@ public:
     });
     SmallVector<SILValue, 8> origAllResults;
     collectAllActualResultsInTypeOrder(fai, origDirectResults, origAllResults);
-    // Append semantic result arguments after original results.
-    for (auto paramIdx : applyInfo.config.parameterIndices->getIndices()) {
-      unsigned argIdx = fai.getNumIndirectSILResults() +
-                        fai.getNumIndirectSILErrorResults() + paramIdx;
-      auto paramInfo = conv.getParamInfoForSILArg(argIdx);
-      if (!paramInfo.isAutoDiffSemanticResult())
-        continue;
-      origAllResults.push_back(
-          fai.getArgumentsWithoutIndirectResults()[paramIdx]);
+
+    // MYTODO: proper closure handling
+    if (!fai.getArguments().empty()) {
+      // Append semantic result arguments after original results.
+      for (auto paramIdx : applyInfo.config.parameterIndices->getIndices()) {
+        unsigned argIdx = fai.getNumIndirectSILResults() +
+                          fai.getNumIndirectSILErrorResults() + paramIdx;
+        auto paramInfo = conv.getParamInfoForSILArg(argIdx);
+        if (!paramInfo.isAutoDiffSemanticResult())
+          continue;
+        origAllResults.push_back(
+            fai.getArgumentsWithoutIndirectResults()[paramIdx]);
+      }
     }
 
     // Get callee pullback arguments.
@@ -1190,10 +1259,24 @@ public:
     unsigned firstYieldResultIndex = firstSemanticParamResultIdx +
       conv.getNumAutoDiffSemanticResultParameters();
 
+    LLVM_DEBUG(getADDebugStream()
+               << "AAAAAAA buildPullbackCall firstSemanticParamResultIdx = "
+               << firstSemanticParamResultIdx
+               << ", firstYieldResultIndex = " << firstYieldResultIndex
+               << ", origAllResults.size() = " << origAllResults.size()
+               << '\n');
+
     for (auto resultIndex : applyInfo.config.resultIndices->getIndices()) {
       if (resultIndex >= firstYieldResultIndex)
         continue;
+      LLVM_DEBUG(getADDebugStream()
+                 << "AAAAAAA buildPullbackCall resultIndex = " << resultIndex
+                 << '\n');
       assert(resultIndex < origAllResults.size());
+      LLVM_DEBUG(getADDebugStream()
+                 << "AAAAAAA buildPullbackCall after assert resultIndex = "
+                 << resultIndex << '\n');
+
       auto origResult = origAllResults[resultIndex];
 
       // Get the seed (i.e. adjoint value of the original result).
@@ -1215,8 +1298,11 @@ public:
       args.push_back(seed);
     }
 
+    LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 10\n");
+
     // If callee pullback was reabstracted in VJP, reabstract callee pullback.
     if (applyInfo.originalPullbackType) {
+      LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 11\n");
       auto toType = *applyInfo.originalPullbackType;
       SILOptFunctionBuilder fb(getContext().getTransform());
       if (toType->isCoroutine())
@@ -1232,11 +1318,13 @@ public:
             return this->remapSubstitutionMap(subs);
           });
     }
+    LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 12\n");
 
     // Call the callee pullback.
     FullApplySite pullbackCall;
     SmallVector<SILValue, 8> dirResults;
     if (actualPullbackType->isCoroutine()) {
+      LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 13\n");
       pullbackCall = builder.createBeginApply(loc, pullback, SubstitutionMap(),
                                               args);
       // Record pullback and begin_apply token: the pullback will be consumed
@@ -1244,12 +1332,14 @@ public:
       applyInfo.pullback = pullback;
       applyInfo.beginApplyToken = cast<BeginApplyInst>(pullbackCall)->getTokenResult();
     } else {
+      LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 14\n");
       pullbackCall = builder.createApply(loc, pullback, SubstitutionMap(),
                                          args);
       builder.emitDestroyValueOperation(loc, pullback);
       // Extract all results from `pullbackCall`.
       extractAllElements(cast<ApplyInst>(pullbackCall), builder, dirResults);
     }
+    LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 15\n");
 
     // Get all results in type-defined order.
     SmallVector<SILValue, 8> allResults;
@@ -1261,33 +1351,66 @@ public:
       llvm::for_each(allResults, [&](SILValue v) { s << v; });
     });
 
+    LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 16\n");
+
     // Accumulate adjoints for original differentiation parameters.
     auto allResultsIt = allResults.begin();
     for (unsigned i : applyInfo.config.parameterIndices->getIndices()) {
+      LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 20\n");
       unsigned argIdx = fai.getNumIndirectSILResults() +
                         fai.getNumIndirectSILErrorResults() + i;
-      auto origArg = fai.getArgument(argIdx);
-      // Skip adjoint accumulation for semantic results arguments.
-      auto paramInfo = fai.getSubstCalleeConv().getParamInfoForSILArg(argIdx);
-      if (paramInfo.isAutoDiffSemanticResult())
-        continue;
-      auto tan = *allResultsIt++;
-      if (tan->getType().isAddress()) {
-        addToAdjointBuffer(bb, origArg, tan, loc);
+      LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 21 i = " << i
+                                    << ", argIdx = " << argIdx << "\n");
+      LLVM_DEBUG(getADDebugStream() << *fai.getInstruction());
+      LLVM_DEBUG(getADDebugStream()
+                 << fai.getInstruction()->getParent()->getParent()->getName()
+                 << '\n');
+
+      // MYTODO: proper closure handling
+      if (fai.getArguments().empty()) {
+        LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 30\n");
+        auto origArg = fai.getCallee();
+        LLVM_DEBUG(getADDebugStream()
+                   << "AAAAAAA buildPullbackCall 31 origArg = " << origArg
+                   << "\n");
+        auto tan = *allResultsIt++;
+        LLVM_DEBUG(getADDebugStream()
+                   << "AAAAAAA buildPullbackCall 32 tan = " << tan << "\n");
+        assert(!tan->getType().isAddress());
+        LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 33\n");
+        recordTemporary(tan);
+        LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 34\n");
+        addAdjointValue(bb, origArg, makeConcreteAdjointValue(tan), loc);
+        LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 35\n");
       } else {
-        if (origArg->getType().isAddress()) {
-          auto *tmpBuf = builder.createAllocStack(loc, tan->getType());
-          builder.emitStoreValueOperation(loc, tan, tmpBuf,
-                                          StoreOwnershipQualifier::Init);
-          addToAdjointBuffer(bb, origArg, tmpBuf, loc);
-          builder.emitDestroyAddrAndFold(loc, tmpBuf);
-          builder.createDeallocStack(loc, tmpBuf);
+        LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 22\n");
+        auto origArg = fai.getArgument(argIdx);
+        // Skip adjoint accumulation for semantic results arguments.
+        auto paramInfo = fai.getSubstCalleeConv().getParamInfoForSILArg(argIdx);
+        LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 23\n");
+        if (paramInfo.isAutoDiffSemanticResult())
+          continue;
+        LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 24\n");
+        auto tan = *allResultsIt++;
+        if (tan->getType().isAddress()) {
+          addToAdjointBuffer(bb, origArg, tan, loc);
         } else {
-          recordTemporary(tan);
-          addAdjointValue(bb, origArg, makeConcreteAdjointValue(tan), loc);
+          if (origArg->getType().isAddress()) {
+            auto *tmpBuf = builder.createAllocStack(loc, tan->getType());
+            builder.emitStoreValueOperation(loc, tan, tmpBuf,
+                                            StoreOwnershipQualifier::Init);
+            addToAdjointBuffer(bb, origArg, tmpBuf, loc);
+            builder.emitDestroyAddrAndFold(loc, tmpBuf);
+            builder.createDeallocStack(loc, tmpBuf);
+          } else {
+            recordTemporary(tan);
+            addAdjointValue(bb, origArg, makeConcreteAdjointValue(tan), loc);
+          }
         }
       }
     }
+
+    LLVM_DEBUG(getADDebugStream() << "AAAAAAA buildPullbackCall 17\n");
 
     // Propagate adjoints for yields
     if (actualPullbackType->isCoroutine()) {

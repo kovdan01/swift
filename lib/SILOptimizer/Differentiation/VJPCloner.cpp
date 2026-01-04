@@ -257,6 +257,7 @@ public:
     SILValue partialApplyArg;
     PartialApplyInst *pullbackPartialApply;
     if (borrowedPullbackContextValue) {
+      LLVM_DEBUG(llvm::dbgs() << "AAAAAAAA pullbackPartialApply 1\n");
       auto *pbTupleVal = buildPullbackValueTupleValue(ri);
       // Initialize the top-level subcontext buffer with the top-level pullback
       // tuple.
@@ -272,6 +273,7 @@ public:
         loc, pullbackRef, vjpSubstMap, {pullbackContextValue},
         ParameterConvention::Direct_Guaranteed);
     } else {
+      LLVM_DEBUG(llvm::dbgs() << "AAAAAAAA pullbackPartialApply 2\n");
       pullbackPartialApply = Builder.createPartialApply(
         loc, pullbackRef, vjpSubstMap, getPullbackValues(origExit),
         ParameterConvention::Direct_Guaranteed);
@@ -293,6 +295,8 @@ public:
           Builder.createConvertFunction(loc, pullbackPartialApply, pullbackType,
                                         /*withoutActuallyEscaping*/ false);
     } else {
+      LLVM_DEBUG(llvm::dbgs() << "AAAAAAAA " << pullbackSubstType << '\n'
+                              << "AAAAAAAA " << pullbackFnType << '\n');
       llvm::report_fatal_error("Pullback value type is not ABI-compatible "
                                "with the returned pullback type");
     }
@@ -750,6 +754,90 @@ public:
     // The rest of the cloning magic happens during `end_apply` cloning.
   }
 
+  // MYTODO: proper handling of closures
+  void visitPartialApplyInst(PartialApplyInst *pai) {
+    LLVM_DEBUG(getADDebugStream()
+               << "AAAAAA VJPCloner::visitPartialApplyInst: " << *pai << '\n');
+    // TypeSubstCloner::visitPartialApplyInst(pai);
+
+    auto origCalleeType = pai->getOrigCalleeType();
+
+    auto a = getASTContext().getFloatType();
+    if (!(origCalleeType->getNumParameters() == 1 &&
+          origCalleeType->getParameters()[0].getInterfaceType() ==
+              a->getCanonicalType() &&
+          origCalleeType->getIndirectMutatingParameters().empty() &&
+          origCalleeType->getNumResults() == 1 &&
+          origCalleeType->getSingleResult().getInterfaceType() ==
+              a->getCanonicalType() &&
+          pai->getArguments().size() == 1 &&
+          pai->getArguments()[0]->getType().getASTType() ==
+              a->getCanonicalType())) {
+      LLVM_DEBUG(getADDebugStream()
+                 << "AAAAAA VJPCloner::TypeSubstCloner::visitPartialApplyInst: "
+                    "pai = \n"
+                 << *pai << '\n');
+
+      TypeSubstCloner::visitPartialApplyInst(pai);
+      return;
+    }
+
+    auto origCallee = getOpValue(pai->getCallee());
+
+    LLVM_DEBUG(getADDebugStream()
+               << "AAAAAA VJPCloner::visitPartialApplyInst: origCallee = \n"
+               << origCallee << '\n');
+    // errorOccurred = true;
+    // return;
+
+    // MYTODO: support non-empty
+    assert(pai->getSubstitutionMap().empty());
+
+    auto loc = pai->getLoc();
+
+    // MYTODO: index subset
+    auto *diffFuncInst = context.createDifferentiableFunction(
+        getBuilder(), pai->getLoc(),
+        IndexSubset::get(context.getASTContext(), 1, {0}),
+        IndexSubset::get(context.getASTContext(), 1, {0}), origCallee);
+
+    // Record the `differentiable_function` instruction.
+    context.getDifferentiableFunctionInstWorklist().push_back(diffFuncInst);
+
+    SILValue vjpValue;
+
+    getBuilder().emitScopedBorrowOperation(
+        loc, diffFuncInst, [&](SILValue borrowedADFunc) {
+          auto extractedVJP = getBuilder().createDifferentiableFunctionExtract(
+              loc, NormalDifferentiableFunctionTypeComponent::VJP,
+              borrowedADFunc);
+          vjpValue = getBuilder().emitCopyValueOperation(loc, extractedVJP);
+        });
+
+    getBuilder().emitDestroyValueOperation(loc, diffFuncInst);
+
+    llvm::SmallVector<SILValue, 8> vjpArgs;
+    for (auto origArg : pai->getArguments())
+      vjpArgs.push_back(getOpValue(origArg));
+    auto *newPai = getBuilder().createPartialApply(
+        loc, vjpValue, SubstitutionMap(), vjpArgs, pai->getCalleeConvention());
+
+    mapValue(pai, newPai);
+  }
+
+  // MYTODO: proper handling of closures
+  void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *cetnei) {
+    SILType type = getOpValue(cetnei->getOperand())->getType();
+    auto functionType = type.getAs<SILFunctionType>();
+    auto noEscapeFunctionType =
+        swift::SILType::getPrimitiveObjectType(functionType->getWithExtInfo(
+            functionType->getExtInfo().withNoEscape(true)));
+    auto *newInst = getBuilder().createConvertEscapeToNoEscape(
+        cetnei->getLoc(), getOpValue(cetnei->getOperand()),
+        noEscapeFunctionType, cetnei->isLifetimeGuaranteed());
+    mapValue(cetnei, newInst);
+  }
+
   // If an `apply` has active results or active inout arguments, replace it
   // with an `apply` of its VJP.
   void visitApplyInst(ApplyInst *ai) {
@@ -757,6 +845,44 @@ public:
     if (!pullbackInfo.shouldDifferentiateApplySite(ai)) {
       LLVM_DEBUG(getADDebugStream() << "No active results:\n" << *ai << '\n');
       TypeSubstCloner::visitApplyInst(ai);
+      return;
+    }
+    // MYTODO: proper handling of closures
+    if (ai->getNumArguments() == 0) {
+      // MYTODO: proper indexes
+      AutoDiffConfig config(IndexSubset::get(getASTContext(), 1, {0}),
+                            IndexSubset::get(getASTContext(), 1, {0}));
+
+      NestedApplyInfo info{config, /*originalPullbackType*/ std::nullopt};
+      auto insertion = context.getNestedApplyInfo().try_emplace(ai, info);
+      auto &nestedApplyInfo = insertion.first->getSecond();
+      nestedApplyInfo = info;
+
+      llvm::SmallVector<SILValue, 8> vjpArgs;
+      for (auto origArg : ai->getArguments())
+        vjpArgs.push_back(getOpValue(origArg));
+      auto origCallee = getOpValue(ai->getCallee());
+      auto *vjpCall =
+          getBuilder().createApply(ai->getLoc(), origCallee, SubstitutionMap(),
+                                   vjpArgs, ai->getApplyOptions());
+
+      // Get the VJP results (original results and pullback).
+      SmallVector<SILValue, 8> vjpDirectResults;
+      extractAllElements(vjpCall, getBuilder(), vjpDirectResults);
+      ArrayRef<SILValue> originalDirectResults =
+          ArrayRef<SILValue>(vjpDirectResults).drop_back(1);
+      SILValue originalDirectResult =
+          joinElements(originalDirectResults, getBuilder(), vjpCall->getLoc());
+      SILValue pullback = vjpDirectResults.back();
+
+      // getBuilder().emitDestroyValueOperation(vjpCall->getLoc(), pullback);
+      //  MYTODO: perform actual operations with pullback
+
+      mapValue(ai, originalDirectResult);
+
+      nestedApplyInfo.pullbackIdx = pullbackValues[ai->getParent()].size();
+      pullbackValues[ai->getParent()].push_back(pullback);
+
       return;
     }
     // If callee is `array.uninitialized_intrinsic`, do standard cloning.
@@ -1557,9 +1683,14 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
       continue;
     origParam = origParam.getWithInterfaceType(
         origParam.getInterfaceType()->getReducedType(witnessCanGenSig));
+    Type paramType = origParam.getInterfaceType();
+    // MYTODO: proper handling of closures
+    if (auto *sft = paramType->getAs<SILFunctionType>()) {
+      // MYTODO: assertions for zero params and single float result
+      paramType = sft->getResults().front().getInterfaceType();
+    }
     adjResults.push_back(getTangentResultInfoForOriginalParameter(
-        origParam.getInterfaceType()
-            ->getAutoDiffTangentSpace(lookupConformance)
+        paramType->getAutoDiffTangentSpace(lookupConformance)
             ->getType()
             ->getReducedType(witnessCanGenSig),
         origParam.getConvention()));

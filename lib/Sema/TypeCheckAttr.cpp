@@ -5952,12 +5952,25 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
   }
   llvm::SmallBitVector parameterBits(numUncurriedParams);
   SmallVector<Type, 4> allParamTypes;
+  SmallVector<size_t, 1> autoclosureIndexes;
 
   // Returns true if the i-th parameter type is differentiable.
   auto isDifferentiableParam = [&](unsigned i) -> bool {
     if (i >= allParamTypes.size())
       return false;
     auto paramType = allParamTypes[i];
+    // MYTODO: proper handling of closures
+    if (llvm::find(autoclosureIndexes, i) != autoclosureIndexes.end()) {
+      auto *anyFunctionType = paramType->getAs<AnyFunctionType>();
+      assert(anyFunctionType != nullptr);
+      if (anyFunctionType->getNumParams() != 0)
+        return false;
+      auto a = ctx.getFloatType();
+      if (anyFunctionType->getResult()->getCanonicalType() !=
+          a->getCanonicalType())
+        return false;
+      paramType = anyFunctionType->getResult();
+    }
     if (derivativeGenEnv)
       paramType = derivativeGenEnv->mapTypeIntoEnvironment(paramType);
     else
@@ -5977,8 +5990,15 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
   if (auto resultFnType = functionType->getResult()->getAs<AnyFunctionType>())
     for (auto &param : resultFnType->getParams())
       allParamTypes.push_back(param.getPlainType());
-  for (auto &param : functionType->getParams())
+  for (auto &param : functionType->getParams()) {
+    // MYTODO: proper handling of closures
+    if (param.isAutoClosure())
+      autoclosureIndexes.emplace_back(allParamTypes.size());
+    //   allParamTypes.push_back(param.getPlainType()->getAs<AnyFunctionType>()->getResult());
+    // } else {
     allParamTypes.push_back(param.getPlainType());
+    //    }
+  }
 
   // Set differentiability parameters.
   for (unsigned i : range(parameterBits.size()))
