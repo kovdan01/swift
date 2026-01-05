@@ -5958,11 +5958,12 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
     if (i >= allParamTypes.size())
       return false;
     auto paramType = allParamTypes[i];
-    // MYTODO: proper handling of closures
     if (const auto *anyFunctionType = paramType->getAs<AnyFunctionType>()) {
       if (!anyFunctionType->isSupportedAsDifferentiableClosure())
         return false;
-      // MYTODO: comment
+      // Right now we assume that for differentiable closures we capture exactly
+      // one argument and its type is equal to the result type.
+      // TODO: handle arbitrary captured arg types and result types.
       paramType = anyFunctionType->getResult();
     }
     if (derivativeGenEnv)

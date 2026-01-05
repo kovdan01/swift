@@ -226,6 +226,7 @@ public:
   }
 
   void visitSILInstruction(SILInstruction *inst) {
+    llvm::errs() << "AAAAAAAAAA 00\n";
     context.emitNondifferentiabilityError(
         inst, invoker, diag::autodiff_expression_not_differentiable_note);
     errorOccurred = true;
@@ -750,27 +751,33 @@ public:
     // The rest of the cloning magic happens during `end_apply` cloning.
   }
 
-  // MYTODO: proper handling of closures
+  // TODO: additional tests for cases when `partial_apply` result is wrapped in
+  // `convert_escape_to_noescape`
   void visitPartialApplyInst(PartialApplyInst *pai) {
     if (!pai->isSupportedAsDifferentiableClosure()) {
       TypeSubstCloner::visitPartialApplyInst(pai);
       return;
     }
 
+    // TODO: use the following logic only when an `apply` which needs to be
+    // differentiated accepts the result of this `partial_apply` (either
+    // directly or via `convert_escape_to_noescape`). Otherwise, fall back to
+    // `TypeSubstCloner::visitPartialApplyInst`.
+
     auto origCallee = getOpValue(pai->getCallee());
     auto loc = pai->getLoc();
 
-    // MYTODO: index subset
+    // Right now, we only support closures capturing exactly one argument with
+    // the type equal to the result type.
+    // TODO: do not hardcode indexes.
     auto *diffFuncInst = context.createDifferentiableFunction(
         getBuilder(), pai->getLoc(),
         IndexSubset::get(context.getASTContext(), 1, {0}),
         IndexSubset::get(context.getASTContext(), 1, {0}), origCallee);
 
-    // Record the `differentiable_function` instruction.
     context.getDifferentiableFunctionInstWorklist().push_back(diffFuncInst);
 
     SILValue vjpValue;
-
     getBuilder().emitScopedBorrowOperation(
         loc, diffFuncInst, [&](SILValue borrowedADFunc) {
           auto extractedVJP = getBuilder().createDifferentiableFunctionExtract(
@@ -778,7 +785,6 @@ public:
               borrowedADFunc);
           vjpValue = getBuilder().emitCopyValueOperation(loc, extractedVJP);
         });
-
     getBuilder().emitDestroyValueOperation(loc, diffFuncInst);
 
     llvm::SmallVector<SILValue, 8> vjpArgs;
@@ -790,7 +796,6 @@ public:
     mapValue(pai, newPai);
   }
 
-  // MYTODO: proper handling of closures
   void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *cetnei) {
     SILType type = getOpValue(cetnei->getOperand())->getType();
     auto functionType = type.getAs<SILFunctionType>();
@@ -813,12 +818,13 @@ public:
       return;
     }
 
-    // MYTODO: proper handling of closures
     if (ai->getCallee()
             ->getType()
             .getAs<SILFunctionType>()
             ->isSupportedAsDifferentiableClosure()) {
-      // MYTODO: proper indexes
+      // Right now we assume that for differentiable closures we capture exactly
+      // one argument and its type is equal to the result type.
+      // TODO: do not hardcode indexes.
       AutoDiffConfig config(IndexSubset::get(getASTContext(), 1, {0}),
                             IndexSubset::get(getASTContext(), 1, {0}));
 

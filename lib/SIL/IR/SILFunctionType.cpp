@@ -149,17 +149,22 @@ CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
                               getWitnessMethodConformanceOrInvalid());
 }
 
-// MYTODO: comment
 bool SILFunctionType::isSupportedAsDifferentiableClosure() const {
+  // Right now, we only support closures capturing exactly one argument with the
+  // type equal to the result type. No other arguments except the captured one
+  // are supported.
+  // TODO: support arbitrary captured and non-captured arguments types.
   if (getNumParameters() != 0)
     return false;
   if (getNumResults() != 1)
     return false;
   if (hasIndirectFormalResults())
     return false;
-  // MYTODO: value category object
+  // TODO: support different argument and result types
   if (getSingleResult().getInterfaceType() !=
-      getASTContext().getFloatType()->getCanonicalType())
+          getASTContext().getFloatType()->getCanonicalType() &&
+      getSingleResult().getInterfaceType() !=
+          getASTContext().getDoubleType()->getCanonicalType())
     return false;
   if (getSubstGenericSignature())
     return false;
@@ -1017,7 +1022,6 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
   newParameters.reserve(constrainedOriginalFnTy->getNumParameters());
   for (const auto &[index, param] :
        llvm::enumerate(constrainedOriginalFnTy->getParameters())) {
-    // MYTODO: proper handling of closures
     CanType paramInterfaceType = param.getInterfaceType();
 
     if (!paramInterfaceType->is<SILFunctionType>() ||
@@ -1032,9 +1036,9 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
       continue;
     }
 
-    // MYTODO: test if pass closure which is not intended for differentiation
-    // MYTODO: param and result equal
-    // MYTODO: what if not differentiable?
+    // Right now, we only support closures capturing exactly one argument with
+    // the type equal to the result type.
+    // TODO: support arbitrary captured argument types and result types.
     auto singleResultType =
         silFunctionType->getSingleResult().getInterfaceType();
     auto singleParamType = singleResultType;
@@ -1044,6 +1048,7 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
     SmallVector<SILResultInfo, 1> singleResult;
     singleResult.emplace_back(singleResultType, ResultConvention::Unowned);
 
+    // TODO: support non-empty substitution map
     CanSILFunctionType pullbackType = SILFunctionType::get(
         silFunctionType->getInvocationGenericSignature(), ExtInfo(),
         SILCoroutineKind::None, silFunctionType->getCalleeConvention(),

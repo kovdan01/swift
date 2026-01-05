@@ -363,7 +363,6 @@ void DifferentiableActivityInfo::propagateUseful(
     for (auto arg : applySite.getArgumentsWithoutIndirectResults())
       setUsefulAndPropagateToOperands(arg, i);
 
-    // MYTODO: proper handling of closures
     if (isApplySiteOfDifferentiableClosure(applySite))
       setUsefulAndPropagateToOperands(applySite.getCallee(), i);
   }

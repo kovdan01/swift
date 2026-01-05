@@ -2,12 +2,12 @@
 
 // REQUIRES: executable_test
 
-import _Differentiation
 import DifferentiationUnittest
 import StdlibUnittest
 
 var NilCoalescingTests = TestSuite("OptionalDifferentiation")
 
+// Note: we do not support throwing closures, so use a custom overload accepting a non-throwing closure
 func ??(_ x: Float?, _ y: @autoclosure () -> Float) -> Float {
   if x == nil {
     return y()

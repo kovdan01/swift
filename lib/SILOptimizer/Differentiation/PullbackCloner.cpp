@@ -982,12 +982,10 @@ public:
     errorOccurred = true;
   }
 
-  // MYTODO: proper handling of closures
   void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *cetnei) {
     visitValueOwnershipInst(cetnei);
   }
 
-  // MYTODO: proper handling of closures
   void visitPartialApplyInst(PartialApplyInst *pai) {
     if (!pai->isSupportedAsDifferentiableClosure()) {
       SILInstructionVisitor::visitPartialApplyInst(pai);
@@ -1175,7 +1173,6 @@ public:
     SmallVector<SILValue, 8> origAllResults;
     collectAllActualResultsInTypeOrder(fai, origDirectResults, origAllResults);
 
-    // MYTODO: proper closure handling
     if (!isApplySiteOfDifferentiableClosure(fai)) {
       // Append semantic result arguments after original results.
       for (auto paramIdx : applyInfo.config.parameterIndices->getIndices()) {
@@ -1291,7 +1288,6 @@ public:
       unsigned argIdx = fai.getNumIndirectSILResults() +
                         fai.getNumIndirectSILErrorResults() + i;
 
-      // MYTODO: proper closure handling
       if (isApplySiteOfDifferentiableClosure(fai)) {
         auto origArg = fai.getCallee();
         auto tan = *allResultsIt++;
@@ -1962,6 +1958,7 @@ public:
     case SILValueCategory::Address:
       LLVM_DEBUG(getADDebugStream() << "AutoDiff does not support move_value with "
                  "SILValueCategory::Address");
+      llvm::errs() << "BBBBBBBBB 01\n";
       getContext().emitNondifferentiabilityError(
         mvi, getInvoker(), diag::autodiff_expression_not_differentiable_note);
       errorOccurred = true;
@@ -2028,6 +2025,7 @@ public:
     if (ei->getType().getEnumOrBoundGenericEnum() != optionalEnumDecl) {
       LLVM_DEBUG(getADDebugStream()
                  << "Unsupported enum type in PullbackCloner: " << *ei);
+      llvm::errs() << "BBBBBBBBB 02\n";
       getContext().emitNondifferentiabilityError(
           ei, getInvoker(),
           diag::autodiff_expression_not_differentiable_note);
@@ -2065,6 +2063,7 @@ public:
     if (origEnum->getType().getEnumOrBoundGenericEnum() != optionalEnumDecl) {
       LLVM_DEBUG(getADDebugStream()
                  << "Unsupported enum type in PullbackCloner: " << *inject);
+      llvm::errs() << "BBBBBBBBB 03\n";
       getContext().emitNondifferentiabilityError(
           inject, getInvoker(),
           diag::autodiff_expression_not_differentiable_note);
@@ -2086,6 +2085,7 @@ public:
           LLVM_DEBUG(getADDebugStream()
                      << "Could not find a matching init_enum_data_addr for: "
                      << *inject);
+          llvm::errs() << "BBBBBBBBB 04\n";
           getContext().emitNondifferentiabilityError(
               inject, getInvoker(),
               diag::autodiff_expression_not_differentiable_note);
@@ -2199,6 +2199,7 @@ public:
     if (enumTy.getASTType().getEnumOrBoundGenericEnum() != optionalEnumDecl) {
       LLVM_DEBUG(getADDebugStream()
                  << "Unhandled instruction in PullbackCloner: " << *utedai);
+      llvm::errs() << "BBBBBBBBB 05\n";
       getContext().emitNondifferentiabilityError(
           utedai, getInvoker(),
           diag::autodiff_expression_not_differentiable_note);
@@ -2408,6 +2409,7 @@ bool PullbackCloner::Implementation::run() {
       // Check that active values are differentiable. Otherwise we may crash
       // later when tangent space is required, but not available.
       if (!getTangentSpace(remapType(type).getASTType())) {
+        llvm::errs() << "BBBBBBBBB 06\n";
         getContext().emitNondifferentiabilityError(
             v, getInvoker(), diag::autodiff_expression_not_differentiable_note);
         errorOccurred = true;
@@ -3348,9 +3350,11 @@ void PullbackCloner::Implementation::visitSILBasicBlock(SILBasicBlock *bb) {
       LLVM_DEBUG(getADDebugStream() <<
                  "do not know how to handle this incoming bb argument");
       if (auto term = bbArg->getSingleTerminator()) {
+        llvm::errs() << "BBBBBBBBB 07\n";
         getContext().emitNondifferentiabilityError(term, getInvoker(),
           diag::autodiff_expression_not_differentiable_note);
       } else {
+        llvm::errs() << "BBBBBBBBB 08\n";
         // This will be a bit confusing, but still better than nothing.
         getContext().emitNondifferentiabilityError(bbArg, getInvoker(),
           diag::autodiff_expression_not_differentiable_note);

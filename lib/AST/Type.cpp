@@ -4826,11 +4826,11 @@ TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
   if (!assocTy->hasError())
     return cache(TangentSpace::getTangentVector(assocTy));
 
-  // MYTODO: proper handling for closures
+  // Tangent of closure is tangent of captured arguments.
+  // As for now, assume that exactly 1 argument is captured and its type is
+  // equal to the result type.
+  // TODO: handle arbitrary captured arg types and result types.
   if (auto resultType = getResultTypeForSupportedDifferentiableClosure(this)) {
-    // Tangent of closure is tangent of captured arguments.
-    // As for now, assume that we capture exactly 1 argument and its type is
-    // equal to the result type.
     auto capturedArgsType = resultType;
     auto tangentOfCapturedArgs =
         capturedArgsType->getAutoDiffTangentSpace(lookupConformance)->getType();

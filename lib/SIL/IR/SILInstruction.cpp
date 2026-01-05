@@ -2002,6 +2002,11 @@ PartialApplyInst::visitOnStackLifetimeEnds(
 }
 
 bool PartialApplyInst::isSupportedAsDifferentiableClosure() const {
+  // Right now, we only support closures capturing exactly one argument with the
+  // type equal to the result type. No other arguments except the captured one
+  // are supported.
+  // TODO: support arbitrary captured and non-captured arguments types.
+
   auto origCalleeType = getOrigCalleeType();
   auto closureType = getType().getAs<SILFunctionType>();
 
@@ -2014,6 +2019,7 @@ bool PartialApplyInst::isSupportedAsDifferentiableClosure() const {
   if (origCalleeType->getParameters()[0].getInterfaceType() !=
       closureType->getSingleResult().getInterfaceType())
     return false;
+  // TODO: support non-empty substitution map
   if (getSubstitutionMap())
     return false;
 

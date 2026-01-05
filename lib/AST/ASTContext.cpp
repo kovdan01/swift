@@ -4865,10 +4865,17 @@ void AnyFunctionType::relabelParams(MutableArrayRef<Param> params,
 }
 
 bool AnyFunctionType::isSupportedAsDifferentiableClosure() const {
+  // Right now, we only support closures capturing exactly one argument with the
+  // type equal to the result type. No other arguments except the captured one
+  // are supported.
+  // TODO: support arbitrary captured and non-captured arguments types.
   if (getNumParams() != 0)
     return false;
+  // TODO: support different argument and result types
   if (getResult()->getCanonicalType() !=
-      getASTContext().getFloatType()->getCanonicalType())
+          getASTContext().getFloatType()->getCanonicalType() &&
+      getResult()->getCanonicalType() !=
+          getASTContext().getDoubleType()->getCanonicalType())
     return false;
   return true;
 }

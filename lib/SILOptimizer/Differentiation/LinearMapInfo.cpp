@@ -173,10 +173,11 @@ void LinearMapInfo::populateBranchingTraceDecl(SILBasicBlock *originalBB,
   }
 }
 
-
 Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
-  // MYTODO proper handling of closures
   if (isApplySiteOfDifferentiableClosure(fai)) {
+    // Right now, we only support closures capturing exactly one argument with
+    // the type equal to the result type.
+    // TODO: support arbitrary captured argument types and result types.
     auto callee = cast<ApplyInst>(fai.getInstruction())->getCallee();
     auto silFunctionType = callee->getType().getAs<SILFunctionType>();
     auto singleResultType =
@@ -460,7 +461,6 @@ void LinearMapInfo::generateDifferentiationDataStructures(
 /// 3. The instruction has both an active result (direct or indirect) and an
 ///    active argument.
 bool LinearMapInfo::shouldDifferentiateApplySite(FullApplySite applySite) {
-  // MYTODO: proper handling of closures
   if (isApplySiteOfDifferentiableClosure(applySite)) {
     auto callee = cast<ApplyInst>(applySite.getInstruction())->getCallee();
     if (activityInfo.getActivity(callee, config)
