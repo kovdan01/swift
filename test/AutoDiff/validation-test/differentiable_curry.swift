@@ -15,33 +15,69 @@ func ??(_ x: Float?, _ y: @autoclosure () -> Float) -> Float {
   return x!
 }
 
-NilCoalescingTests.test("Test") {
+func ??(_ x: Double?, _ y: @autoclosure () -> Double) -> Double {
+  if x == nil {
+    return y()
+  }
+  return x!
+}
+
+func nilCoalescingNonLazy(_ x: Float?, _ y: Float) -> Float {
+  if x == nil {
+    return y
+  }
+  return x!
+}
+
+func nilCoalescingNonLazy(_ x: Double?, _ y: Double) -> Double {
+  if x == nil {
+    return y
+  }
+  return x!
+}
+
+NilCoalescingTests.test("Float") {
   @differentiable(reverse)
-  func fooClosure(_ x: Float?, _ y: Float) -> Float {
-    return x ??  y * y
-  }
-
-  func coalesce(_ x: Float?, _ y: Float) -> Float {
-    if x == nil {
-      return y
-    }
-    return x!
+  func lazy(_ x: Float?, _ y: Float) -> Float {
+    return x ?? y * y
   }
 
   @differentiable(reverse)
-  func fooFloat(_ x: Float?, _ y: Float) -> Float {
-    return coalesce(x, y * y)
+  func nonLazy(_ x: Float?, _ y: Float) -> Float {
+    return nilCoalescingNonLazy(x, y * y)
   }
 
-  let pbClosure = pullback(at: Float?(nil), Float(3), of: fooClosure)
-  let resultGotClosure = pbClosure(Float(1))
+  let pbLazy = pullback(at: Float?(nil), Float(3), of: lazy)
+  let lazyResult = pbLazy(Float(1))
 
-  let pbFloat = pullback(at: Float?(nil), Float(3), of: fooFloat)
-  let resultGotFloat = pbFloat(Float(1))
+  let pbNonLazy = pullback(at: Float?(nil), Float(3), of: nonLazy)
+  let nonLazyResult = pbNonLazy(Float(1))
 
-  let resultExpected = (Optional<Float>.TangentVector(0), Float(6))
-  expectEqual(resultGotClosure, resultExpected)
-  expectEqual(resultGotFloat, resultExpected)
+  let expectedResult = (Optional<Float>.TangentVector(0), Float(6))
+  expectEqual(lazyResult, expectedResult)
+  expectEqual(nonLazyResult, expectedResult)
+}
+
+NilCoalescingTests.test("Double") {
+  @differentiable(reverse)
+  func lazy(_ x: Double?, _ y: Double) -> Double {
+    return x ?? y * y * y
+  }
+
+  @differentiable(reverse)
+  func nonLazy(_ x: Double?, _ y: Double) -> Double {
+    return nilCoalescingNonLazy(x, y * y * y)
+  }
+
+  let pbLazy = pullback(at: Double?(nil), Double(4), of: lazy)
+  let lazyResult = pbLazy(Double(1))
+
+  let pbNonLazy = pullback(at: Double?(nil), Double(4), of: nonLazy)
+  let nonLazyResult = pbNonLazy(Double(1))
+
+  let expectedResult = (Optional<Double>.TangentVector(0), Double(48))
+  expectEqual(lazyResult, expectedResult)
+  expectEqual(nonLazyResult, expectedResult)
 }
 
 runAllTests()

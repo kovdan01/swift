@@ -25,24 +25,6 @@ func errorInoutAlias(ff: F) -> Float {
   return y
 }
 
-@differentiable(reverse)
-func ok1(ff: F) -> Float {
-  let y = ff.i?.first { $0 >= 0.0 } ?? 0.0
-  if 0.0 < y {
-    return ff.g() ?? y
-  }
-  return y
-}
-
-@differentiable(reverse)
-func ok2(ff: F) -> Float {
-  var y = ff.i?.first { $0 >= 0.0 } ?? 0.0
-  while 0.0 < y {
-    y = ff.g() ?? 42
-  }
-  return y
-}
-
 public struct F: Differentiable {
   @noDerivative var i: [Float]? {return nil}
   func g() -> Float? {return nil}
