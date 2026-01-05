@@ -1015,11 +1015,11 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
   // Compute the derivative function parameters.
   SmallVector<SILParameterInfo, 4> newParameters;
   newParameters.reserve(constrainedOriginalFnTy->getNumParameters());
-  for (const auto &param : constrainedOriginalFnTy->getParameters()) {
+  for (const auto &[index, param] : llvm::enumerate(constrainedOriginalFnTy->getParameters())) {
     // MYTODO: proper handling of closures
     CanType paramInterfaceType = param.getInterfaceType();
 
-    if (!paramInterfaceType->is<SILFunctionType>()) {
+    if (!paramInterfaceType->is<SILFunctionType>() || !parameterIndices->contains(index)) {
       newParameters.push_back(param);
       continue;
     }

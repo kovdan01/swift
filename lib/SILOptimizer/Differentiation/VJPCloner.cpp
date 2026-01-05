@@ -824,10 +824,12 @@ public:
       auto &nestedApplyInfo = insertion.first->getSecond();
       nestedApplyInfo = info;
 
+      auto origCallee = getOpValue(ai->getCallee());
       llvm::SmallVector<SILValue, 8> vjpArgs;
+
       for (auto origArg : ai->getArguments())
         vjpArgs.push_back(getOpValue(origArg));
-      auto origCallee = getOpValue(ai->getCallee());
+
       auto *vjpCall =
           getBuilder().createApply(ai->getLoc(), origCallee, SubstitutionMap(),
                                    vjpArgs, ai->getApplyOptions());

@@ -5058,13 +5058,12 @@ AnyFunctionType::getAutoDiffDerivativeFunctionLinearMapType(
       auto paramType = diffParam.getPlainType();
       auto paramTan = paramType->getAutoDiffTangentSpace(lookupConformance);
       // Error if parameter has no tangent space.
-      if (!paramTan) {
+      if (!paramTan)
         return llvm::make_error<DerivativeFunctionTypeError>(
             this,
             DerivativeFunctionTypeError::Kind::
                 NonDifferentiableDifferentiabilityParameter,
             DerivativeFunctionTypeError::TypeAndIndex(paramType, i));
-      }
 
       differentialParams.push_back(AnyFunctionType::Param(
           paramTan->getType(), Identifier(), diffParam.getParameterFlags()));
@@ -5107,13 +5106,12 @@ AnyFunctionType::getAutoDiffDerivativeFunctionLinearMapType(
       auto paramType = diffParam.getPlainType();
       auto paramTan = paramType->getAutoDiffTangentSpace(lookupConformance);
       // Error if parameter has no tangent space.
-      if (!paramTan) {
+      if (!paramTan)
         return llvm::make_error<DerivativeFunctionTypeError>(
             this,
             DerivativeFunctionTypeError::Kind::
                 NonDifferentiableDifferentiabilityParameter,
             DerivativeFunctionTypeError::TypeAndIndex(paramType, i));
-      }
 
       if (diffParam.isAutoDiffSemanticResult()) {
         if (paramType->isVoid())
