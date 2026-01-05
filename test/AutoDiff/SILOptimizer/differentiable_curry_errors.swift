@@ -29,3 +29,12 @@ public struct F: Differentiable {
   @noDerivative var i: [Float]? {return nil}
   func g() -> Float? {return nil}
 }
+
+// TODO: support closures capturing multiple arguments
+// expected-error @+1 {{function is not differentiable}}
+@differentiable(reverse)
+// expected-note @+1 {{when differentiating this function definition}}
+func errorManyArgs(_ x: Float?, _ a: Float, _ b: Float) -> Float {
+  // expected-note @+1 {{expression is not differentiable}}
+  return x ?? a + b
+}
