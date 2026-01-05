@@ -1089,6 +1089,7 @@ SILGenFunction::emitClosureValue(SILLocation loc, SILDeclRef constant,
 
   // Generalize if necessary.
   if (result.getType().getASTType() != typeContext.ExpectedLoweredType) {
+    llvm::errs() << "emitClosureValue: emitTransformedValue: " << typeContext.ExpectedLoweredType << '\n';
     result = emitTransformedValue(loc, result,
                                   AbstractionPattern(subs, constantInfo.LoweredType),
                                   typeContext.FormalType,

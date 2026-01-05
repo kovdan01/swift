@@ -5954,8 +5954,8 @@ SpecializeAttrTargetDeclRequest::evaluate(Evaluator &evaluator,
   }
 
   return nullptr;
-
 }
+
 /// Returns true if the given type conforms to `Differentiable` in the given
 /// context. If `tangentVectorEqualsSelf` is true, also check whether the given
 /// type satisfies `TangentVector == Self`.
