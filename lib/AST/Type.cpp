@@ -4811,6 +4811,65 @@ Type AnyFunctionType::getEffectiveThrownErrorTypeOrNever() const {
   return getASTContext().getNeverType();
 }
 
+static CanType getResultTypeForSupportedDifferentiableClosure(TypeBase *type) {
+  if (auto *silFunctionType = type->getAs<SILFunctionType>()) {
+    if (silFunctionType->isSupportedAsDifferentiableClosure()) {
+      // CanType resultType = silFunctionType->getSingleResult().getInterfaceType();
+      // if (resultType->hasTypeParameter())
+      //   resultType = resultType->getReducedType(silFunctionType->getSubstGenericSignature());
+      // return resultType;
+
+      //return interfaceType->getReducedType(silFunctionType->getSubstGenericSignature());
+
+      llvm::errs() << "getResultTypeForSupportedDifferentiableClosure 00 ";
+      silFunctionType->print(llvm::errs());
+
+      CanType resultType = silFunctionType->getSingleResult().getInterfaceType();
+      llvm::errs() << "\ngetResultTypeForSupportedDifferentiableClosure 01 " << resultType << '\n';
+
+      if (resultType->hasTypeParameter()) {
+        llvm::errs() << "getResultTypeForSupportedDifferentiableClosure 02 hasTypeParameter!\n";
+        assert(silFunctionType->hasPatternSubstitutions());
+        auto subst = silFunctionType->getPatternSubstitutions();
+        resultType = subst.getReplacementTypes().front()->getCanonicalType();
+        llvm::errs() << "\ngetResultTypeForSupportedDifferentiableClosure 03 " << subst << '\n';
+        llvm::errs() << "\ngetResultTypeForSupportedDifferentiableClosure 04 " << resultType << '\n';
+
+
+        //        // for (unsigned i : indices(subst.getReplacementTypes())) {
+        //        //   auto origType =
+        //        //     origSubs.getReplacementTypes()[i]->getReducedType(sig);
+        //        //   auto substType =
+        //        //     substSubs.getReplacementTypes()[i]->getReducedType(sig);
+        //        // }
+
+
+        // llvm::errs() << "before isDifferentiable\n";
+        // //bool flag = resultType->isDifferentiable(getSubstGenericSignature(), /*tangentVectorEqualsSelf=*/true);
+        // bool flag = resultType->isDifferentiable(/*tangentVectorEqualsSelf=*/true);
+        // llvm::errs() << "SILFunctionType::isSupportedAsDifferentiableClosure() = " << (int)flag << '\n';
+        // this->print(llvm::errs());
+        // llvm::errs() << "\nresultType = ";
+        // resultType->print(llvm::errs());
+        // llvm::errs() << "\n\n";
+        // return flag;//resultType->isDifferentiable(getSubstGenericSignature(), /*tangentVectorEqualsSelf=*/true);
+      }
+      return resultType;
+      //return silFunctionType->getSingleResult().getInterfaceType();
+    }
+  }
+
+  // if (auto *anyFunctionType = type->getAs<AnyFunctionType>()) {
+  //   if (anyFunctionType->isSupportedAsDifferentiableClosure()) {
+  //     // CanType interfaceType = anyFunctionType->getResult()->getCanonicalType();
+  //     // return interfaceType->getReducedType(anyFunctionType->getSubstGenericSignature());
+  //     return anyFunctionType->getResult()->getCanonicalType();
+  //   }
+  // }
+
+  return CanType{};
+}
+
 std::optional<TangentSpace>
 TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
   assert(lookupConformance);
@@ -4861,6 +4920,31 @@ TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
   auto assocTy = conformance.getTypeWitness(assocDecl);
   if (!assocTy->hasError())
     return cache(TangentSpace::getTangentVector(assocTy));
+
+  // Tangent of closure is tangent of captured arguments.
+  // As for now, assume that exactly 1 argument is captured and its type is
+  // equal to the result type.
+  // TODO: handle arbitrary captured arg types and result types.
+  if (auto resultType = getResultTypeForSupportedDifferentiableClosure(this)) {
+    auto capturedArgsType = resultType;
+    auto tangentOfCapturedArgs =
+        capturedArgsType->getAutoDiffTangentSpace(lookupConformance)->getType();
+    return cache(TangentSpace::getTangentVector(tangentOfCapturedArgs));
+  } else {
+    llvm::errs() << "not a differentiable closure: ";
+    this->print(llvm::errs());
+    llvm::errs() << '\n';
+    if (auto *silFunctionType = this->getAs<SILFunctionType>()) {
+      auto sig = silFunctionType->getSubstGenericSignature();
+      if (sig) {
+        llvm::errs() << sig << "\n";
+      } else {
+        llvm::errs() << "NO SIG\n";
+      }
+    } else {
+      llvm::errs() << "NOT A SIL FN\n";
+    }
+  }
 
   // Otherwise, there is no associated tangent space. Return `None`.
   return cache(std::nullopt);

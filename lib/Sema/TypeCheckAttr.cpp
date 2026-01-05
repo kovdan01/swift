@@ -5954,8 +5954,8 @@ SpecializeAttrTargetDeclRequest::evaluate(Evaluator &evaluator,
   }
 
   return nullptr;
-
 }
+
 /// Returns true if the given type conforms to `Differentiable` in the given
 /// context. If `tangentVectorEqualsSelf` is true, also check whether the given
 /// type satisfies `TangentVector == Self`.
@@ -5991,6 +5991,14 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
     if (i >= allParamTypes.size())
       return false;
     auto paramType = allParamTypes[i];
+    // if (const auto *anyFunctionType = paramType->getAs<AnyFunctionType>()) {
+    //   if (!anyFunctionType->isSupportedAsDifferentiableClosure())
+    //     return false;
+    //   // Right now we assume that for differentiable closures we capture exactly
+    //   // one argument and its type is equal to the result type.
+    //   // TODO: handle arbitrary captured arg types and result types.
+    //   paramType = anyFunctionType->getResult();
+    // }
     if (derivativeGenEnv)
       paramType = derivativeGenEnv->mapTypeIntoEnvironment(paramType);
     else

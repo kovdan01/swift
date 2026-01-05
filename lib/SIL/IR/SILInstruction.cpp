@@ -2001,6 +2001,90 @@ PartialApplyInst::visitOnStackLifetimeEnds(
   return !noUsers;
 }
 
+bool PartialApplyInst::isSupportedAsDifferentiableClosure() const {
+  // Right now, we only support closures capturing exactly one argument with the
+  // type equal to the result type. No other arguments except the captured one
+  // are supported.
+  // TODO: support arbitrary captured and non-captured arguments types.
+
+  llvm::errs() << "PartialApplyInst::isSupportedAsDifferentiableClosure() = ";
+  this->print(llvm::errs());
+  llvm::errs() << "\ncallee = ";
+  this->getCallee()->print(llvm::errs());
+  llvm::errs() << '\n';
+
+  auto origCalleeType = getOrigCalleeType();
+  auto closureType = getType().getAs<SILFunctionType>();
+
+  llvm::errs() << "origCalleeType = " << origCalleeType << '\n';
+
+  if (!closureType->isSupportedAsDifferentiableClosure()) {
+    llvm::errs() << "PartialApplyInst::isSupportedAsDifferentiableClosure() false 00\n";
+    return false;
+  }
+  if (origCalleeType->getNumParameters() != 1) {
+    llvm::errs() << "PartialApplyInst::isSupportedAsDifferentiableClosure() false 01\n";
+    return false;
+  }
+  if (!origCalleeType->getIndirectMutatingParameters().empty()) {
+    llvm::errs() << "PartialApplyInst: !origCalleeType->getIndirectMutatingParameters().empty() ";
+    this->print(llvm::errs());
+    llvm::errs() << '\n';
+    return false;
+  }
+
+  llvm::errs() << "closureType = " << closureType << '\n';
+  llvm::errs() << "origCalleeType->getParameters()[0].getInterfaceType() = " << origCalleeType->getParameters()[0].getInterfaceType() << '\n';
+  llvm::errs() << "closureType->getSingleResult().getInterfaceType() = " << closureType->getSingleResult().getInterfaceType() << '\n';
+  llvm::errs() << "getArguments()[0]->getType().getASTType() = " << getArguments()[0]->getType().getASTType() << '\n';
+
+  CanType paramType = origCalleeType->getParameters()[0].getInterfaceType();
+  llvm::errs() << "XXXXXXX 10 " << paramType << "\n";
+  CanType resultType = closureType->getSingleResult().getInterfaceType();
+  llvm::errs() << "XXXXXXX 11 " << resultType << "\n";
+  if (SubstitutionMap subst = this->getSubstitutionMap()) {//origCalleeType->getPatternSubstitutions()) {
+    llvm::errs() << "has subst! " << subst << '\n';
+    if (paramType->hasTypeParameter()) {
+      llvm::errs() << "subst for param!\n";
+      paramType = subst.getReplacementTypes().front()->getCanonicalType();
+    } else {
+      llvm::errs() << "subst for result!\n";
+      assert(resultType->hasTypeParameter());
+      resultType = subst.getReplacementTypes().front()->getCanonicalType();
+    }
+  }
+
+  llvm::errs() << "paramType = " << paramType << '\n';
+  llvm::errs() << "resultType = " << resultType << '\n';
+
+
+  // TODO: re-enable and proper check with subst
+  // if (origCalleeType->getParameters()[0].getInterfaceType() !=
+  //     closureType->getSingleResult().getInterfaceType()) {
+  //   llvm::errs() << "PartialApplyInst::isSupportedAsDifferentiableClosure() false 02\n";
+  //   return false;
+  // }
+
+
+
+  // // TODO: support non-empty substitution map
+  // if (getSubstitutionMap())
+  //   return false;
+
+  assert(getArgumentOperands().size() == 1);
+
+  llvm::errs() << "argType = " << getArguments()[0]->getType().getASTType() << '\n';
+
+  // MYTODO re-enable assert, but orig callee type needs to be substituted
+  // assert(getArguments()[0]->getType().getASTType() ==
+  //        origCalleeType->getParameters()[0].getInterfaceType());
+  //        //closureType->getSingleResult().getInterfaceType());
+
+  llvm::errs() << "PartialApplyInst::isSupportedAsDifferentiableClosure() true 00\n";
+
+  return true;
+}
+
 namespace swift::test {
 FunctionTest PartialApplyPrintOnStackLifetimeEnds(
     "partial_apply_print_on_stack_lifetime_ends",

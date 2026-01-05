@@ -1008,3 +1008,50 @@ bool TypeBase::isBitwiseCopyable(GenericSignature sig) {
   }
   return contextTy->isBitwiseCopyable();
 }
+
+// bool TypeBase::isDifferentiable(bool tangentVectorEqualsSelf) {
+//   auto &ctx = getASTContext();
+//   auto *differentiableProtocol =
+//       ctx.getProtocol(KnownProtocolKind::Differentiable);
+//   if (!differentiableProtocol) {
+//     llvm::errs() << "TypeBase::isDifferentiable: false 1\n";
+//     return false;
+//   }
+//   auto conf = checkConformance(this, differentiableProtocol);
+//   if (conf.isInvalid()) {
+//     llvm::errs() << "TypeBase::isDifferentiable: false 2\n";
+//     return false;
+//   }
+//   if (!tangentVectorEqualsSelf) {
+//     llvm::errs() << "TypeBase::isDifferentiable: false 3\n";
+//     return true;
+//   }
+//   auto tanType = conf.getTypeWitnessByName(ctx.Id_TangentVector);
+//   llvm::errs() << "TypeBase::isDifferentiable: return 4\n";
+//   return this->isEqual(tanType);
+// }
+
+// bool TypeBase::isDifferentiable(GenericSignature sig, bool tangentVectorEqualsSelf) {
+//   Type contextTy = this;
+//   if (sig) {
+//     llvm::errs() << "TypeBase::isDifferentiable(sig): ";
+//     sig.print(llvm::errs());
+//     llvm::errs() << "\nTypeBase::isDifferentiable(sig): ";
+//     contextTy.print(llvm::errs());
+//     //contextTy = sig.getGenericEnvironment()->mapTypeIntoEnvironment(contextTy);
+//     //CanType reducedType = sig.getReducedType(contextTy);
+//     contextTy = sig->getConcreteType(contextTy);
+//     llvm::errs() << "\nTypeBase::isDifferentiable(sig): ";
+//     if (contextTy) {
+//       contextTy.print(llvm::errs());
+//     } else {
+//       llvm::errs() << "NULL";
+//       contextTy = this;
+//       contextTy = sig.getGenericEnvironment()->mapTypeIntoEnvironment(contextTy);
+//     }
+//     //reducedType.print(llvm::errs());
+//     llvm::errs() << '\n';
+//     //return reducedType->isDifferentiable(tangentVectorEqualsSelf);
+//   }
+//   return contextTy->isDifferentiable(tangentVectorEqualsSelf);
+// }
