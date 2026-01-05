@@ -149,6 +149,24 @@ CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
                               getWitnessMethodConformanceOrInvalid());
 }
 
+// MYTODO: comment
+bool SILFunctionType::isSupportedAsDifferentiableClosure() const {
+  if (getNumParameters() != 0)
+    return false;
+  if (getNumResults() != 1)
+    return false;
+  if (hasIndirectFormalResults())
+    return false;
+  // MYTODO: value category object
+  if (getSingleResult().getInterfaceType() !=
+      getASTContext().getFloatType()->getCanonicalType())
+    return false;
+  if (getSubstGenericSignature())
+    return false;
+
+  return true;
+}
+
 CanType SILParameterInfo::getArgumentType(SILFunction *fn) const {
   return getArgumentType(fn->getModule(), fn->getLoweredFunctionType(),
                          fn->getTypeExpansionContext());
@@ -954,21 +972,6 @@ static SILFunctionType *getConstrainedAutoDiffOriginalFunctionType(
       original->getWitnessMethodConformanceOrInvalid());
 }
 
-static bool isApplySiteOfDifferentiableClosure(SILFunctionType *silFunctionType,
-                                               ASTContext &ctx) {
-  if (silFunctionType->getNumParameters() != 0)
-    return false;
-  if (silFunctionType->getNumResults() != 1)
-    return false;
-  if (silFunctionType->hasIndirectFormalResults())
-    return false;
-  if (silFunctionType->getSingleResult().getInterfaceType() !=
-      ctx.getFloatType()->getCanonicalType())
-    return false;
-
-  return true;
-}
-
 CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
     IndexSubset *parameterIndices, IndexSubset *resultIndices,
     AutoDiffDerivativeFunctionKind kind, TypeConverter &TC,
@@ -1025,26 +1028,27 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
     CanType interfaceType = param.getInterfaceType();
 
     if (auto *silFunctionType = interfaceType->getAs<SILFunctionType>()) {
-      if (isApplySiteOfDifferentiableClosure(silFunctionType, ctx)) {
-        CanType canFloatType = ctx.getFloatType()->getCanonicalType();
-        SmallVector<SILParameterInfo, 1> singleFloatParam;
-        singleFloatParam.emplace_back(canFloatType,
-                                      ParameterConvention::Direct_Unowned);
-        SmallVector<SILResultInfo, 1> singleFloatResult;
-        singleFloatResult.emplace_back(canFloatType, ResultConvention::Unowned);
+      if (silFunctionType->isSupportedAsDifferentiableClosure()) {
+        // MYTODO: param and result equal
+        auto singleResultType =
+            silFunctionType->getSingleResult().getInterfaceType();
+        auto singleParamType = singleResultType;
+        SmallVector<SILParameterInfo, 1> singleParam;
+        singleParam.emplace_back(singleParamType,
+                                 ParameterConvention::Direct_Unowned);
+        SmallVector<SILResultInfo, 1> singleResult;
+        singleResult.emplace_back(singleResultType, ResultConvention::Unowned);
 
         CanSILFunctionType pullbackType = SILFunctionType::get(
             silFunctionType->getInvocationGenericSignature(), ExtInfo(),
             SILCoroutineKind::None, silFunctionType->getCalleeConvention(),
-            singleFloatParam, {}, singleFloatResult, std::nullopt,
+            singleParam, {}, singleResult, std::nullopt,
             silFunctionType->getPatternSubstitutions(),
             /*invocationSubstitutions*/ SubstitutionMap(),
             silFunctionType->getASTContext());
 
         SmallVector<SILResultInfo, 2> vjpResults;
-        vjpResults.reserve(silFunctionType->getNumResults() + 1);
-        for (auto &result : silFunctionType->getResults())
-          vjpResults.push_back(result);
+        vjpResults.emplace_back(silFunctionType->getSingleResult());
         vjpResults.emplace_back(pullbackType, ResultConvention::Owned);
 
         CanSILFunctionType vjpType = SILFunctionType::get(

@@ -989,23 +989,11 @@ public:
 
   // MYTODO: proper handling of closures
   void visitPartialApplyInst(PartialApplyInst *pai) {
-    auto origCalleeType = pai->getOrigCalleeType();
-    auto a = getASTContext().getFloatType();
-    if (!(origCalleeType->getNumParameters() == 1 &&
-          origCalleeType->getParameters()[0].getInterfaceType() ==
-              a->getCanonicalType() &&
-          origCalleeType->getIndirectMutatingParameters().empty() &&
-          origCalleeType->getNumResults() == 1 &&
-          origCalleeType->getSingleResult().getInterfaceType() ==
-              a->getCanonicalType() &&
-          pai->getArguments().size() == 1 &&
-          pai->getArguments()[0]->getType().getASTType() ==
-              a->getCanonicalType())) {
+    if (!pai->isSupportedAsDifferentiableClosure()) {
       SILInstructionVisitor::visitPartialApplyInst(pai);
       return;
     }
 
-    assert(pai->getArgumentOperands().size() == 1);
     auto *bb = pai->getParent();
     const Operand &op = pai->getArgumentOperands().front();
     SILValue val = op.get();
@@ -1046,7 +1034,10 @@ public:
     // differentiated.
     if (applyInfoLookup == nestedApplyInfo.end()) {
       // MYTODO proper closure handling
-      if (ai->getNumArguments() == 0) {
+      if (ai->getCallee()
+              ->getType()
+              .getAs<SILFunctionType>()
+              ->isSupportedAsDifferentiableClosure()) {
         visitValueOwnershipInst(ai);
         return;
       }
@@ -1194,8 +1185,9 @@ public:
     collectAllActualResultsInTypeOrder(fai, origDirectResults, origAllResults);
 
     // MYTODO: proper closure handling
-    if (!fai.getArguments().empty()) {
-      // Append semantic result arguments after original results.
+    if (!isApplySiteOfDifferentiableClosure(fai)) {
+      // if (!fai.getArguments().empty()) {
+      //  Append semantic result arguments after original results.
       for (auto paramIdx : applyInfo.config.parameterIndices->getIndices()) {
         unsigned argIdx = fai.getNumIndirectSILResults() +
                           fai.getNumIndirectSILErrorResults() + paramIdx;
@@ -1310,7 +1302,7 @@ public:
                         fai.getNumIndirectSILErrorResults() + i;
 
       // MYTODO: proper closure handling
-      if (fai.getArguments().empty()) {
+      if (isApplySiteOfDifferentiableClosure(fai)) {
         auto origArg = fai.getCallee();
         auto tan = *allResultsIt++;
         assert(!tan->getType().isAddress());

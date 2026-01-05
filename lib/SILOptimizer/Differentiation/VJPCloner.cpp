@@ -752,28 +752,12 @@ public:
 
   // MYTODO: proper handling of closures
   void visitPartialApplyInst(PartialApplyInst *pai) {
-    auto origCalleeType = pai->getOrigCalleeType();
-    auto a = getASTContext().getFloatType();
-    if (!(origCalleeType->getNumParameters() == 1 &&
-          origCalleeType->getParameters()[0].getInterfaceType() ==
-              a->getCanonicalType() &&
-          origCalleeType->getIndirectMutatingParameters().empty() &&
-          origCalleeType->getNumResults() == 1 &&
-          origCalleeType->getSingleResult().getInterfaceType() ==
-              a->getCanonicalType() &&
-          pai->getArguments().size() == 1 &&
-          pai->getArguments()[0]->getType().getASTType() ==
-              a->getCanonicalType())) {
-
+    if (!pai->isSupportedAsDifferentiableClosure()) {
       TypeSubstCloner::visitPartialApplyInst(pai);
       return;
     }
 
     auto origCallee = getOpValue(pai->getCallee());
-
-    // MYTODO: support non-empty
-    assert(pai->getSubstitutionMap().empty());
-
     auto loc = pai->getLoc();
 
     // MYTODO: index subset

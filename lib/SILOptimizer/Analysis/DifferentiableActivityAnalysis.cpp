@@ -335,6 +335,14 @@ void DifferentiableActivityInfo::setUsefulAndPropagateToOperands(
   propagateUseful(inst, dependentVariableIndex);
 }
 
+// static bool isApplySiteOfDifferentiableClosure(FullApplySite applySite) {
+//   if (applySite.getKind() != FullApplySiteKind::ApplyInst)
+//     return false;
+//   auto callee = cast<ApplyInst>(applySite.getInstruction())->getCallee();
+//   auto silFunctionType = callee->getType().getAs<SILFunctionType>();
+//   return silFunctionType->isSupportedAsDifferentiableClosure();
+// }
+
 void DifferentiableActivityInfo::propagateUseful(
     SILInstruction *inst, unsigned dependentVariableIndex) {
   // Propagate usefulness for the given instruction: mark operands as useful and
@@ -364,9 +372,8 @@ void DifferentiableActivityInfo::propagateUseful(
       setUsefulAndPropagateToOperands(arg, i);
 
     // MYTODO: proper handling of closures
-    if (applySite.getArguments().size() == 0) {
+    if (isApplySiteOfDifferentiableClosure(applySite))
       setUsefulAndPropagateToOperands(applySite.getCallee(), i);
-    }
   }
   // Handle store-like instructions:
   //   `store`, `store_borrow`, `copy_addr`, `unconditional_checked_cast`

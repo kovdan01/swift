@@ -4763,21 +4763,6 @@ Type AnyFunctionType::getEffectiveThrownErrorTypeOrNever() const {
   return getASTContext().getNeverType();
 }
 
-static bool isApplySiteOfDifferentiableClosure(SILFunctionType *silFunctionType,
-                                               ASTContext &ctx) {
-  if (silFunctionType->getNumParameters() != 0)
-    return false;
-  if (silFunctionType->getNumResults() != 1)
-    return false;
-  if (silFunctionType->hasIndirectFormalResults())
-    return false;
-  if (silFunctionType->getSingleResult().getInterfaceType() !=
-      ctx.getFloatType()->getCanonicalType())
-    return false;
-
-  return true;
-}
-
 std::optional<TangentSpace>
 TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
   assert(lookupConformance);
@@ -4831,15 +4816,18 @@ TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
 
   // MYTODO: proper handling for closures
   if (auto *silFunctionType = getAs<SILFunctionType>()) {
-    if (!isApplySiteOfDifferentiableClosure(silFunctionType, ctx))
+    if (!silFunctionType->isSupportedAsDifferentiableClosure())
       return std::nullopt;
 
-    auto a = ctx.getFloatType();
-    auto b = a->getAutoDiffTangentSpace(lookupConformance);
-    auto c = b->getType();
-    auto d = TangentSpace::getTangentVector(c);
-    auto e = cache(d);
-    return e;
+    // Tangent of closure is tangent of captured arguments.
+    // As for now, assume that we capture exactly 1 argument and its type is
+    // equal to the result type.
+    auto singleResultType =
+        silFunctionType->getSingleResult().getInterfaceType();
+    auto capturedArgsType = singleResultType;
+    auto tangentOfCapturedArgs =
+        capturedArgsType->getAutoDiffTangentSpace(lookupConformance)->getType();
+    return cache(TangentSpace::getTangentVector(tangentOfCapturedArgs));
   }
 
   // Otherwise, there is no associated tangent space. Return `None`.

@@ -6001,10 +6001,7 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
     // MYTODO: proper handling of closures
     if (param.isAutoClosure())
       autoclosureIndexes.emplace_back(allParamTypes.size());
-    //   allParamTypes.push_back(param.getPlainType()->getAs<AnyFunctionType>()->getResult());
-    // } else {
     allParamTypes.push_back(param.getPlainType());
-    //    }
   }
 
   // Set differentiability parameters.
