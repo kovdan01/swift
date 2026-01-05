@@ -814,7 +814,7 @@ public:
     }
 
     // MYTODO: proper handling of closures
-    if (ai->getNumArguments() == 0) {
+    if (ai->getCallee()->getType().getAs<SILFunctionType>()->isSupportedAsDifferentiableClosure()) {
       // MYTODO: proper indexes
       AutoDiffConfig config(IndexSubset::get(getASTContext(), 1, {0}),
                             IndexSubset::get(getASTContext(), 1, {0}));
