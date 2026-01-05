@@ -5940,17 +5940,6 @@ static bool conformsToDifferentiable(Type type,
   return type->isEqual(tanType);
 }
 
-static bool isApplySiteOfDifferentiableClosure(AnyFunctionType *anyFunctionType,
-                                               ASTContext &ctx) {
-  if (anyFunctionType->getNumParams() != 0)
-    return false;
-  if (anyFunctionType->getResult()->getCanonicalType() !=
-      ctx.getFloatType()->getCanonicalType())
-    return false;
-
-  return true;
-}
-
 IndexSubset *TypeChecker::inferDifferentiabilityParameters(
     AbstractFunctionDecl *AFD, GenericEnvironment *derivativeGenEnv) {
   auto *module = AFD->getParentModule();
@@ -5963,7 +5952,6 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
   }
   llvm::SmallBitVector parameterBits(numUncurriedParams);
   SmallVector<Type, 4> allParamTypes;
-  SmallVector<size_t, 1> autoclosureIndexes;
 
   // Returns true if the i-th parameter type is differentiable.
   auto isDifferentiableParam = [&](unsigned i) -> bool {
@@ -5971,11 +5959,10 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
       return false;
     auto paramType = allParamTypes[i];
     // MYTODO: proper handling of closures
-    if (llvm::find(autoclosureIndexes, i) != autoclosureIndexes.end()) {
-      auto *anyFunctionType = paramType->getAs<AnyFunctionType>();
-      assert(anyFunctionType != nullptr);
-      if (!isApplySiteOfDifferentiableClosure(anyFunctionType, ctx))
+    if (const auto *anyFunctionType = paramType->getAs<AnyFunctionType>()) {
+      if (!anyFunctionType->isSupportedAsDifferentiableClosure())
         return false;
+      // MYTODO: comment
       paramType = anyFunctionType->getResult();
     }
     if (derivativeGenEnv)
@@ -5997,12 +5984,8 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
   if (auto resultFnType = functionType->getResult()->getAs<AnyFunctionType>())
     for (auto &param : resultFnType->getParams())
       allParamTypes.push_back(param.getPlainType());
-  for (auto &param : functionType->getParams()) {
-    // MYTODO: proper handling of closures
-    if (param.isAutoClosure())
-      autoclosureIndexes.emplace_back(allParamTypes.size());
+  for (auto &param : functionType->getParams())
     allParamTypes.push_back(param.getPlainType());
-  }
 
   // Set differentiability parameters.
   for (unsigned i : range(parameterBits.size()))

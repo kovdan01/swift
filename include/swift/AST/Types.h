@@ -3971,6 +3971,8 @@ public:
     return containsPackExpansionType(getParams());
   }
 
+  bool isSupportedAsDifferentiableClosure() const;
+
   static bool containsPackExpansionType(ArrayRef<Param> params);
 
   static void printParams(ArrayRef<Param> Params, raw_ostream &OS,

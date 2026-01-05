@@ -4763,6 +4763,18 @@ Type AnyFunctionType::getEffectiveThrownErrorTypeOrNever() const {
   return getASTContext().getNeverType();
 }
 
+static CanType getResultTypeForSupportedDifferentiableClosure(TypeBase *type) {
+  if (auto *silFunctionType = type->getAs<SILFunctionType>())
+    if (silFunctionType->isSupportedAsDifferentiableClosure())
+      return silFunctionType->getSingleResult().getInterfaceType();
+
+  if (auto *anyFunctionType = type->getAs<AnyFunctionType>())
+    if (anyFunctionType->isSupportedAsDifferentiableClosure())
+      return anyFunctionType->getResult()->getCanonicalType();
+
+  return CanType{};
+}
+
 std::optional<TangentSpace>
 TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
   assert(lookupConformance);
@@ -4815,16 +4827,11 @@ TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
     return cache(TangentSpace::getTangentVector(assocTy));
 
   // MYTODO: proper handling for closures
-  if (auto *silFunctionType = getAs<SILFunctionType>()) {
-    if (!silFunctionType->isSupportedAsDifferentiableClosure())
-      return std::nullopt;
-
+  if (auto resultType = getResultTypeForSupportedDifferentiableClosure(this)) {
     // Tangent of closure is tangent of captured arguments.
     // As for now, assume that we capture exactly 1 argument and its type is
     // equal to the result type.
-    auto singleResultType =
-        silFunctionType->getSingleResult().getInterfaceType();
-    auto capturedArgsType = singleResultType;
+    auto capturedArgsType = resultType;
     auto tangentOfCapturedArgs =
         capturedArgsType->getAutoDiffTangentSpace(lookupConformance)->getType();
     return cache(TangentSpace::getTangentVector(tangentOfCapturedArgs));
@@ -5049,18 +5056,15 @@ AnyFunctionType::getAutoDiffDerivativeFunctionLinearMapType(
     for (auto i : range(diffParams.size())) {
       auto diffParam = diffParams[i];
       auto paramType = diffParam.getPlainType();
-      // // MYTODO: proper closure handling
-      // if (diffParam.isAutoClosure()) {
-      //   paramType = paramType->getAs<AnyFunctionType>()->getResult();
-      // }
       auto paramTan = paramType->getAutoDiffTangentSpace(lookupConformance);
       // Error if parameter has no tangent space.
-      if (!paramTan)
+      if (!paramTan) {
         return llvm::make_error<DerivativeFunctionTypeError>(
             this,
             DerivativeFunctionTypeError::Kind::
                 NonDifferentiableDifferentiabilityParameter,
             DerivativeFunctionTypeError::TypeAndIndex(paramType, i));
+      }
 
       differentialParams.push_back(AnyFunctionType::Param(
           paramTan->getType(), Identifier(), diffParam.getParameterFlags()));
@@ -5103,12 +5107,13 @@ AnyFunctionType::getAutoDiffDerivativeFunctionLinearMapType(
       auto paramType = diffParam.getPlainType();
       auto paramTan = paramType->getAutoDiffTangentSpace(lookupConformance);
       // Error if parameter has no tangent space.
-      if (!paramTan)
+      if (!paramTan) {
         return llvm::make_error<DerivativeFunctionTypeError>(
             this,
             DerivativeFunctionTypeError::Kind::
                 NonDifferentiableDifferentiabilityParameter,
             DerivativeFunctionTypeError::TypeAndIndex(paramType, i));
+      }
 
       if (diffParam.isAutoDiffSemanticResult()) {
         if (paramType->isVoid())
