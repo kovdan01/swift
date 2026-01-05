@@ -1033,15 +1033,6 @@ public:
     // If no `NestedApplyInfo` was found, then this task doesn't need to be
     // differentiated.
     if (applyInfoLookup == nestedApplyInfo.end()) {
-      // MYTODO proper closure handling
-      if (ai->getCallee()
-              ->getType()
-              .getAs<SILFunctionType>()
-              ->isSupportedAsDifferentiableClosure()) {
-        visitValueOwnershipInst(ai);
-        return;
-      }
-
       // Must not be active.
       assert(!getActivityInfo().isActive(ai, getConfig()));
       return;
@@ -1186,8 +1177,7 @@ public:
 
     // MYTODO: proper closure handling
     if (!isApplySiteOfDifferentiableClosure(fai)) {
-      // if (!fai.getArguments().empty()) {
-      //  Append semantic result arguments after original results.
+      // Append semantic result arguments after original results.
       for (auto paramIdx : applyInfo.config.parameterIndices->getIndices()) {
         unsigned argIdx = fai.getNumIndirectSILResults() +
                           fai.getNumIndirectSILErrorResults() + paramIdx;
@@ -1308,27 +1298,28 @@ public:
         assert(!tan->getType().isAddress());
         recordTemporary(tan);
         addAdjointValue(bb, origArg, makeConcreteAdjointValue(tan), loc);
+        continue;
+      }
+
+      auto origArg = fai.getArgument(argIdx);
+      // Skip adjoint accumulation for semantic results arguments.
+      auto paramInfo = fai.getSubstCalleeConv().getParamInfoForSILArg(argIdx);
+      if (paramInfo.isAutoDiffSemanticResult())
+        continue;
+      auto tan = *allResultsIt++;
+      if (tan->getType().isAddress()) {
+        addToAdjointBuffer(bb, origArg, tan, loc);
       } else {
-        auto origArg = fai.getArgument(argIdx);
-        // Skip adjoint accumulation for semantic results arguments.
-        auto paramInfo = fai.getSubstCalleeConv().getParamInfoForSILArg(argIdx);
-        if (paramInfo.isAutoDiffSemanticResult())
-          continue;
-        auto tan = *allResultsIt++;
-        if (tan->getType().isAddress()) {
-          addToAdjointBuffer(bb, origArg, tan, loc);
+        if (origArg->getType().isAddress()) {
+          auto *tmpBuf = builder.createAllocStack(loc, tan->getType());
+          builder.emitStoreValueOperation(loc, tan, tmpBuf,
+                                          StoreOwnershipQualifier::Init);
+          addToAdjointBuffer(bb, origArg, tmpBuf, loc);
+          builder.emitDestroyAddrAndFold(loc, tmpBuf);
+          builder.createDeallocStack(loc, tmpBuf);
         } else {
-          if (origArg->getType().isAddress()) {
-            auto *tmpBuf = builder.createAllocStack(loc, tan->getType());
-            builder.emitStoreValueOperation(loc, tan, tmpBuf,
-                                            StoreOwnershipQualifier::Init);
-            addToAdjointBuffer(bb, origArg, tmpBuf, loc);
-            builder.emitDestroyAddrAndFold(loc, tmpBuf);
-            builder.createDeallocStack(loc, tmpBuf);
-          } else {
-            recordTemporary(tan);
-            addAdjointValue(bb, origArg, makeConcreteAdjointValue(tan), loc);
-          }
+          recordTemporary(tan);
+          addAdjointValue(bb, origArg, makeConcreteAdjointValue(tan), loc);
         }
       }
     }

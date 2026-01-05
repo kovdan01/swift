@@ -173,13 +173,6 @@ void LinearMapInfo::populateBranchingTraceDecl(SILBasicBlock *originalBB,
   }
 }
 
-// static bool isApplySiteOfDifferentiableClosure(FullApplySite applySite) {
-//   if (applySite.getKind() != FullApplySiteKind::ApplyInst)
-//     return false;
-//   auto callee = cast<ApplyInst>(applySite.getInstruction())->getCallee();
-//   auto silFunctionType = callee->getType().getAs<SILFunctionType>();
-//   return silFunctionType->isSupportedAsDifferentiableClosure();
-// }
 
 Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
   // MYTODO proper handling of closures
@@ -468,12 +461,10 @@ void LinearMapInfo::generateDifferentiationDataStructures(
 ///    active argument.
 bool LinearMapInfo::shouldDifferentiateApplySite(FullApplySite applySite) {
   // MYTODO: proper handling of closures
-  if (isApplySiteOfDifferentiableClosure(applySite) &&
-      activityInfo
-          .getActivity(cast<ApplyInst>(applySite.getInstruction())->getCallee(),
-                       config)
-          .contains(ActivityFlags::Varied)) {
-    return true;
+  if (isApplySiteOfDifferentiableClosure(applySite)) {
+    auto callee = cast<ApplyInst>(applySite.getInstruction())->getCallee();
+    if (activityInfo.getActivity(callee, config).contains(ActivityFlags::Varied))
+      return true;
   }
 
   // Function applications with an active inout argument should be
