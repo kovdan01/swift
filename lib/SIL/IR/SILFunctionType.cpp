@@ -149,6 +149,29 @@ CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
                               getWitnessMethodConformanceOrInvalid());
 }
 
+bool SILFunctionType::isSupportedAsDifferentiableClosure() const {
+  // Right now, we only support closures capturing exactly one argument with the
+  // type equal to the result type. No other arguments except the captured one
+  // are supported.
+  // TODO: support arbitrary captured and non-captured arguments types.
+  if (getNumParameters() != 0)
+    return false;
+  if (getNumResults() != 1)
+    return false;
+  if (hasIndirectFormalResults())
+    return false;
+  // TODO: support different argument and result types
+  if (getSingleResult().getInterfaceType() !=
+          getASTContext().getFloatType()->getCanonicalType() &&
+      getSingleResult().getInterfaceType() !=
+          getASTContext().getDoubleType()->getCanonicalType())
+    return false;
+  if (getSubstGenericSignature())
+    return false;
+
+  return true;
+}
+
 CanType SILParameterInfo::getArgumentType(SILFunction *fn) const {
   return getArgumentType(fn->getModule(), fn->getLoweredFunctionType(),
                          fn->getTypeExpansionContext());
@@ -997,8 +1020,59 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
   // Compute the derivative function parameters.
   SmallVector<SILParameterInfo, 4> newParameters;
   newParameters.reserve(constrainedOriginalFnTy->getNumParameters());
-  for (auto &param : constrainedOriginalFnTy->getParameters()) {
-    newParameters.push_back(param);
+  for (const auto &[index, param] :
+       llvm::enumerate(constrainedOriginalFnTy->getParameters())) {
+    CanType paramInterfaceType = param.getInterfaceType();
+
+    if (!paramInterfaceType->is<SILFunctionType>() ||
+        !parameterIndices->contains(index)) {
+      newParameters.push_back(param);
+      continue;
+    }
+
+    auto *silFunctionType = paramInterfaceType->getAs<SILFunctionType>();
+    if (!silFunctionType->isSupportedAsDifferentiableClosure()) {
+      newParameters.push_back(param);
+      continue;
+    }
+
+    // Right now, we only support closures capturing exactly one argument with
+    // the type equal to the result type.
+    // TODO: support arbitrary captured argument types and result types.
+    auto singleResultType =
+        silFunctionType->getSingleResult().getInterfaceType();
+    auto singleParamType = singleResultType;
+    SmallVector<SILParameterInfo, 1> singleParam;
+    singleParam.emplace_back(singleParamType,
+                             ParameterConvention::Direct_Unowned);
+    SmallVector<SILResultInfo, 1> singleResult;
+    singleResult.emplace_back(singleResultType, ResultConvention::Unowned);
+
+    // TODO: support non-empty substitution map
+    CanSILFunctionType pullbackType = SILFunctionType::get(
+        silFunctionType->getInvocationGenericSignature(), ExtInfo(),
+        SILCoroutineKind::None, silFunctionType->getCalleeConvention(),
+        singleParam, {}, singleResult, std::nullopt,
+        silFunctionType->getPatternSubstitutions(),
+        /*invocationSubstitutions*/ SubstitutionMap(),
+        silFunctionType->getASTContext());
+
+    SmallVector<SILResultInfo, 2> vjpResults;
+    vjpResults.emplace_back(silFunctionType->getSingleResult());
+    vjpResults.emplace_back(pullbackType, ResultConvention::Owned);
+
+    CanSILFunctionType vjpType = SILFunctionType::get(
+        silFunctionType->getInvocationGenericSignature(),
+        silFunctionType->getExtInfo(), silFunctionType->getCoroutineKind(),
+        silFunctionType->getCalleeConvention(),
+        silFunctionType->getParameters(), silFunctionType->getYields(),
+        vjpResults, silFunctionType->getOptionalErrorResult(),
+        silFunctionType->getPatternSubstitutions(),
+        /*invocationSubstitutions*/ SubstitutionMap(),
+        silFunctionType->getASTContext(),
+        silFunctionType->getWitnessMethodConformanceOrInvalid());
+
+    newParameters.emplace_back(vjpType, param.getConvention());
   }
   // Reabstraction thunks have a function-typed parameter (the function to
   // reabstract) as their last parameter. Reabstraction thunk JVPs/VJPs have a
