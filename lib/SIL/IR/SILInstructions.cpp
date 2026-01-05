@@ -2822,6 +2822,7 @@ ConvertFunctionInst *ConvertFunctionInst::create(
     (void)resTI;
     assert((!F || opTI->isABICompatibleWith(resTI, *F).isCompatible()) &&
            "Can not convert in between ABI incompatible function types");
+
   }
   return CFI;
 }
