@@ -828,6 +828,7 @@ public:
       TypeSubstCloner::visitApplyInst(ai);
       return;
     }
+
     // MYTODO: proper handling of closures
     if (ai->getNumArguments() == 0) {
       // MYTODO: proper indexes
@@ -856,9 +857,6 @@ public:
           joinElements(originalDirectResults, getBuilder(), vjpCall->getLoc());
       SILValue pullback = vjpDirectResults.back();
 
-      // getBuilder().emitDestroyValueOperation(vjpCall->getLoc(), pullback);
-      //  MYTODO: perform actual operations with pullback
-
       mapValue(ai, originalDirectResult);
 
       nestedApplyInfo.pullbackIdx = pullbackValues[ai->getParent()].size();
@@ -866,6 +864,7 @@ public:
 
       return;
     }
+
     // If callee is `array.uninitialized_intrinsic`, do standard cloning.
     // `array.uninitialized_intrinsic` differentiation is handled separately.
     if (ArraySemanticsCall(ai, semantics::ARRAY_UNINITIALIZED_INTRINSIC)) {

@@ -5940,6 +5940,17 @@ static bool conformsToDifferentiable(Type type,
   return type->isEqual(tanType);
 }
 
+static bool isApplySiteOfDifferentiableClosure(AnyFunctionType *anyFunctionType,
+                                               ASTContext &ctx) {
+  if (anyFunctionType->getNumParams() != 0)
+    return false;
+  if (anyFunctionType->getResult()->getCanonicalType() !=
+      ctx.getFloatType()->getCanonicalType())
+    return false;
+
+  return true;
+}
+
 IndexSubset *TypeChecker::inferDifferentiabilityParameters(
     AbstractFunctionDecl *AFD, GenericEnvironment *derivativeGenEnv) {
   auto *module = AFD->getParentModule();
@@ -5963,11 +5974,7 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
     if (llvm::find(autoclosureIndexes, i) != autoclosureIndexes.end()) {
       auto *anyFunctionType = paramType->getAs<AnyFunctionType>();
       assert(anyFunctionType != nullptr);
-      if (anyFunctionType->getNumParams() != 0)
-        return false;
-      auto a = ctx.getFloatType();
-      if (anyFunctionType->getResult()->getCanonicalType() !=
-          a->getCanonicalType())
+      if (!isApplySiteOfDifferentiableClosure(anyFunctionType, ctx))
         return false;
       paramType = anyFunctionType->getResult();
     }

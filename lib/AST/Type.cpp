@@ -4763,6 +4763,21 @@ Type AnyFunctionType::getEffectiveThrownErrorTypeOrNever() const {
   return getASTContext().getNeverType();
 }
 
+static bool isApplySiteOfDifferentiableClosure(SILFunctionType *silFunctionType,
+                                               ASTContext &ctx) {
+  if (silFunctionType->getNumParameters() != 0)
+    return false;
+  if (silFunctionType->getNumResults() != 1)
+    return false;
+  if (silFunctionType->hasIndirectFormalResults())
+    return false;
+  if (silFunctionType->getSingleResult().getInterfaceType() !=
+      ctx.getFloatType()->getCanonicalType())
+    return false;
+
+  return true;
+}
+
 std::optional<TangentSpace>
 TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
   assert(lookupConformance);
@@ -4816,17 +4831,10 @@ TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
 
   // MYTODO: proper handling for closures
   if (auto *silFunctionType = getAs<SILFunctionType>()) {
-    if (silFunctionType->getNumParameters() != 0) {
+    if (!isApplySiteOfDifferentiableClosure(silFunctionType, ctx))
       return std::nullopt;
-    }
-    if (silFunctionType->getNumResults() != 1) {
-      return std::nullopt;
-    }
+
     auto a = ctx.getFloatType();
-    if (silFunctionType->getSingleResult().getInterfaceType() !=
-        a->getCanonicalType()) {
-      return std::nullopt;
-    }
     auto b = a->getAutoDiffTangentSpace(lookupConformance);
     auto c = b->getType();
     auto d = TangentSpace::getTangentVector(c);

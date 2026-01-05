@@ -448,6 +448,33 @@ void LinearMapInfo::generateDifferentiationDataStructures(
   });
 }
 
+static bool isApplySiteOfDifferentiableClosure(SILFunctionType *silFunctionType,
+                                               ASTContext &ctx) {
+  if (silFunctionType->getNumParameters() != 0)
+    return false;
+  if (silFunctionType->getNumResults() != 1)
+    return false;
+  if (silFunctionType->hasIndirectFormalResults())
+    return false;
+  if (silFunctionType->getSingleResult().getInterfaceType() !=
+      ctx.getFloatType()->getCanonicalType())
+    return false;
+
+  return true;
+}
+
+static bool isApplySiteOfDifferentiableClosure(FullApplySite applySite,
+                                               ASTContext &ctx) {
+  if (applySite.getKind() != FullApplySiteKind::ApplyInst)
+    return false;
+  auto *silFunctionType = cast<ApplyInst>(applySite.getInstruction())
+                              ->getCallee()
+                              ->getType()
+                              .getAs<SILFunctionType>()
+                              .getPointer();
+  return isApplySiteOfDifferentiableClosure(silFunctionType, ctx);
+}
+
 /// Returns a flag that indicates whether the `apply` instruction should be
 /// differentiated, given the differentiation indices of the instruction's
 /// parent function. Whether the `apply` should be differentiated is determined
@@ -460,19 +487,13 @@ void LinearMapInfo::generateDifferentiationDataStructures(
 ///    active argument.
 bool LinearMapInfo::shouldDifferentiateApplySite(FullApplySite applySite) {
   // MYTODO: proper handling of closures
-  if (applySite.getKind() == FullApplySiteKind::ApplyInst &&
-      applySite.getNumArguments() == 0 &&
-      applySite.getIndirectSILResults().empty() &&
-      applySite->getNumResults() == 1 &&
-      applySite->getResults()[0]->getType().getASTType() ==
-          original->getASTContext().getFloatType()->getCanonicalType()) {
-    if (activityInfo
-            .getActivity(
-                cast<ApplyInst>(applySite.getInstruction())->getCallee(),
-                config)
-            .contains(ActivityFlags::Varied)) {
-      return true;
-    }
+  if (isApplySiteOfDifferentiableClosure(applySite,
+                                         original->getASTContext()) &&
+      activityInfo
+          .getActivity(cast<ApplyInst>(applySite.getInstruction())->getCallee(),
+                       config)
+          .contains(ActivityFlags::Varied)) {
+    return true;
   }
 
   // Function applications with an active inout argument should be

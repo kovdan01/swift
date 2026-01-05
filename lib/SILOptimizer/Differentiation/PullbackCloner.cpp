@@ -1236,7 +1236,6 @@ public:
       if (resultIndex >= firstYieldResultIndex)
         continue;
       assert(resultIndex < origAllResults.size());
-
       auto origResult = origAllResults[resultIndex];
 
       // Get the seed (i.e. adjoint value of the original result).

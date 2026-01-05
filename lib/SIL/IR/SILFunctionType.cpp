@@ -954,6 +954,21 @@ static SILFunctionType *getConstrainedAutoDiffOriginalFunctionType(
       original->getWitnessMethodConformanceOrInvalid());
 }
 
+static bool isApplySiteOfDifferentiableClosure(SILFunctionType *silFunctionType,
+                                               ASTContext &ctx) {
+  if (silFunctionType->getNumParameters() != 0)
+    return false;
+  if (silFunctionType->getNumResults() != 1)
+    return false;
+  if (silFunctionType->hasIndirectFormalResults())
+    return false;
+  if (silFunctionType->getSingleResult().getInterfaceType() !=
+      ctx.getFloatType()->getCanonicalType())
+    return false;
+
+  return true;
+}
+
 CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
     IndexSubset *parameterIndices, IndexSubset *resultIndices,
     AutoDiffDerivativeFunctionKind kind, TypeConverter &TC,
@@ -1010,11 +1025,7 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
     CanType interfaceType = param.getInterfaceType();
 
     if (auto *silFunctionType = interfaceType->getAs<SILFunctionType>()) {
-      if (silFunctionType->getNumParameters() == 0 &&
-          silFunctionType->getNumResults() == 1 &&
-          silFunctionType->getSingleResult().getInterfaceType() ==
-              ctx.getFloatType()->getCanonicalType()) {
-
+      if (isApplySiteOfDifferentiableClosure(silFunctionType, ctx)) {
         CanType canFloatType = ctx.getFloatType()->getCanonicalType();
         SmallVector<SILParameterInfo, 1> singleFloatParam;
         singleFloatParam.emplace_back(canFloatType,
