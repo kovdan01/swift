@@ -552,6 +552,17 @@ DifferentiationTransformer::createPrivateDifferentiabilityWitness(
     IndexSubset *desiredParameterIndices, IndexSubset *desiredResultIndices,
     SILValue original, DifferentiationInvoker invoker) {
 
+  llvm::errs() << "createPrivateDifferentiabilityWitness originalFn BEGIN\n";
+  originalFn->print(llvm::errs());
+  llvm::errs() << "\ncreatePrivateDifferentiabilityWitness originalFn END\n";
+  llvm::errs() << "createPrivateDifferentiabilityWitness originalFn genSig: ";
+  if (auto genSig = originalFn->getLoweredFunctionType()->getSubstGenericSignature())
+    genSig.print(llvm::errs());
+  else
+    llvm::errs() << "NULL";
+  llvm::errs() << "\n";
+
+
   // Check non-differentiable cases before creating a new private
   // differentiability witness.
 
@@ -617,7 +628,10 @@ DifferentiationTransformer::createPrivateDifferentiabilityWitness(
   }
 
   // Soundness check passed. Create a new differentiability witness
+  // MYTODO
   GenericSignature contextualDerivativeGenSig = GenericSignature();
+  //GenericSignature contextualDerivativeGenSig = originalFn->getLoweredFunctionType()->getSubstGenericSignature();
+  //originalFn->getGenericSignature();
   if (invoker.getKind() ==
       DifferentiationInvoker::Kind::IndirectDifferentiation)
     contextualDerivativeGenSig = invoker.getIndirectDifferentiation()
@@ -632,6 +646,16 @@ DifferentiationTransformer::createPrivateDifferentiabilityWitness(
       DifferentiabilityKind::Reverse, desiredParameterIndices,
       desiredResultIndices, derivativeConstrainedGenSig, /*jvp*/ nullptr,
       /*vjp*/ nullptr, /*isSerialized*/ false);
+
+  llvm::errs() << "BEFORE canonicalizeDifferentiabilityWitness 00:";
+  witness->print(llvm::errs());
+  llvm::errs() << "\n";
+  llvm::errs() << "derivativeConstrainedGenSig: ";
+  derivativeConstrainedGenSig.print(llvm::errs());
+  llvm::errs() << "\n";
+  llvm::errs() << "INVOKER: " << (int)invoker.getKind() << "\n";
+
+
   if (canonicalizeDifferentiabilityWitness(witness, invoker, IsNotSerialized))
     return nullptr;
 
@@ -1127,6 +1151,14 @@ static void emitFatalError(ADContext &context, SILFunction *f,
 bool DifferentiationTransformer::canonicalizeDifferentiabilityWitness(
     SILDifferentiabilityWitness *witness, DifferentiationInvoker invoker,
     SerializedKind_t serializeFunctions) {
+
+  llvm::errs() << "canonicalizeDifferentiabilityWitness 00\n";
+  witness->print(llvm::errs());
+  llvm::errs() << "\ncanonicalizeDifferentiabilityWitness 01\n";
+  witness->getDerivativeGenericSignature().print(llvm::errs());
+  llvm::errs() << "\ncanonicalizeDifferentiabilityWitness 02\n";
+
+
   std::string traceMessage;
   llvm::raw_string_ostream OS(traceMessage);
   OS << "processing ";
@@ -1511,6 +1543,14 @@ bool DifferentiationTransformer::processDifferentiableFunctionInst(
   SILFunction *parent = dfi->getFunction();
   auto loc = dfi->getLoc();
   SILBuilderWithScope builder(dfi);
+
+  llvm::errs() << "promoteToDifferentiableFunction BEFORE: ";
+  dfi->print(llvm::errs());
+  llvm::errs() << "\n";
+  llvm::errs() << "dfi->getFunction() BEGIN\n";
+  dfi->getFunction()->print(llvm::errs());
+  llvm::errs() << "\ndfi->getFunction() END\n";
+
   auto differentiableFnValue =
       promoteToDifferentiableFunction(dfi, builder, loc, dfi);
   // Mark `dfi` as processed so that it won't be reprocessed after deletion.

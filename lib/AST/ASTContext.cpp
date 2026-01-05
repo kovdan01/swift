@@ -3690,6 +3690,7 @@ void LocatableType::Profile(llvm::FoldingSetNodeID &id, SourceLoc loc,
 Type ErrorType::get(const ASTContext &C) { return C.TheErrorType; }
 
 Type ErrorType::get(Type originalType) {
+  //assert(false);
   // The original type is only used for printing/debugging, and we don't support
   // solver-allocated ErrorTypes. As such, fold any type variables and
   // placeholders into ErrorTypes. If we have a top-level one, we can return
