@@ -4864,6 +4864,22 @@ void AnyFunctionType::relabelParams(MutableArrayRef<Param> params,
   }
 }
 
+bool AnyFunctionType::isSupportedAsDifferentiableClosure() const {
+  // Right now, we only support closures capturing exactly one argument with the
+  // type equal to the result type. No other arguments except the captured one
+  // are supported.
+  // TODO: support arbitrary captured and non-captured arguments types.
+  if (getNumParams() != 0)
+    return false;
+  // TODO: support different argument and result types
+  if (getResult()->getCanonicalType() !=
+          getASTContext().getFloatType()->getCanonicalType() &&
+      getResult()->getCanonicalType() !=
+          getASTContext().getDoubleType()->getCanonicalType())
+    return false;
+  return true;
+}
+
 /// Profile \p params into \p ID. In contrast to \c == on \c Param, the profile
 /// *does* take the internal label into account and *does not* canonicalize
 /// the param's type.

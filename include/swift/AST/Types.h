@@ -3971,6 +3971,8 @@ public:
     return containsPackExpansionType(getParams());
   }
 
+  bool isSupportedAsDifferentiableClosure() const;
+
   static bool containsPackExpansionType(ArrayRef<Param> params);
 
   static void printParams(ArrayRef<Param> Params, raw_ostream &OS,
@@ -6140,7 +6142,9 @@ public:
   /// Return the unsubstituted function type equivalent to this type; that is, the type that has the same
   /// argument and result types as `this` type after substitutions, if any.
   CanSILFunctionType getUnsubstitutedType(SILModule &M) const;
-                                    
+
+  bool isSupportedAsDifferentiableClosure() const;
+
   void Profile(llvm::FoldingSetNodeID &ID) {
     Profile(ID, getInvocationGenericSignature(),
             getExtInfo(), getCoroutineKind(), getCalleeConvention(),
