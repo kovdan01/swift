@@ -4864,6 +4864,15 @@ void AnyFunctionType::relabelParams(MutableArrayRef<Param> params,
   }
 }
 
+bool AnyFunctionType::isSupportedAsDifferentiableClosure() const {
+  if (getNumParams() != 0)
+    return false;
+  if (getResult()->getCanonicalType() !=
+      getASTContext().getFloatType()->getCanonicalType())
+    return false;
+  return true;
+}
+
 /// Profile \p params into \p ID. In contrast to \c == on \c Param, the profile
 /// *does* take the internal label into account and *does not* canonicalize
 /// the param's type.

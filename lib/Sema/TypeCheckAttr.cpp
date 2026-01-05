@@ -5958,6 +5958,13 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
     if (i >= allParamTypes.size())
       return false;
     auto paramType = allParamTypes[i];
+    // MYTODO: proper handling of closures
+    if (const auto *anyFunctionType = paramType->getAs<AnyFunctionType>()) {
+      if (!anyFunctionType->isSupportedAsDifferentiableClosure())
+        return false;
+      // MYTODO: comment
+      paramType = anyFunctionType->getResult();
+    }
     if (derivativeGenEnv)
       paramType = derivativeGenEnv->mapTypeIntoEnvironment(paramType);
     else
