@@ -4809,9 +4809,14 @@ Type AnyFunctionType::getEffectiveThrownErrorTypeOrNever() const {
 }
 
 static CanType getResultTypeForSupportedDifferentiableClosure(TypeBase *type) {
-  if (auto *silFunctionType = type->getAs<SILFunctionType>())
-    if (silFunctionType->isSupportedAsDifferentiableClosure())
+  llvm::errs() << "getResultTypeForSupportedDifferentiableClosure\n";
+  if (auto *silFunctionType = type->getAs<SILFunctionType>()) {
+    if (silFunctionType->isSupportedAsDifferentiableClosure()) {
+      if (silFunctionType->hasIndirectFormalResults())
+        return silFunctionType->getPatternSubstitutions().getReplacementTypes().front()->getCanonicalType();
       return silFunctionType->getSingleResult().getInterfaceType();
+    }
+  }
 
   if (auto *anyFunctionType = type->getAs<AnyFunctionType>())
     if (anyFunctionType->isSupportedAsDifferentiableClosure())
@@ -4877,8 +4882,14 @@ TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
   // TODO: handle arbitrary captured arg types and result types.
   if (auto resultType = getResultTypeForSupportedDifferentiableClosure(this)) {
     auto capturedArgsType = resultType;
+    llvm::errs() << "getAutoDiffTangentSpace: capturedArgsType = ";
+    capturedArgsType.print(llvm::errs());
+    llvm::errs() << '\n';
     auto tangentOfCapturedArgs =
         capturedArgsType->getAutoDiffTangentSpace(lookupConformance)->getType();
+    llvm::errs() << "getAutoDiffTangentSpace: tangentOfCapturedArgs = ";
+    tangentOfCapturedArgs.print(llvm::errs());
+    llvm::errs() << '\n';
     return cache(TangentSpace::getTangentVector(tangentOfCapturedArgs));
   }
 
