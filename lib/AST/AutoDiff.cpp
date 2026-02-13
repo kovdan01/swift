@@ -328,10 +328,42 @@ GenericSignature autodiff::getConstrainedDerivativeGenericSignature(
     IndexSubset *diffParamIndices, IndexSubset *diffResultIndices,
     GenericSignature derivativeGenSig, LookupConformanceFn lookupConformance,
     bool isTranspose) {
+  llvm::errs() << "\ngetConstrainedDerivativeGenericSignature 00\n";
   if (!derivativeGenSig)
     derivativeGenSig = originalFnTy->getInvocationGenericSignature();
+
+  llvm::errs() << "\ngetConstrainedDerivativeGenericSignature 01 00\n";
+
+  if (originalFnTy->getInvocationGenericSignature())
+    originalFnTy->getInvocationGenericSignature()->print(llvm::errs());
+  else
+    llvm::errs() << "NULL\n";
+
+  llvm::errs() << "\ngetConstrainedDerivativeGenericSignature 01 01\n";
+
+  if (originalFnTy->getPatternGenericSignature())
+    originalFnTy->getPatternGenericSignature()->print(llvm::errs());
+  else
+    llvm::errs() << "NULL\n";
+
+  llvm::errs() << "\ngetConstrainedDerivativeGenericSignature 01 02\n";
+
+  if (originalFnTy->getSubstGenericSignature())
+    originalFnTy->getSubstGenericSignature()->print(llvm::errs());
+  else
+    llvm::errs() << "NULL\n";
+
+  llvm::errs() << "\ngetConstrainedDerivativeGenericSignature 01 03\n";
+
+  if (!derivativeGenSig)
+    derivativeGenSig = originalFnTy->getSubstGenericSignature();
+
+  llvm::errs() << "\ngetConstrainedDerivativeGenericSignature 01 04\n";
+
   if (!derivativeGenSig)
     return nullptr;
+
+  llvm::errs() << "getConstrainedDerivativeGenericSignature 02\n";
   auto &ctx = originalFnTy->getASTContext();
   auto *diffableProto = ctx.getProtocol(KnownProtocolKind::Differentiable);
   SmallVector<Requirement, 4> requirements;
@@ -350,11 +382,15 @@ GenericSignature autodiff::getConstrainedDerivativeGenericSignature(
     }
   };
 
+  llvm::errs() << "getConstrainedDerivativeGenericSignature 03\n";
+
   // Require differentiability parameters to conform to `Differentiable`.
   for (unsigned paramIdx : diffParamIndices->getIndices()) {
+    llvm::errs() << "getConstrainedDerivativeGenericSignature 04\n";
     auto paramType = originalFnTy->getParameters()[paramIdx].getInterfaceType();
     addRequirement(paramType);
   }
+  llvm::errs() << "getConstrainedDerivativeGenericSignature 05\n";
 
   // Require differentiability results to conform to `Differentiable`.
   SmallVector<SILResultInfo, 2> originalResults;
@@ -362,7 +398,9 @@ GenericSignature autodiff::getConstrainedDerivativeGenericSignature(
   unsigned firstSemanticParamResultIdx = originalFnTy->getNumResults();
   unsigned firstYieldResultIndex = originalFnTy->getNumResults() +
       originalFnTy->getNumAutoDiffSemanticResultsParameters();
+  llvm::errs() << "getConstrainedDerivativeGenericSignature 06\n";
   for (unsigned resultIdx : diffResultIndices->getIndices()) {
+    llvm::errs() << "getConstrainedDerivativeGenericSignature 07\n";
     // Handle formal original result.
     if (resultIdx < firstSemanticParamResultIdx) {
       auto resultType = originalResults[resultIdx].getInterfaceType();
@@ -384,6 +422,8 @@ GenericSignature autodiff::getConstrainedDerivativeGenericSignature(
       addRequirement(originalFnTy->getYields()[yieldResultIndex].getInterfaceType());
     }
   }
+
+  llvm::errs() << "getConstrainedDerivativeGenericSignature 09\n";
 
   return buildGenericSignature(ctx, derivativeGenSig,
                                /*addedGenericParams*/ {},

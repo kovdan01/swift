@@ -988,6 +988,7 @@ public:
   }
 
   void visitPartialApplyInst(PartialApplyInst *pai) {
+    llvm::errs() << "PullbackCloner::visitPartialApplyInst\n";
     if (!pai->isSupportedAsDifferentiableClosure()) {
       SILInstructionVisitor::visitPartialApplyInst(pai);
       return;

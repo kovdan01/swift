@@ -754,10 +754,13 @@ public:
   // TODO: additional tests for cases when `partial_apply` result is wrapped in
   // `convert_escape_to_noescape`
   void visitPartialApplyInst(PartialApplyInst *pai) {
+    llvm::errs() << "VJPCloner::visitPartialApplyInst 00\n";
     if (!pai->isSupportedAsDifferentiableClosure()) {
+      llvm::errs() << "VJPCloner::visitPartialApplyInst 01\n";
       TypeSubstCloner::visitPartialApplyInst(pai);
       return;
     }
+    llvm::errs() << "VJPCloner::visitPartialApplyInst 02\n";
 
     // TODO: use the following logic only when an `apply` which needs to be
     // differentiated accepts the result of this `partial_apply` (either
@@ -774,9 +777,13 @@ public:
         getBuilder(), pai->getLoc(),
         IndexSubset::get(context.getASTContext(), 1, {0}),
         IndexSubset::get(context.getASTContext(), 1, {0}), origCallee);
+    
+    llvm::errs() << "VJPCloner::visitPartialApplyInst 03\n";
 
     context.getDifferentiableFunctionInstWorklist().push_back(diffFuncInst);
-
+    
+    llvm::errs() << "VJPCloner::visitPartialApplyInst 04\n";
+    
     SILValue vjpValue;
     getBuilder().emitScopedBorrowOperation(
         loc, diffFuncInst, [&](SILValue borrowedADFunc) {
@@ -786,14 +793,23 @@ public:
           vjpValue = getBuilder().emitCopyValueOperation(loc, extractedVJP);
         });
     getBuilder().emitDestroyValueOperation(loc, diffFuncInst);
+    
+    llvm::errs() << "VJPCloner::visitPartialApplyInst 04\n";
 
     llvm::SmallVector<SILValue, 8> vjpArgs;
     for (auto origArg : pai->getArguments())
       vjpArgs.push_back(getOpValue(origArg));
+    
+    llvm::errs() << "VJPCloner::visitPartialApplyInst 05\n";
+    
     auto *newPai = getBuilder().createPartialApply(
         loc, vjpValue, SubstitutionMap(), vjpArgs, pai->getCalleeConvention());
-
+    
+    llvm::errs() << "VJPCloner::visitPartialApplyInst 06\n";
+    
     mapValue(pai, newPai);
+    
+    llvm::errs() << "VJPCloner::visitPartialApplyInst 07\n";
   }
 
   void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *cetnei) {
@@ -1486,8 +1502,13 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
   // Given a type, returns its formal SIL parameter info.
   auto getTangentParameterInfoForOriginalResult =
       [&](CanType tanType, ResultConvention origResConv) -> SILParameterInfo {
+    llvm::errs() << "getTangentParameterInfoForOriginalResult 00 ";
+    tanType->print(llvm::errs());
+    llvm::errs() << '\n';
     tanType = tanType->getReducedType(witnessCanGenSig);
+    llvm::errs() << "getTangentParameterInfoForOriginalResult 01\n";
     Lowering::AbstractionPattern pattern(witnessCanGenSig, tanType);
+    llvm::errs() << "getTangentParameterInfoForOriginalResult 02\n";
     auto &tl = context.getTypeConverter().getTypeLowering(
         pattern, tanType, TypeExpansionContext::minimal());
     ParameterConvention conv;
@@ -1572,6 +1593,10 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
     semanticResultParamIndices.push_back(i);
   }
 
+  llvm::errs() << "VJPCloner: createEmptyPullback: original begin\n";
+  original->print(llvm::errs());
+  llvm::errs() << "VJPCloner: createEmptyPullback: original end\n";
+
   unsigned firstSemanticParamResultIdx = origTy->getNumResults();
   unsigned firstYieldResultIndex = firstSemanticParamResultIdx +
       origTy->getNumAutoDiffSemanticResultsParameters();
@@ -1581,12 +1606,28 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
       auto origResult = origTy->getResults()[resultIndex];
       origResult = origResult.getWithInterfaceType(
           origResult.getInterfaceType()->getReducedType(witnessCanGenSig));
+      llvm::errs() << "witnessCanGenSig 00, resultIndex = " << resultIndex << ", firstSemanticParamResultIdx = " << firstSemanticParamResultIdx << "\n";
+      witnessCanGenSig.print(llvm::errs());
+      llvm::errs() << "\nwitnessCanGenSig 01\n";
+      origResult.print(llvm::errs());
+      llvm::errs() << "\nwitnessCanGenSig 02\n";
+      origResult.getInterfaceType().print(llvm::errs());
+      llvm::errs() << "\nwitnessCanGenSig 03\n";
+      origResult.getInterfaceType()
+          ->getAutoDiffTangentSpace(lookupConformance)->getType()->print(llvm::errs());
+      llvm::errs() << "\nwitnessCanGenSig 04\n";
+      origResult.getInterfaceType()
+          ->getAutoDiffTangentSpace(lookupConformance)
+          ->getType()
+          ->getReducedType(witnessCanGenSig)->print(llvm::errs());
+      llvm::errs() << "\nwitnessCanGenSig 05\n";
       auto paramInfo = getTangentParameterInfoForOriginalResult(
           origResult.getInterfaceType()
               ->getAutoDiffTangentSpace(lookupConformance)
               ->getType()
               ->getReducedType(witnessCanGenSig),
           origResult.getConvention());
+      llvm::errs() << "\nwitnessCanGenSig 02\n";
       pbParams.push_back(paramInfo);
     } else if (resultIndex < firstYieldResultIndex) {
       // Handle semantic result parameter.

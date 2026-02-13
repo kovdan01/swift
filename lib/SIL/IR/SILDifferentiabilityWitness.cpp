@@ -24,6 +24,9 @@ SILDifferentiabilityWitness *SILDifferentiabilityWitness::createDeclaration(
     DifferentiabilityKind kind, IndexSubset *parameterIndices,
     IndexSubset *resultIndices, GenericSignature derivativeGenSig,
     const DeclAttribute *attribute) {
+  llvm::errs() << "SILDifferentiabilityWitness::createDeclaration 00\n";
+  derivativeGenSig.print(llvm::errs());
+  llvm::errs() << "\nSILDifferentiabilityWitness::createDeclaration 01\n";
   auto *diffWitness = new (module) SILDifferentiabilityWitness(
       module, linkage, originalFunction, kind, parameterIndices, resultIndices,
       derivativeGenSig, /*jvp*/ nullptr, /*vjp*/ nullptr,
@@ -48,6 +51,9 @@ SILDifferentiabilityWitness *SILDifferentiabilityWitness::createDefinition(
     IndexSubset *resultIndices, GenericSignature derivativeGenSig,
     SILFunction *jvp, SILFunction *vjp, bool isSerialized,
     const DeclAttribute *attribute) {
+  llvm::errs() << "SILDifferentiabilityWitness::createDefinition 00\n";
+  derivativeGenSig.print(llvm::errs());
+  llvm::errs() << "\nSILDifferentiabilityWitness::createDefinition 01\n";
   auto *diffWitness = new (module) SILDifferentiabilityWitness(
       module, linkage, originalFunction, kind, parameterIndices, resultIndices,
       derivativeGenSig, jvp, vjp, /*isDeclaration*/ false, isSerialized,
