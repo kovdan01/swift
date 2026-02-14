@@ -1478,16 +1478,11 @@ void SILGenModule::emitDifferentiabilityWitness(
         originalFunction->markedAsAlwaysEmitIntoClient()
             ? SILLinkage::PublicNonABI
             : stripExternalFromLinkage(originalFunction->getLinkage());
-
-    llvm::errs() << "SILDifferentiabilityWitness::createDefinition BEFORE 00\n";
-
     diffWitness = SILDifferentiabilityWitness::createDefinition(
         M, linkage, originalFunction, diffKind, silConfig.parameterIndices,
         silConfig.resultIndices, config.derivativeGenericSignature,
         /*jvp*/ nullptr, /*vjp*/ nullptr,
         /*isSerialized*/ hasPublicVisibility(linkage), attr);
-
-    llvm::errs() << "SILDifferentiabilityWitness::createDefinition AFTER 00\n";
   }
 
   // Set derivative function in differentiability witness.

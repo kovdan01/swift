@@ -4953,12 +4953,9 @@ bool AnyFunctionType::isSupportedAsDifferentiableClosure() const {
   if (getNumParams() != 0)
     return false;
 
-  llvm::errs() << "AnyFunctionType::isSupportedAsDifferentiableClosure 00\n";
-
   // TODO: support this
   if (getResult()->getCanonicalType()->hasTypeParameter())
     return false;
-  llvm::errs() << "AnyFunctionType::isSupportedAsDifferentiableClosure 01\n";
 
   return getResult()->getCanonicalType()->isDifferentiable(
       /*tangentVectorEqualsSelf=*/true);

@@ -2007,47 +2007,25 @@ bool PartialApplyInst::isSupportedAsDifferentiableClosure() const {
   // are supported.
   // TODO: support arbitrary captured and non-captured arguments types.
 
-  llvm::errs() << "PartialApplyInst::isSupportedAsDifferentiableClosure 00 " << *this << '\n';
-
   auto origCalleeType = getOrigCalleeType();
   auto closureType = getType().getAs<SILFunctionType>();
-  llvm::errs() << "PartialApplyInst::isSupportedAsDifferentiableClosure 01\n";
 
   if (!closureType->isSupportedAsDifferentiableClosure())
     return false;
-  llvm::errs() << "PartialApplyInst::isSupportedAsDifferentiableClosure 02\n";
   if (origCalleeType->getNumParameters() != 1)
     return false;
-  llvm::errs() << "PartialApplyInst::isSupportedAsDifferentiableClosure 03\n";
   if (!origCalleeType->getIndirectMutatingParameters().empty())
     return false;
-  llvm::errs() << "PartialApplyInst::isSupportedAsDifferentiableClosure 04 00\n";
-  auto singleResultType = closureType->getSingleResult().getInterfaceType();
-  if (closureType->getSubstGenericSignature()) {
-    llvm::errs() << "PartialApplyInst::isSupportedAsDifferentiableClosure 04 01\n";
-    assert(singleResultType->hasTypeParameter());
-    singleResultType = closureType->getPatternSubstitutions().getReplacementTypes().front()->getCanonicalType();
-  }
-  if (origCalleeType->getParameters()[0].getInterfaceType() != singleResultType) {
-      //closureType->getSingleResult().getInterfaceType()) {
-    llvm::errs() << "PartialApplyInst::isSupportedAsDifferentiableClosure 04 02\nsingleParamType: ";
-    origCalleeType->getParameters()[0].getInterfaceType()->print(llvm::errs());
-    llvm::errs() << "\nsingleResultType: ";
-    closureType->getSingleResult().getInterfaceType()->print(llvm::errs());
-    llvm::errs() << '\n';
+  if (origCalleeType->getParameters()[0].getInterfaceType() !=
+      closureType->getSingleResult().getInterfaceType())
     return false;
-  }
-  llvm::errs() << "PartialApplyInst::isSupportedAsDifferentiableClosure 05\n";
-  // // TODO: support non-empty substitution map
-  // if (getSubstitutionMap())
-  //   return false;
-  llvm::errs() << "PartialApplyInst::isSupportedAsDifferentiableClosure 06\n";
+  // TODO: support non-empty substitution map
+  if (getSubstitutionMap())
+    return false;
 
   assert(getArgumentOperands().size() == 1);
-  // assert(getArguments()[0]->getType().getASTType() ==
-  //        closureType->getSingleResult().getInterfaceType());
-  assert(getArguments()[0]->getType().getASTType() == singleResultType);
-  llvm::errs() << "PartialApplyInst::isSupportedAsDifferentiableClosure 07\n";
+  assert(getArguments()[0]->getType().getASTType() ==
+         closureType->getSingleResult().getInterfaceType());
 
   return true;
 }
