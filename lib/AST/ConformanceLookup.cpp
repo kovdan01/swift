@@ -1010,25 +1010,17 @@ bool TypeBase::isBitwiseCopyable(GenericSignature sig) {
 }
 
 bool TypeBase::isDifferentiable(bool tangentVectorEqualsSelf) {
-  llvm::errs() << "TypeBase::isDifferentiable 00 ";
-  this->print(llvm::errs());
-  llvm::errs() << "\n";
   auto &ctx = getASTContext();
   auto *differentiableProtocol =
       ctx.getProtocol(KnownProtocolKind::Differentiable);
   if (!differentiableProtocol) {
     return false;
   }
-  llvm::errs() << "TypeBase::isDifferentiable 01\n";
   auto conf = checkConformance(this, differentiableProtocol);
-  llvm::errs() << "TypeBase::isDifferentiable 02\n";
   if (conf.isInvalid())
     return false;
-  llvm::errs() << "TypeBase::isDifferentiable 03\n";
   if (!tangentVectorEqualsSelf)
     return true;
-  llvm::errs() << "TypeBase::isDifferentiable 04\n";
   auto tanType = conf.getTypeWitnessByName(ctx.Id_TangentVector);
-  llvm::errs() << "TypeBase::isDifferentiable 05\n";
   return this->isEqual(tanType);
 }

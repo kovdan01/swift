@@ -627,26 +627,13 @@ DifferentiationTransformer::createPrivateDifferentiabilityWitness(
           originalFnTy, desiredParameterIndices, desiredResultIndices,
           contextualDerivativeGenSig, LookUpConformanceInModule());
 
-  llvm::errs() << "SILDifferentiabilityWitness::createDefinition BEFORE 01\n";
-
   auto *witness = SILDifferentiabilityWitness::createDefinition(
       context.getModule(), SILLinkage::Private, originalFn,
       DifferentiabilityKind::Reverse, desiredParameterIndices,
       desiredResultIndices, derivativeConstrainedGenSig, /*jvp*/ nullptr,
       /*vjp*/ nullptr, /*isSerialized*/ false);
-
-  llvm::errs() << "SILDifferentiabilityWitness::createDefinition AFTER 01\n";
-
-  llvm::errs() << "createPrivateDifferentiabilityWitness orig fn BEGIN\n";
-  originalFn->print(llvm::errs());
-  llvm::errs() << "createPrivateDifferentiabilityWitness orig fn END\n";
-
-  llvm::errs() << "createPrivateDifferentiabilityWitness 00\n";
-  if (canonicalizeDifferentiabilityWitness(witness, invoker, IsNotSerialized)) {
-    llvm::errs() << "createPrivateDifferentiabilityWitness 01\n";
+  if (canonicalizeDifferentiabilityWitness(witness, invoker, IsNotSerialized))
     return nullptr;
-  }
-  llvm::errs() << "createPrivateDifferentiabilityWitness 02\n";
 
   return witness;
 }
@@ -1141,21 +1128,8 @@ bool DifferentiationTransformer::canonicalizeDifferentiabilityWitness(
   PrettyStackTraceSILFunction trace(
       traceMessage.c_str(), witness->getOriginalFunction());
 
-  llvm::errs() << "canonicalizeDifferentiabilityWitness 00\n";
-  witness->print(llvm::errs());
-  llvm::errs() << "canonicalizeDifferentiabilityWitness 01\n";
-  if (witness->getDerivativeGenericSignature().getCanonicalSignature()) {
-    witness->getDerivativeGenericSignature().getCanonicalSignature()->print(llvm::errs());
-  } else {
-    llvm::errs() << "no generic sig\n";
-  }
-
-  llvm::errs() << "canonicalizeDifferentiabilityWitness 02\n";
-
   assert(witness->isDefinition());
   SILFunction *orig = witness->getOriginalFunction();
-
-  llvm::errs() << "canonicalizeDifferentiabilityWitness 03\n";
 
   // We can generate empty JVP / VJP for functions available externally. These
   // functions have the same linkage as the original ones sans `external`
@@ -1169,11 +1143,8 @@ bool DifferentiationTransformer::canonicalizeDifferentiabilityWitness(
       !orig->markedAsAlwaysEmitIntoClient())
     serializeFunctions = IsNotSerialized;
 
-  llvm::errs() << "canonicalizeDifferentiabilityWitness 04\n";
-
   // If the JVP doesn't exist, need to synthesize it.
   if (!witness->getJVP()) {
-    llvm::errs() << "canonicalizeDifferentiabilityWitness 05\n";
     // Diagnose:
     // - Functions with no return.
     // - Functions with unsupported control flow.
@@ -1219,11 +1190,8 @@ bool DifferentiationTransformer::canonicalizeDifferentiabilityWitness(
     }
   }
 
-  llvm::errs() << "canonicalizeDifferentiabilityWitness 06\n";
-
   // If the VJP doesn't exist, need to synthesize it.
   if (!witness->getVJP()) {
-    llvm::errs() << "canonicalizeDifferentiabilityWitness 07 00\n";
     // Diagnose:
     // - Functions with no return.
     // - Functions with unsupported control flow.
@@ -1231,23 +1199,14 @@ bool DifferentiationTransformer::canonicalizeDifferentiabilityWitness(
         diagnoseUnsupportedControlFlow(context, orig, invoker))
       return true;
 
-    llvm::errs() << "canonicalizeDifferentiabilityWitness 07 01\n";
-
     // Create empty VJP.
     auto *vjp = createEmptyVJP(context, witness, serializeFunctions);
-    llvm::errs() << "canonicalizeDifferentiabilityWitness 07 02\n";
     witness->setVJP(vjp);
-    llvm::errs() << "canonicalizeDifferentiabilityWitness 07 03\n";
     context.recordGeneratedFunction(vjp);
-    llvm::errs() << "canonicalizeDifferentiabilityWitness 07 04\n";
     // Emit VJP function.
     VJPCloner cloner(context, witness, vjp, invoker);
-    llvm::errs() << "canonicalizeDifferentiabilityWitness 07 05\n";
     return cloner.run();
   }
-
-  llvm::errs() << "canonicalizeDifferentiabilityWitness 08\n";
-
   return false;
 }
 
