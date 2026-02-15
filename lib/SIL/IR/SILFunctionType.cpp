@@ -159,6 +159,11 @@ bool SILFunctionType::isSupportedAsDifferentiableClosure() const {
     return false;
   if (getNumResults() != 1)
     return false;
+  if (hasErrorResult())
+    return false;
+
+  //this->getd
+
   // if (hasIndirectFormalResults())
   //   return false;
   // if (getSubstGenericSignature())
@@ -169,37 +174,43 @@ bool SILFunctionType::isSupportedAsDifferentiableClosure() const {
 
   CanType resultType = getSingleResult().getInterfaceType();
 
-  if (resultType->hasTypeParameter()) {
-    assert(hasPatternSubstitutions());
-    auto subst = getPatternSubstitutions();
-    resultType = subst.getReplacementTypes().front()->getCanonicalType();
+  auto *differentiableProtocol =
+         getASTContext().getProtocol(KnownProtocolKind::Differentiable);
+  assert(differentiableProtocol != nullptr);
+  auto conf = swift::lookupConformance(resultType, differentiableProtocol);
+  return !conf.isInvalid();
 
-    // for (unsigned i : indices(subst.getReplacementTypes())) {
-    //   auto origType =
-    //     origSubs.getReplacementTypes()[i]->getReducedType(sig);
-    //   auto substType =
-    //     substSubs.getReplacementTypes()[i]->getReducedType(sig);
-    // }
+  // if (resultType->hasTypeParameter()) {
+  //   assert(hasPatternSubstitutions());
+  //   auto subst = getPatternSubstitutions();
+  //   resultType = subst.getReplacementTypes().front()->getCanonicalType();
+
+  //   // for (unsigned i : indices(subst.getReplacementTypes())) {
+  //   //   auto origType =
+  //   //     origSubs.getReplacementTypes()[i]->getReducedType(sig);
+  //   //   auto substType =
+  //   //     substSubs.getReplacementTypes()[i]->getReducedType(sig);
+  //   // }
 
 
-    llvm::errs() << "before isDifferentiable, resultType = ";
-    resultType->print(llvm::errs());
-    llvm::errs() << "\n";
-    this->print(llvm::errs());
-    llvm::errs() << "\n";
-    if (resultType->hasTypeParameter())
-      return false;
-    //bool flag = resultType->isDifferentiable(getSubstGenericSignature(), /*tangentVectorEqualsSelf=*/true);
-    bool flag = resultType->isDifferentiable(/*tangentVectorEqualsSelf=*/true);
-    llvm::errs() << "SILFunctionType::isSupportedAsDifferentiableClosure() = " << (int)flag << '\n';
-    this->print(llvm::errs());
-    llvm::errs() << "\nresultType = ";
-    resultType->print(llvm::errs());
-    llvm::errs() << "\n\n";
-    return flag;//resultType->isDifferentiable(getSubstGenericSignature(), /*tangentVectorEqualsSelf=*/true);
-  }
+  //   llvm::errs() << "before isDifferentiable, resultType = ";
+  //   resultType->print(llvm::errs());
+  //   llvm::errs() << "\n";
+  //   this->print(llvm::errs());
+  //   llvm::errs() << "\n";
+  //   if (resultType->hasTypeParameter())
+  //     return false;
+  //   //bool flag = resultType->isDifferentiable(getSubstGenericSignature(), /*tangentVectorEqualsSelf=*/true);
+  //   bool flag = resultType->isDifferentiable(/*tangentVectorEqualsSelf=*/true);
+  //   llvm::errs() << "SILFunctionType::isSupportedAsDifferentiableClosure() = " << (int)flag << '\n';
+  //   this->print(llvm::errs());
+  //   llvm::errs() << "\nresultType = ";
+  //   resultType->print(llvm::errs());
+  //   llvm::errs() << "\n\n";
+  //   return flag;//resultType->isDifferentiable(getSubstGenericSignature(), /*tangentVectorEqualsSelf=*/true);
+  // }
 
-  return resultType->isDifferentiable(/*tangentVectorEqualsSelf=*/true);
+  // return resultType->isDifferentiable(/*tangentVectorEqualsSelf=*/true);
 }
 
 CanType SILParameterInfo::getArgumentType(SILFunction *fn) const {

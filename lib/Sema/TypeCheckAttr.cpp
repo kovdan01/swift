@@ -5956,6 +5956,23 @@ SpecializeAttrTargetDeclRequest::evaluate(Evaluator &evaluator,
   return nullptr;
 }
 
+/// Returns true if the given type conforms to `Differentiable` in the given
+/// context. If `tangentVectorEqualsSelf` is true, also check whether the given
+/// type satisfies `TangentVector == Self`.
+static bool conformsToDifferentiable(Type type,
+                                     bool tangentVectorEqualsSelf = false) {
+  auto &ctx = type->getASTContext();
+  auto *differentiableProto =
+      ctx.getProtocol(KnownProtocolKind::Differentiable);
+  auto conf = checkConformance(type, differentiableProto);
+  if (conf.isInvalid())
+    return false;
+  if (!tangentVectorEqualsSelf)
+    return true;
+  auto tanType = conf.getTypeWitnessByName(ctx.Id_TangentVector);
+  return type->isEqual(tanType);
+}
+
 IndexSubset *TypeChecker::inferDifferentiabilityParameters(
     AbstractFunctionDecl *AFD, GenericEnvironment *derivativeGenEnv) {
   auto *module = AFD->getParentModule();
@@ -5990,7 +6007,7 @@ IndexSubset *TypeChecker::inferDifferentiabilityParameters(
     if (paramType->isExistentialType())
       return false;
     // Return true if the type conforms to `Differentiable`.
-    return paramType->isDifferentiable();
+    return conformsToDifferentiable(paramType);
   };
 
   // Get all parameter types.
@@ -6050,7 +6067,7 @@ static IndexSubset *computeDifferentiabilityParameters(
         selfType = derivativeGenEnv->mapTypeIntoEnvironment(selfType);
       else
         selfType = function->mapTypeIntoEnvironment(selfType);
-      if (!selfType->isDifferentiable()) {
+      if (!conformsToDifferentiable(selfType)) {
         diags
             .diagnose(attrLoc, diag::diff_function_no_parameters, function)
             .highlight(function->getSignatureSourceRange());
@@ -7638,8 +7655,8 @@ static bool checkLinearityParameters(
         parsedLinearParams.empty() ? attrLoc : parsedLinearParams[i].getLoc();
     // Parameter must conform to `Differentiable` and satisfy
     // `Self == Self.TangentVector`.
-    if (!linearParamType->isDifferentiable(
-            /*tangentVectorEqualsSelf*/ true)) {
+    if (!conformsToDifferentiable(linearParamType,
+                                  /*tangentVectorEqualsSelf*/ true)) {
       diags.diagnose(loc,
                      diag::transpose_attr_invalid_linearity_parameter_or_result,
                      linearParamType.getString(), /*isParameter*/ true);
@@ -7750,8 +7767,8 @@ void AttributeChecker::visitTransposeAttr(TransposeAttr *attr) {
   if (expectedOriginalResultType->hasTypeParameter())
     expectedOriginalResultType = transpose->mapTypeIntoEnvironment(
         expectedOriginalResultType);
-  if (!expectedOriginalResultType->isDifferentiable(
-          /*tangentVectorEqualsSelf*/ true)) {
+  if (!conformsToDifferentiable(expectedOriginalResultType,
+                                /*tangentVectorEqualsSelf*/ true)) {
     diagnoseAndRemoveAttr(
         attr, diag::transpose_attr_invalid_linearity_parameter_or_result,
         expectedOriginalResultType.getString(), /*isParameter*/ false);
