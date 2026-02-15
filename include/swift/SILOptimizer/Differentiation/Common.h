@@ -321,10 +321,14 @@ public:
 };
 
 inline bool isApplySiteOfDifferentiableClosure(FullApplySite applySite) {
-  if (applySite.getKind() != FullApplySiteKind::ApplyInst)
+  llvm::errs() << "isApplySiteOfDifferentiableClosure: ";
+  if (applySite.getKind() != FullApplySiteKind::ApplyInst) {
+    llvm::errs() << "false\n";
     return false;
+  }
   auto callee = cast<ApplyInst>(applySite.getInstruction())->getCallee();
   auto silFunctionType = callee->getType().getAs<SILFunctionType>();
+  llvm::errs() << "resurn isSupportedAsDifferentiableClosure()\n";
   return silFunctionType->isSupportedAsDifferentiableClosure();
 }
 

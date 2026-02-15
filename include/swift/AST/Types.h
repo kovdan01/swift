@@ -731,6 +731,9 @@ public:
   /// whether the given type satisfies `TangentVector == Self`.
   bool isDifferentiable(bool tangentVectorEqualsSelf = false);
 
+  /// MYTODO
+  bool isDifferentiable(GenericSignature sig, bool tangentVectorEqualsSelf = false);
+
   /// Are values of this type essentially just class references,
   /// possibly with some sort of additional information?
   ///
@@ -4045,7 +4048,7 @@ public:
     return containsPackExpansionType(getParams());
   }
 
-  bool isSupportedAsDifferentiableClosure() const;
+  //bool isSupportedAsDifferentiableClosure() const;
 
   static bool containsPackExpansionType(ArrayRef<Param> params);
 
