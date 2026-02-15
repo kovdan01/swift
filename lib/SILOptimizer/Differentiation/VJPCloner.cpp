@@ -791,7 +791,7 @@ public:
     for (auto origArg : pai->getArguments())
       vjpArgs.push_back(getOpValue(origArg));
     auto *newPai = getBuilder().createPartialApply(
-        loc, vjpValue, SubstitutionMap(), vjpArgs, pai->getCalleeConvention());
+        loc, vjpValue, pai->getSubstitutionMap(), vjpArgs, pai->getCalleeConvention());
 
     mapValue(pai, newPai);
   }
@@ -840,7 +840,7 @@ public:
         vjpArgs.push_back(getOpValue(origArg));
 
       auto *vjpCall =
-          getBuilder().createApply(ai->getLoc(), origCallee, SubstitutionMap(),
+          getBuilder().createApply(ai->getLoc(), origCallee, ai->getSubstitutionMap()/*SubstitutionMap()*/,
                                    vjpArgs, ai->getApplyOptions());
 
       // Get the VJP results (original results and pullback).

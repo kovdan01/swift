@@ -2014,14 +2014,18 @@ bool PartialApplyInst::isSupportedAsDifferentiableClosure() const {
     return false;
   if (origCalleeType->getNumParameters() != 1)
     return false;
-  if (!origCalleeType->getIndirectMutatingParameters().empty())
+  if (!origCalleeType->getIndirectMutatingParameters().empty()) {
+    llvm::errs() << "PartialApplyInst: !origCalleeType->getIndirectMutatingParameters().empty() ";
+    this->print(llvm::errs());
+    llvm::errs() << '\n';
     return false;
+  }
   if (origCalleeType->getParameters()[0].getInterfaceType() !=
       closureType->getSingleResult().getInterfaceType())
     return false;
-  // TODO: support non-empty substitution map
-  if (getSubstitutionMap())
-    return false;
+  // // TODO: support non-empty substitution map
+  // if (getSubstitutionMap())
+  //   return false;
 
   assert(getArgumentOperands().size() == 1);
   assert(getArguments()[0]->getType().getASTType() ==
