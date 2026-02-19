@@ -1185,6 +1185,9 @@ public:
         origAllResults.push_back(
             fai.getArgumentsWithoutIndirectResults()[paramIdx]);
       }
+    } else {
+      llvm::errs() << "buildPullbackCall: isApplySiteOfDifferentiableClosure: ";
+      fai.dump();
     }
 
     // Get callee pullback arguments.
@@ -1266,8 +1269,21 @@ public:
       applyInfo.pullback = pullback;
       applyInfo.beginApplyToken = cast<BeginApplyInst>(pullbackCall)->getTokenResult();
     } else {
-      pullbackCall = builder.createApply(loc, pullback, SubstitutionMap(),
+      llvm::errs() << "buildPullbackCall: createApply BEFORE\n";
+      llvm::errs() << "pullback: " << pullback << '\n';
+      auto pbType = pullback->getType().getAs<SILFunctionType>();
+      llvm::errs() << "pbType: " << pbType << '\n';
+      llvm::errs() << "pbTypeGenSig: " << pbType->getSubstGenericSignature() << '\n';
+      llvm::errs() << "invSubs: " << pbType->getInvocationSubstitutions() << '\n';
+      llvm::errs() << "patSubs: " << pbType->getPatternSubstitutions() << '\n';
+      llvm::errs() << "orig invSubs: " << vjpCloner.getOriginal().getLoweredFunctionType()->getInvocationSubstitutions() << '\n';
+      llvm::errs() << "orig patSubs: " << vjpCloner.getOriginal().getLoweredFunctionType()->getPatternSubstitutions() << '\n';
+
+      pullbackCall = builder.createApply(loc, pullback, //SubstitutionMap(),
+                                         //pbType->getPatternSubstitutions(),
+                                         vjpCloner.getOriginal().getLoweredFunctionType()->getCombinedSubstitutions(),
                                          args);
+      llvm::errs() << "buildPullbackCall: createApply AFTER\n";
       builder.emitDestroyValueOperation(loc, pullback);
       // Extract all results from `pullbackCall`.
       extractAllElements(cast<ApplyInst>(pullbackCall), builder, dirResults);
@@ -1307,7 +1323,9 @@ public:
         // }
 
         if (tan->getType().isAddress()) {
+          llvm::errs() << "BEFORE addToAdjointBuffer, tan = " << tan << "\n";
           addToAdjointBuffer(bb, origArg, tan, loc);
+          llvm::errs() << "AFTER addToAdjointBuffer, tan = " << tan << "\n";
         } else {
           if (origArg->getType().isAddress()) {
             auto *tmpBuf = builder.createAllocStack(loc, tan->getType());

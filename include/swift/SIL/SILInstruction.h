@@ -2732,6 +2732,22 @@ protected:
         SpecializationInfo(specializationInfo), NumCallArguments(args.size()),
         NumTypeDependentOperands(typeDependentOperands.size()),
         Substitutions(subs.getCanonical()) {
+    llvm::errs() << "ApplyInstBase BEGIN\n";
+    if (subs)
+      subs.dump();
+    else
+      llvm::errs() << "SUBS NULL";
+    llvm::errs() << "\nApplyInstBase MIDDLE 00\n";
+    callee->getType().castTo<SILFunctionType>()->print(llvm::errs());
+    llvm::errs() << "\nApplyInstBase MIDDLE 01\n";
+    if (callee->getType().castTo<SILFunctionType>()
+        ->getInvocationGenericSignature())
+      callee->getType().castTo<SILFunctionType>()
+              ->getInvocationGenericSignature().print(llvm::errs());
+    else
+      llvm::errs() << "INV GEN SIG NULL";
+    llvm::errs() << "\nApplyInstBase END\n";
+
     assert(!!subs == !!callee->getType().castTo<SILFunctionType>()
         ->getInvocationGenericSignature());
 
