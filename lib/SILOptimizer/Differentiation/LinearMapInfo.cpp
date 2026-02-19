@@ -174,11 +174,6 @@ void LinearMapInfo::populateBranchingTraceDecl(SILBasicBlock *originalBB,
 }
 
 Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
-  llvm::errs() << "getLinearMapType: ";
-  if (auto *ai = dyn_cast<ApplyInst>(fai)) {
-    ai->print(llvm::errs());
-  }
-  llvm::errs() << '\n';
   if (isApplySiteOfDifferentiableClosure(fai)) {
     // Right now, we only support closures capturing exactly one argument with
     // the type equal to the result type.
@@ -188,55 +183,10 @@ Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
     auto singleResultType =
         silFunctionType->getSingleResult().getInterfaceType();
     auto singleParamType = singleResultType;
-    llvm::errs() << "getLinearMapType BEGIN\n";
-    llvm::errs() << "fai: ";
-    fai.dump();
-    llvm::errs() << "parent fn begin:\n";//
-    fai.getParent()->getParent()->print(llvm::errs());
-    llvm::errs() << "\nparent fn end\n";
-    //<< fai.getParent()->getParent()->getName() << '\n';
-    llvm::errs() << "fn type: " << silFunctionType << '\n';
-    llvm::errs() << "param & result: " << singleParamType << '\n';
-    if (silFunctionType->getSubstGenericSignature())
-      llvm::errs() << "gen sig: " << silFunctionType->getSubstGenericSignature() << '\n';
-    silFunctionType = silFunctionType->getUnsubstitutedType(original->getModule());
-    llvm::errs() << "unsubs fn type: " << silFunctionType << '\n';
-    singleResultType =
-        silFunctionType->getSingleResult().getInterfaceType();
-    singleParamType = singleResultType;
-    llvm::errs() << "unsubs param & result: " << singleParamType << '\n';
-
-
+    FunctionType::ExtInfo info;
     SmallVector<AnyFunctionType::Param, 1> params = {
-                                                     AnyFunctionType::Param(singleParamType)};
-
-    AnyFunctionType *astFnTy;
-    if (auto genSig = silFunctionType->getSubstGenericSignature()) {
-      llvm::errs() << "create generic function\n";
-      // FIXME: Verify ExtInfo state is correct, not working by accident.
-      GenericFunctionType::ExtInfo info;
-      astFnTy = GenericFunctionType::get(
-          genSig, params, singleResultType,//silFnTy->getAllResultsInterfaceType().getASTType(),
-          info);
-    } else {
-      llvm::errs() << "create non-generic function\n";
-      FunctionType::ExtInfo info;
-      astFnTy = FunctionType::get(
-          params, singleResultType,//silFnTy->getAllResultsInterfaceType().getASTType(),
-          info);
-    }
-
-    Type resultType =
-        astFnTy->hasArchetype() ? astFnTy->mapTypeOutOfEnvironment() : astFnTy;
-
-    llvm::errs() << "astFnTy: ";
-    astFnTy->print(llvm::errs());
-    llvm::errs() << "\nresultType: " << resultType << "\n";
-
-    llvm::errs() << "getLinearMapType END\n";
-
-    return resultType;
-    //return FunctionType::get(params, singleResultType, info);
+        AnyFunctionType::Param(singleParamType)};
+    return FunctionType::get(params, singleResultType, info);
   }
 
   SmallVector<SILValue, 4> allResults;
@@ -381,15 +331,6 @@ Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
 
   Type resultType =
       astFnTy->hasArchetype() ? astFnTy->mapTypeOutOfEnvironment() : astFnTy;
-
-  llvm::errs() << "getLinearMapType 10 BEGIN\n";
-  resultType.print(llvm::errs());
-  llvm::errs() << "\ngetLinearMapType 10 MIDDLE 00\n";
-  silFnTy->print(llvm::errs());
-  llvm::errs() << "\ngetLinearMapType 10 MIDDLE 01\n";
-  astFnTy->print(llvm::errs());
-  llvm::errs() << "\ngetLinearMapType 10 END\n";
-
   if (fai.getKind() == FullApplySiteKind::TryApplyInst)
     resultType = resultType->wrapInOptionalType();
 
@@ -475,17 +416,12 @@ void LinearMapInfo::generateDifferentiationDataStructures(
         if (Type linearMapType = getLinearMapType(context, fai)) {
           LLVM_DEBUG(getADDebugStream() << "Computed type: " << linearMapType << '\n');
           linearMapIndexMap.insert({fai, linearTupleTypes.size()});
-          llvm::errs() << "linearTupleTypes.emplace_back: " << linearMapType << '\n';
           linearTupleTypes.emplace_back(linearMapType);
         }
       }
     }
 
-    TupleType *tt = TupleType::get(linearTupleTypes, astCtx);
-    linearMapTuples.insert({origBB, tt});//TupleType::get(linearTupleTypes, astCtx)});
-    llvm::errs() << "linearMapTuples.at(origBB): ";
-    tt->print(llvm::errs());
-    llvm::errs() << '\n';
+    linearMapTuples.insert({origBB, TupleType::get(linearTupleTypes, astCtx)});
   }
 
   // Print generated linear map structs and branching trace enums.

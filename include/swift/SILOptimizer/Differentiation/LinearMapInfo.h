@@ -145,25 +145,11 @@ public:
   SILType getLinearMapTupleLoweredType(SILBasicBlock *origBB) const {
     auto derivativeGenSig =
         derivative->getLoweredFunctionType()->getSubstGenericSignature();
-    CanType linMapTupleType =
-        getLinearMapTupleType(origBB)->getCanonicalType();
-    llvm::errs() << "linMapTupleType: " << linMapTupleType << '\n';
-    linMapTupleType = linMapTupleType->getReducedType(derivativeGenSig);
-    llvm::errs() << "linMapTupleType (reduced): " << linMapTupleType << '\n';
-    llvm::errs() << "derivativeGenSig: ";
-    if (derivativeGenSig)
-      derivativeGenSig->print(llvm::errs());
-    else
-      llvm::errs() << "NULL";
-    llvm::errs() << '\n';
+    auto linMapTupleType =
+      getLinearMapTupleType(origBB)->getReducedType(derivativeGenSig);
     Lowering::AbstractionPattern pattern(derivativeGenSig, linMapTupleType);
-    llvm::errs() << "ABSTRACTION PATTERN 01 BEGIN\n";
-    pattern.print(llvm::errs());
-    llvm::errs() << "\nABSTRACTION PATTERN 01 END\n";
-    SILType ret = typeConverter.getLoweredType(pattern, linMapTupleType,
+    return typeConverter.getLoweredType(pattern, linMapTupleType,
                                         TypeExpansionContext::minimal());
-    llvm::errs() << "Lowered Type: " << ret << '\n';
-    return ret;
   }
 
   /// Returns the branching trace enum associated with the given original block.

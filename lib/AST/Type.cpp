@@ -4918,8 +4918,6 @@ TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
     auto capturedArgsType = resultType;
     auto tangentOfCapturedArgs =
         capturedArgsType->getAutoDiffTangentSpace(lookupConformance)->getType();
-    llvm::errs() << "CapturedArgsType = " << capturedArgsType << '\n';
-    llvm::errs() << "Tangent Of CapturedArgsType = " << tangentOfCapturedArgs << '\n';
     return cache(TangentSpace::getTangentVector(tangentOfCapturedArgs));
   } else {
     llvm::errs() << "not a differentiable closure: ";
