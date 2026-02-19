@@ -96,11 +96,11 @@ SILFunctionType::ExtInfo SILFunctionType::getSubstLifetimeDependencies(
   return origExtInfo;
 }
 
-CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
-  auto mutableThis = const_cast<SILFunctionType*>(this);
+CanSILFunctionType getUnsubstitutedTypeImpl(SILFunctionType *mutableThis, std::function<CanType(CanType)> substComponentType) {
+  //auto mutableThis = const_cast<SILFunctionType*>(this);
 
   // If we have no substitutions, there's nothing to do.
-  if (!hasPatternSubstitutions() && !hasInvocationSubstitutions())
+  if (!mutableThis->hasPatternSubstitutions() && !mutableThis->hasInvocationSubstitutions())
     return CanSILFunctionType(mutableThis);
 
   // Otherwise, substitute the component types.
@@ -109,6 +109,64 @@ CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
   SmallVector<SILYieldInfo, 4> yields;
   SmallVector<SILResultInfo, 4> results;
   std::optional<SILResultInfo> errorResult;
+  
+  for (auto param : mutableThis->getParameters()) {
+    params.push_back(param.map(substComponentType));
+  }
+  
+  for (auto yield : mutableThis->getYields()) {
+    yields.push_back(yield.map(substComponentType));
+  }
+  
+  for (auto result : mutableThis->getResults()) {
+    results.push_back(result.map(substComponentType));
+  }
+  
+  if (auto error = mutableThis->getOptionalErrorResult()) {
+    errorResult = error->map(substComponentType);
+  }
+
+  auto signature = mutableThis->isPolymorphic() ? mutableThis->getInvocationGenericSignature()
+                                   : CanGenericSignature();
+
+  auto extInfo = mutableThis->getSubstLifetimeDependencies(
+      signature, mutableThis->getExtInfo(), mutableThis->getASTContext(), params, yields, results);
+
+  return SILFunctionType::get(signature,
+                              extInfo,
+                              mutableThis->getCoroutineKind(),
+                              mutableThis->getCalleeConvention(),
+                              params, yields, results, errorResult,
+                              SubstitutionMap(),
+                              SubstitutionMap(),
+                              mutableThis->getASTContext(),
+                              mutableThis->getWitnessMethodConformanceOrInvalid());
+}
+
+CanSILFunctionType getUnsubstitutedTypeWithTC(SILFunctionType *SFT, TypeConverter &TC) {
+  auto subs = SFT->getCombinedSubstitutions();
+  auto substComponentType = [&](CanType type) {
+    if (!type->hasTypeParameter()) return type;
+    return SILType::getPrimitiveObjectType(type)
+             .subst(TC, subs).getASTType();
+  };
+
+  return getUnsubstitutedTypeImpl(SFT, substComponentType);
+}
+
+CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
+  auto mutableThis = const_cast<SILFunctionType*>(this);
+
+  // // If we have no substitutions, there's nothing to do.
+  // if (!hasPatternSubstitutions() && !hasInvocationSubstitutions())
+  //   return CanSILFunctionType(mutableThis);
+
+  // // Otherwise, substitute the component types.
+
+  // SmallVector<SILParameterInfo, 4> params;
+  // SmallVector<SILYieldInfo, 4> yields;
+  // SmallVector<SILResultInfo, 4> results;
+  // std::optional<SILResultInfo> errorResult;
 
   auto subs = getCombinedSubstitutions();
   auto substComponentType = [&](CanType type) {
@@ -116,38 +174,40 @@ CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
     return SILType::getPrimitiveObjectType(type)
              .subst(M, subs).getASTType();
   };
-  
-  for (auto param : getParameters()) {
-    params.push_back(param.map(substComponentType));
-  }
-  
-  for (auto yield : getYields()) {
-    yields.push_back(yield.map(substComponentType));
-  }
-  
-  for (auto result : getResults()) {
-    results.push_back(result.map(substComponentType));
-  }
-  
-  if (auto error = getOptionalErrorResult()) {
-    errorResult = error->map(substComponentType);
-  }
 
-  auto signature = isPolymorphic() ? getInvocationGenericSignature()
-                                   : CanGenericSignature();
+  return getUnsubstitutedTypeImpl(mutableThis, substComponentType);
 
-  auto extInfo = getSubstLifetimeDependencies(
-      signature, getExtInfo(), getASTContext(), params, yields, results);
+  // for (auto param : getParameters()) {
+  //   params.push_back(param.map(substComponentType));
+  // }
 
-  return SILFunctionType::get(signature,
-                              extInfo,
-                              getCoroutineKind(),
-                              getCalleeConvention(),
-                              params, yields, results, errorResult,
-                              SubstitutionMap(),
-                              SubstitutionMap(),
-                              mutableThis->getASTContext(),
-                              getWitnessMethodConformanceOrInvalid());
+  // for (auto yield : getYields()) {
+  //   yields.push_back(yield.map(substComponentType));
+  // }
+
+  // for (auto result : getResults()) {
+  //   results.push_back(result.map(substComponentType));
+  // }
+
+  // if (auto error = getOptionalErrorResult()) {
+  //   errorResult = error->map(substComponentType);
+  // }
+
+  // auto signature = isPolymorphic() ? getInvocationGenericSignature()
+  //                                  : CanGenericSignature();
+
+  // auto extInfo = getSubstLifetimeDependencies(
+  //     signature, getExtInfo(), getASTContext(), params, yields, results);
+
+  // return SILFunctionType::get(signature,
+  //                             extInfo,
+  //                             getCoroutineKind(),
+  //                             getCalleeConvention(),
+  //                             params, yields, results, errorResult,
+  //                             SubstitutionMap(),
+  //                             SubstitutionMap(),
+  //                             mutableThis->getASTContext(),
+  //                             getWitnessMethodConformanceOrInvalid());
 }
 
 bool SILFunctionType::isSupportedAsDifferentiableClosure() const {
@@ -806,15 +866,26 @@ static CanSILFunctionType getAutoDiffPullbackType(
   // Given a type, returns its formal SIL result info.
   auto getTangentResultConventionForOriginalParameter =
       [&](CanType tanType,
-          ParameterConvention origParamConv) -> ResultConvention {
+          ParameterConvention origParamConv, CanGenericSignature sigForClosure) -> ResultConvention {
     llvm::errs() << "getTangentResultConventionForOriginalParameter 00\n";
     tanType->print(llvm::errs());
     llvm::errs() << "\ngetTangentResultConventionForOriginalParameter 01\n";
     originalFnTy->print(llvm::errs());
     llvm::errs() << "\ngetTangentResultConventionForOriginalParameter 02\n";
+    if (originalFnTy->getSubstGenericSignature())
+      originalFnTy->getSubstGenericSignature()->print(llvm::errs());
+    else
+      llvm::errs() << "NULL";
+    llvm::errs() << "\ngetTangentResultConventionForOriginalParameter 03\n";
 
     auto sig = buildDifferentiableGenericSignature(
-      originalFnTy->getSubstGenericSignature(), tanType, origTypeOfAbstraction);
+      sigForClosure ? sigForClosure : originalFnTy->getSubstGenericSignature(), tanType, origTypeOfAbstraction);
+
+    if (sig)
+      sig->print(llvm::errs());
+    else
+      llvm::errs() << "NULL";
+    llvm::errs() << "\ngetTangentResultConventionForOriginalParameter 04\n";
 
     tanType = tanType->getReducedType(sig);
     AbstractionPattern pattern(sig, tanType);
@@ -914,12 +985,21 @@ static CanSILFunctionType getAutoDiffPullbackType(
     auto paramTanType = getAutoDiffTangentTypeForLinearMap(
         param.getInterfaceType(), lookupConformance,
         substGenericParams, substReplacements, ctx);
+    llvm::errs() << "param.getInterfaceType(): ";
+    param.getInterfaceType().print(llvm::errs());
+    llvm::errs() << '\n';
+    CanGenericSignature sig;
+    if (auto *silFunctionType = param.getInterfaceType()->getAs<SILFunctionType>()) {
+      assert(silFunctionType->isSupportedAsDifferentiableClosure());
+      sig = silFunctionType->getSubstGenericSignature();
+    }
     auto resultTanConvention = getTangentResultConventionForOriginalParameter(
         // FIXME(rdar://82549134): Use `resultTanType` to compute it instead.
         param.getInterfaceType()
             ->getAutoDiffTangentSpace(lookupConformance)
             ->getCanonicalType(),
-        param.getConvention());
+        param.getConvention(),
+        sig);
     pullbackResults.push_back({paramTanType, resultTanConvention});
   }
 
@@ -1083,45 +1163,164 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
       continue;
     }
 
-    // Right now, we only support closures capturing exactly one argument with
-    // the type equal to the result type.
-    // TODO: support arbitrary captured argument types and result types.
-    auto singleResultType =
-        silFunctionType->getSingleResult().getInterfaceType();
-    auto singleParamType = singleResultType;
-    SmallVector<SILParameterInfo, 1> singleParam;
-    singleParam.emplace_back(singleParamType,
-                             ParameterConvention::Direct_Unowned);
-    SmallVector<SILResultInfo, 1> singleResult;
-    singleResult.emplace_back(singleResultType, ResultConvention::Unowned);
 
-    // TODO: support non-empty substitution map
-    CanSILFunctionType pullbackType = SILFunctionType::get(
-        silFunctionType->getInvocationGenericSignature(), ExtInfo(),
-        SILCoroutineKind::None, silFunctionType->getCalleeConvention(),
-        singleParam, {}, singleResult, std::nullopt,
-        silFunctionType->getPatternSubstitutions(),
-        silFunctionType->getInvocationSubstitutions(),
-        ///*invocationSubstitutions*/ SubstitutionMap(),
-        silFunctionType->getASTContext());
+    auto genSig =
+        silFunctionType->getSubstGenericSignature();
+
+
+    //{
+      auto singleResultType =
+          silFunctionType->getSingleResult().getInterfaceType();
+      auto singleParamType = singleResultType;
+      //silFunctionType = silFunctionType->getUnsubstitutedType(original->getModule());
+      llvm::errs() << "getUnsubstitutedTypeWithTC BEFORE ";
+      silFunctionType->print(llvm::errs());;
+      silFunctionType = getUnsubstitutedTypeWithTC(silFunctionType, TC);
+      llvm::errs() << "\ngetUnsubstitutedTypeWithTC AFTER ";
+      silFunctionType->print(llvm::errs());
+      llvm::errs() << "\n";
+      singleResultType =
+          silFunctionType->getSingleResult().getInterfaceType();
+      singleParamType = singleResultType;
+
+
+      llvm::SmallVector<AnyFunctionType::Param, 1> params = {
+                                                       AnyFunctionType::Param(singleParamType)};
+
+
+      AnyFunctionType *astFnTy;
+      if (genSig) {
+        // FIXME: Verify ExtInfo state is correct, not working by accident.
+        GenericFunctionType::ExtInfo info;
+        astFnTy = GenericFunctionType::get(
+            genSig, params, singleResultType,//silFnTy->getAllResultsInterfaceType().getASTType(),
+            info);
+      } else {
+        FunctionType::ExtInfo info;
+        astFnTy = FunctionType::get(
+            params, singleResultType,//silFnTy->getAllResultsInterfaceType().getASTType(),
+            info);
+      }
+
+      Type resultType =
+          astFnTy->hasArchetype() ? astFnTy->mapTypeOutOfEnvironment() : astFnTy;
+
+      CanType canType = resultType->getCanonicalType()->getReducedType(
+            genSig);
+
+      llvm::errs() << "canType for pullbackType: " << canType << '\n';
+
+      Lowering::AbstractionPattern pattern(genSig, canType);
+      SILType ret = TC.getLoweredType(pattern, canType,
+                                          TypeExpansionContext::minimal());
+
+      llvm::errs() << "ret for pullbackType: " << ret << '\n';
+
+      CanSILFunctionType pullbackType = ret.getAs<SILFunctionType>();
+
+      llvm::errs() << "pullbackType: " << pullbackType << '\n';
+    //}
+
+
+  //   {
+
+  //     llvm::errs() << "getAutoDiffDerivativeFunctionType 00\n";
+  //     silFunctionType->print(llvm::errs());
+  //     llvm::errs() << "\ngetAutoDiffDerivativeFunctionType 01\n";
+  //     this->print(llvm::errs());
+  //     llvm::errs() << "\ngetAutoDiffDerivativeFunctionType 02\n";
+  //     silFunctionType->getInvocationGenericSignature().print(llvm::errs());
+  //     llvm::errs() << "\ngetAutoDiffDerivativeFunctionType 03\n";
+  //     silFunctionType->getInvocationSubstitutions().dump(llvm::errs());
+  //     llvm::errs() << "\ngetAutoDiffDerivativeFunctionType 04\n";
+  //     silFunctionType->getPatternGenericSignature().print(llvm::errs());
+  //     llvm::errs() << "\ngetAutoDiffDerivativeFunctionType 05\n";
+  //     silFunctionType->getPatternSubstitutions().dump(llvm::errs());
+  //     llvm::errs() << "\ngetAutoDiffDerivativeFunctionType 06\n";
+  //     this->getInvocationGenericSignature().print(llvm::errs());
+  //     llvm::errs() << "\ngetAutoDiffDerivativeFunctionType 07\n";
+  //     this->getInvocationSubstitutions().dump(llvm::errs());
+  //     llvm::errs() << "\ngetAutoDiffDerivativeFunctionType 08\n";
+  //     this->getPatternGenericSignature().print(llvm::errs());
+  //     llvm::errs() << "\ngetAutoDiffDerivativeFunctionType 09\n";
+  //     this->getPatternSubstitutions().dump(llvm::errs());
+  //     llvm::errs() << "\ngetAutoDiffDerivativeFunctionType 10\n";
+  //     derivativeFnInvocationGenSig.print(llvm::errs());
+  //     llvm::errs() << "\ngetAutoDiffDerivativeFunctionType 11\n";
+
+
+  //     // Right now, we only support closures capturing exactly one argument with
+  //     // the type equal to the result type.
+  //     // TODO: support arbitrary captured argument types and result types.
+  //     auto singleResultType =
+  //         silFunctionType->getSingleResult().getInterfaceType();
+  //     auto singleParamType = singleResultType;
+  //     SmallVector<SILParameterInfo, 1> singleParam;
+  //     if (singleParamType->hasTypeParameter())
+  //       singleParam.emplace_back(singleParamType,
+  //                                ParameterConvention::Indirect_In_Guaranteed);
+  //     else
+  //       singleParam.emplace_back(singleParamType,
+  //                                ParameterConvention::Direct_Unowned);
+  //     SmallVector<SILResultInfo, 1> singleResult;
+  //     singleResult.emplace_back(singleResultType, silFunctionType->getSingleResult().getConvention());// ResultConvention::Unowned);
+
+  //     // TODO: support non-empty substitution map
+  //     CanSILFunctionType pullbackType = SILFunctionType::get(
+  //         //silFunctionType->getInvocationGenericSignature(),
+  //         CanGenericSignature(),
+  //         //  derivativeFnInvocationGenSig,
+  //         ExtInfo(),
+  //         SILCoroutineKind::None, silFunctionType->getCalleeConvention(),
+  //         singleParam, {}, singleResult, std::nullopt,
+  //         silFunctionType->getPatternSubstitutions(),
+  //         //silFunctionType->getInvocationSubstitutions(),
+  //         /*invocationSubstitutions*/ SubstitutionMap(),
+  //         silFunctionType->getASTContext());
+
+  //   }
 
     SmallVector<SILResultInfo, 2> vjpResults;
     vjpResults.emplace_back(silFunctionType->getSingleResult());
     vjpResults.emplace_back(pullbackType, ResultConvention::Owned);
 
     CanSILFunctionType vjpType = SILFunctionType::get(
-        silFunctionType->getInvocationGenericSignature(),
+        //silFunctionType->getInvocationGenericSignature(),
+        CanGenericSignature(),
+        //  derivativeFnInvocationGenSig,
         silFunctionType->getExtInfo(), silFunctionType->getCoroutineKind(),
         silFunctionType->getCalleeConvention(),
         silFunctionType->getParameters(), silFunctionType->getYields(),
         vjpResults, silFunctionType->getOptionalErrorResult(),
         silFunctionType->getPatternSubstitutions(),
-        silFunctionType->getInvocationSubstitutions(),
-        ///*invocationSubstitutions*/ SubstitutionMap(),
+        //silFunctionType->getInvocationSubstitutions(),
+        /*invocationSubstitutions*/ SubstitutionMap(),
         silFunctionType->getASTContext(),
         silFunctionType->getWitnessMethodConformanceOrInvalid());
 
+    // auto derivativeGenSig = this->getSubstGenericSignature();
+    // Lowering::AbstractionPattern pattern(derivativeGenSig, vjpType);
+    // llvm::errs() << "ABSTRACTION PATTERN 00 BEGIN\n";
+    // pattern.print(llvm::errs());
+    // llvm::errs() << "\nABSTRACTION PATTERN 00 MIDDLE 00\n";
+    // pattern.getType().print(llvm::errs());
+    // llvm::errs() << "\nABSTRACTION PATTERN 00 MIDDLE 01\n";
+    // derivativeGenSig.print(llvm::errs());
+    // llvm::errs() << "\nABSTRACTION PATTERN 00 END\n";
+
+
+    // vjpType->getUnsubstitutedType(vjpType);
+    // SILType ret = TC.getLoweredType(pattern, vjpType,
+    //                                     TypeExpansionContext::minimal());
+    // llvm::errs() << "LOWERED 00\n";
+    // ret.print(llvm::errs());
+    // llvm::errs() << "\nLOWERED 01\n";
+    // ret.getASTType().print(llvm::errs());
+    // llvm::errs() << "\nLOWERED 02\n";
+
+
     newParameters.emplace_back(vjpType, param.getConvention());
+    //newParameters.emplace_back(ret.getASTType(), param.getConvention());
   }
   // Reabstraction thunks have a function-typed parameter (the function to
   // reabstract) as their last parameter. Reabstraction thunk JVPs/VJPs have a
