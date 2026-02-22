@@ -983,6 +983,14 @@ public:
     errorOccurred = true;
   }
 
+  void visitConvertFunctionInst(ConvertFunctionInst *cfi) {
+    llvm::errs() << "PullbackCloner::visitConvertFunction: ";
+    cfi->dump();
+    llvm::errs() << '\n';
+    visitValueOwnershipInst(cfi);
+    //SILInstructionVisitor::visitConvertFunctionInst(cfi);
+  }
+
   void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *cetnei) {
     visitValueOwnershipInst(cetnei);
   }
@@ -993,12 +1001,31 @@ public:
       return;
     }
 
+
     auto *bb = pai->getParent();
-    const Operand &op = pai->getArgumentOperands().front();
-    SILValue val = op.get();
-    assert(getTangentValueCategory(pai) == SILValueCategory::Object);
-    auto adj = getAdjointValue(bb, pai);
-    addAdjointValue(bb, val, adj, pai->getLoc());
+    switch (getTangentValueCategory(pai)) {
+    case SILValueCategory::Object: {
+      auto adj = getAdjointValue(bb, pai);
+      const Operand &op = pai->getArgumentOperands().front();
+      SILValue val = op.get();
+      addAdjointValue(bb, val, adj, pai->getLoc());
+      break;
+    }
+    case SILValueCategory::Address: {
+      auto adjDest = getAdjointBuffer(bb, pai);
+      addToAdjointBuffer(bb, pai->getArgumentOperands().front().get(), adjDest, pai->getLoc());
+      builder.emitZeroIntoBuffer(pai->getLoc(), adjDest, IsNotInitialization);
+      break;
+    }
+    }
+
+
+    // auto *bb = pai->getParent();
+    // const Operand &op = pai->getArgumentOperands().front();
+    // SILValue val = op.get();
+    // assert(getTangentValueCategory(pai) == SILValueCategory::Object);
+    // auto adj = getAdjointValue(bb, pai);
+    // addAdjointValue(bb, val, adj, pai->getLoc());
   }
 
   /// Handle `apply` instruction.

@@ -793,7 +793,48 @@ public:
     auto *newPai = getBuilder().createPartialApply(
         loc, vjpValue, pai->getSubstitutionMap(), vjpArgs, pai->getCalleeConvention());
 
+    llvm::errs() << "VJP: CREATE PAI ";
+    newPai->print(llvm::errs());
+    llvm::errs() << '\n';
+
     mapValue(pai, newPai);
+  }
+
+  void visitConvertFunctionInst(ConvertFunctionInst *cfi) {
+    llvm::errs() << "VJPCloner::visitConvertFunctionInst " << *cfi << '\n';
+    llvm::errs() << "parent fn begin\n";
+    cfi->getParent()->getParent()->print(llvm::errs());
+    llvm::errs() << "\nparent fn end\n";
+    if (auto *pai = llvm::dyn_cast_or_null<PartialApplyInst>(cfi->getOperand().getDefiningInstruction())) {
+      if (pai->isSupportedAsDifferentiableClosure()) {
+        llvm::errs() << "PAI for ConvertFunctionInst is differentiable closure " << *pai << "\n";
+        PartialApplyInst *newPAI = llvm::dyn_cast<PartialApplyInst>(getOpValue(pai).getDefiningInstruction());
+        llvm::errs() << "new PAI: " << *newPAI << "\n";
+        SILFunctionType *fnTypeFrom = getOpValue(cfi->getOperand())->getType().getAs<SILFunctionType>();
+        llvm::errs() << "fnTypeFrom: ";
+        fnTypeFrom->print(llvm::errs());
+        llvm::errs() << '\n';
+        llvm::errs() << "fnTypeFrom->getInvocationSubstitutions(): " << fnTypeFrom->getInvocationSubstitutions() << '\n';
+        llvm::errs() << "fnTypeFrom->getInvocationGenericSignature(): " << fnTypeFrom->getInvocationGenericSignature() << '\n';
+        llvm::errs() << "fnTypeFrom->getPatternSubstitutions(): " << fnTypeFrom->getPatternSubstitutions() << '\n';
+        llvm::errs() << "fnTypeFrom->getPatternGenericSignature(): " << fnTypeFrom->getPatternGenericSignature() << '\n';
+        llvm::errs() << "fnTypeFrom->getUnsubstitutedType(): " << fnTypeFrom->getUnsubstitutedType(getModule()) << '\n';
+        SILFunction *parentFn = cfi->getParent()->getParent();
+        CanType loweredRValueType = parentFn->getLoweredRValueType(fnTypeFrom->getCanonicalType());
+        llvm::errs() << "loweredRValueType: " << loweredRValueType << '\n';
+
+        auto *newCfi = getBuilder().createConvertFunction(cfi->getLoc(), getOpValue(pai), /*TODO*/ getOpValue(pai)->getType() /*cfi->getType()*/, cfi->withoutActuallyEscaping());
+
+        llvm::errs() << "VJP: CREATE CONVERT FUNCTION ";
+        newCfi->print(llvm::errs());
+        llvm::errs() << '\n';
+
+        mapValue(cfi, newCfi);
+        return;
+      }
+    }
+
+    swift::SILCloner<swift::autodiff::VJPCloner::Implementation>::visitConvertFunctionInst(cfi);
   }
 
   void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *cetnei) {
@@ -843,6 +884,10 @@ public:
           getBuilder().createApply(ai->getLoc(), origCallee, ai->getSubstitutionMap()/*SubstitutionMap()*/,
                                    vjpArgs, ai->getApplyOptions());
 
+      llvm::errs() << "CREATED VJP CALL: ";
+      vjpCall->print(llvm::errs());
+      llvm::errs() << '\n';
+
       // Get the VJP results (original results and pullback).
       SmallVector<SILValue, 8> vjpDirectResults;
       extractAllElements(vjpCall, getBuilder(), vjpDirectResults);
@@ -858,6 +903,12 @@ public:
       pullbackValues[ai->getParent()].push_back(pullback);
 
       return;
+    } else {
+      llvm::errs() << "VJPCloner::visitApplyInst - not a diff closure: ";
+      ai->getCallee()
+          ->getType()
+          .getAs<SILFunctionType>()->print(llvm::errs());
+      llvm::errs() << '\n';
     }
 
     // If callee is `array.uninitialized_intrinsic`, do standard cloning.
@@ -1823,6 +1874,7 @@ bool VJPCloner::Implementation::run() {
   // Generate pullback code.
   PullbackCloner PullbackCloner(cloner);
   if (PullbackCloner.run()) {
+    llvm::errs() << "PULLBACK CLONER ERROR " << original->getName() << '\n';
     errorOccurred = true;
   }
   if (!errorOccurred) {

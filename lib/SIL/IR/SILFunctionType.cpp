@@ -155,12 +155,18 @@ bool SILFunctionType::isSupportedAsDifferentiableClosure() const {
   // type equal to the result type. No other arguments except the captured one
   // are supported.
   // TODO: support arbitrary captured and non-captured arguments types.
-  if (getNumParameters() != 0)
+  if (getNumParameters() != 0) {
+    llvm::errs() << "isSupportedAsDifferentiableClosure false 00\n";
     return false;
-  if (getNumResults() != 1)
+  }
+  if (getNumResults() != 1) {
+    llvm::errs() << "isSupportedAsDifferentiableClosure false 01\n";
     return false;
-  if (hasErrorResult())
+  }
+  if (hasErrorResult()) {
+    llvm::errs() << "isSupportedAsDifferentiableClosure false 02\n";
     return false;
+  }
 
   //this->getd
 
@@ -176,8 +182,10 @@ bool SILFunctionType::isSupportedAsDifferentiableClosure() const {
 
   auto *differentiableProtocol =
          getASTContext().getProtocol(KnownProtocolKind::Differentiable);
+  // MYTODO: can the protocol be null? e.g. if we do not have module imported
   assert(differentiableProtocol != nullptr);
   auto conf = swift::lookupConformance(resultType, differentiableProtocol);
+  llvm::errs() << "isSupportedAsDifferentiableClosure: return " << (int)(!conf.isInvalid()) << '\n';
   return !conf.isInvalid();
 
   // if (resultType->hasTypeParameter()) {
@@ -1150,16 +1158,75 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
         llvm::errs() << "get pullback type 00, substitutions = " << substitutions << '\n';
       }
 
+    ResultConvention singleResultConv = silFunctionType->getSingleResult().getConvention();
+    ParameterConvention singleParamConv;
+    switch (singleResultConv) {
+      case ResultConvention::Unowned:
+      case ResultConvention::UnownedInnerPointer:
+      case ResultConvention::Owned:
+      case ResultConvention::Autoreleased:
+        // TODO
+        // if (props.isAddressOnly()) {
+        //   conv = ParameterConvention::Indirect_In_Guaranteed;
+        // } else {
+        //   conv = props.isTrivial() ? ParameterConvention::Direct_Unowned
+        //                            : ParameterConvention::Direct_Guaranteed;
+        // }
+        singleParamConv = ParameterConvention::Direct_Unowned;
+        break;
+      case ResultConvention::Pack:
+        singleParamConv = ParameterConvention::Pack_Guaranteed;
+        break;
+      case ResultConvention::Indirect:
+        singleParamConv = ParameterConvention::Indirect_In_Guaranteed;
+        break;
+      case ResultConvention::GuaranteedAddress:
+      case ResultConvention::Guaranteed:
+      case ResultConvention::Inout:
+        llvm_unreachable("borrow/mutate accessor not yet implemented");
+      }
+
     SmallVector<SILParameterInfo, 1> singleParam;
     singleParam.emplace_back(paramTanType,//singleParamType,
-                             paramTanType->hasTypeParameter() ?
-                               ParameterConvention::Indirect_In_Guaranteed :
-                               ParameterConvention::Direct_Unowned);
+                             singleParamConv);
+    //                          paramTanType->hasTypeParameter() ?
+    //                            ParameterConvention::Indirect_In_Guaranteed :
+    //                            ParameterConvention::Direct_Unowned);
+
+
+    // switch () {
+    // case ParameterConvention::Direct_Owned:
+    // case ParameterConvention::Direct_Guaranteed:
+    // case ParameterConvention::Direct_Unowned:
+    //   singleResultConv = ResultConvention::Unowned;
+    //   // TODO
+    //   // if (props.isAddressOnly()) {
+    //   //   singleResultConv = ResultConvention::Indirect;
+    //   // } else {
+    //   //   singleResultConv = props.isTrivial() ? ResultConvention::Unowned
+    //   //                            : ResultConvention::Owned;
+    //   // }
+    //   break;
+    // case ParameterConvention::Pack_Owned:
+    // case ParameterConvention::Pack_Guaranteed:
+    // case ParameterConvention::Pack_Inout:
+    //   singleResultConv = ResultConvention::Pack;
+    //   break;
+    // case ParameterConvention::Indirect_In:
+    // case ParameterConvention::Indirect_Inout:
+    // case ParameterConvention::Indirect_In_Guaranteed:
+    // case ParameterConvention::Indirect_InoutAliasable:
+    // case ParameterConvention::Indirect_In_CXX:
+    //   singleResultConv = ResultConvention::Indirect;
+    //   break;
+    // }
+
     SmallVector<SILResultInfo, 1> singleResult;
     singleResult.emplace_back(resultTanType,//singleResultType,
-                              resultTanType->hasTypeParameter() ?
-                                ResultConvention::Indirect :
-                                ResultConvention::Unowned);
+                              singleResultConv);
+    // resultTanType->hasTypeParameter() ?
+    //                             ResultConvention::Indirect :
+    //                             ResultConvention::Unowned);
 
     // // TODO: support non-empty substitution map
     // CanSILFunctionType pullbackType = SILFunctionType::get(
