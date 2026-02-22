@@ -76,6 +76,8 @@ FunctionTypeInfo SILGenFunction::getClosureTypeInfo(AbstractClosureExpr *expr) {
     }
   }
 
+  llvm::errs() << "getClosureTypeInfo: " << fnType << '\n';
+
   return getFunctionTypeInfo(fnType);
 }
 

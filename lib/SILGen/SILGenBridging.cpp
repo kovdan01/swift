@@ -553,6 +553,7 @@ ManagedValue SILGenFunction::emitFuncToBlock(SILLocation loc,
   // All different substitutions of a function type can share a thunk.
   auto loweredFuncUnsubstTy = loweredFuncTy->getUnsubstitutedType(SGM.M);
   if (loweredFuncUnsubstTy != loweredFuncTy) {
+    llvm::errs() << "AAAAA createConvertFunction 01\n";
     fn = B.createConvertFunction(loc, fn,
                          SILType::getPrimitiveObjectType(loweredFuncUnsubstTy));
   }
@@ -1019,6 +1020,7 @@ SILGenFunction::emitBlockToFunc(SILLocation loc,
       loweredFuncTy->getCalleeConvention());
 
   if (loweredFuncUnsubstTy != loweredFuncTyWithoutNoEscape) {
+    llvm::errs() << "AAAAA createConvertFunction 02\n";
     thunkedFn = B.createConvertFunction(loc, thunkedFn,
                 SILType::getPrimitiveObjectType(loweredFuncTyWithoutNoEscape));
   }

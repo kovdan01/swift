@@ -569,6 +569,7 @@ ManagedValue Transform::transform(ManagedValue v,
 
   //  - functions
   if (auto outputFnType = dyn_cast<AnyFunctionType>(outputSubstType)) {
+    llvm::errs() << "transformFunction: loweredResultTy = " << loweredResultTy << '\n';
     auto inputFnType = cast<AnyFunctionType>(inputSubstType);
     return transformFunction(v,
                              inputOrigType, inputFnType,
@@ -723,6 +724,7 @@ ManagedValue Transform::transform(ManagedValue v,
                                              loweredOpenedType,
                                              AccessKind::Read);
       payload = payload.ensurePlusOne(SGF, Loc);
+      llvm::errs() << "transform 00: " << loweredResultTy << '\n';
       return transform(payload,
                        AbstractionPattern::getOpaque(),
                        openedType,
@@ -2938,6 +2940,7 @@ static ManagedValue applyTrivialConversions(SILGenFunction &SGF,
         || abiDiffA == TypeConverter::ABIDifference::CompatibleCallingConvention
         || abiDiffB == TypeConverter::ABIDifference::CompatibleRepresentation
         || abiDiffB == TypeConverter::ABIDifference::CompatibleCallingConvention) {
+        llvm::errs() << "AAAAA createConvertFunction 03\n";
         return SGF.B.createConvertFunction(loc, innerValue, outerType);
       }
     }
@@ -5800,6 +5803,7 @@ static ManagedValue createThunk(SILGenFunction &SGF,
   CanSILFunctionType sourceType;
   if (substSourceType->getPatternSubstitutions()) {
     sourceType = substSourceType->getUnsubstitutedType(SGF.SGM.M);
+    llvm::errs() << "AAAAA createConvertFunction 11\n";
     fn = SGF.B.createConvertFunction(loc, fn,
                                    SILType::getPrimitiveObjectType(sourceType));
   } else {
@@ -5897,6 +5901,7 @@ static ManagedValue createThunk(SILGenFunction &SGF,
   if (expectedType != substExpectedType) {
     auto substEscapingExpectedType = substExpectedType
       ->getWithExtInfo(substExpectedType->getExtInfo().withNoEscape(false));
+    llvm::errs() << "AAAAA createConvertFunction 10\n";
     thunkedFn = SGF.B.createConvertFunction(loc, thunkedFn,
                     SILType::getPrimitiveObjectType(substEscapingExpectedType));
   }
@@ -6124,6 +6129,7 @@ SILGenFunction::createWithoutActuallyEscapingClosure(
   auto noEscapeValue = noEscapingFunctionValue.copy(*this, loc);
   // Convert away function type substitutions.
   if (noEscapingFnTy != noEscapingFnSubstTy) {
+    llvm::errs() << "AAAAA createConvertFunction 09\n";
     noEscapeValue = B.createConvertFunction(loc, noEscapeValue,
                               SILType::getPrimitiveObjectType(noEscapingFnTy));
   }
@@ -6141,6 +6147,7 @@ SILGenFunction::createWithoutActuallyEscapingClosure(
 
   // Convert to the substituted escaping type.
   if (escapingFnTy != escapingFnSubstTy) {
+    llvm::errs() << "AAAAA createConvertFunction 08\n";
     thunkedFn = B.createConvertFunction(loc, thunkedFn,
                             SILType::getPrimitiveObjectType(escapingFnSubstTy));
   }
@@ -6240,6 +6247,7 @@ ManagedValue SILGenFunction::getThunkedAutoDiffLinearMap(
     if (linearMapFnType != linearMapUnsubstFnType) {
       auto unsubstType =
           SILType::getPrimitiveObjectType(linearMapUnsubstFnType);
+      llvm::errs() << "AAAAA createConvertFunction 07\n";
       linearMap = B.createConvertFunction(loc, linearMap, unsubstType,
                                           /*withoutActuallyEscaping*/ false);
     }
@@ -6738,6 +6746,7 @@ SILFunction *SILGenModule::getOrCreateCustomDerivativeThunk(
   auto targetLinearMapUnsubstFnType =
       SILType::getPrimitiveObjectType(targetLinearMapFnType);
   if (linearMap.getType() != targetLinearMapUnsubstFnType) {
+    llvm::errs() << "AAAAA createConvertFunction 06\n";
     linearMap = thunkSGF.B.createConvertFunction(
         loc, linearMap, targetLinearMapUnsubstFnType,
         /*withoutActuallyEscaping*/ false);
@@ -6828,6 +6837,14 @@ ManagedValue Transform::transformFunction(ManagedValue fn,
   // escaping->noescape conversion.
   if (fnType != newFnType) {
     SILType resTy = SILType::getPrimitiveObjectType(newFnType);
+    llvm::errs() << "AAAAA createConvertFunction 05\n";
+    llvm::errs() << "fnType: ";
+    fnType->print(llvm::errs());
+    llvm::errs() << "\nexpectedFnType: ";
+    expectedFnType->print(llvm::errs());
+    llvm::errs() << "\nnewFnType: ";
+    newFnType->print(llvm::errs());
+    llvm::errs() << "\n";
     fn = SGF.B.createConvertFunction(Loc, fn.ensurePlusOne(SGF, Loc), resTy);
   }
 
@@ -6867,6 +6884,8 @@ SILGenFunction::emitOrigToSubstValue(SILLocation loc, ManagedValue v,
                                      CanType substType,
                                      SILType loweredResultTy,
                                      SGFContext ctxt) {
+
+  llvm::errs() << "emitOrigToSubstValue 02: " << loweredResultTy << '\n';
   return emitTransformedValue(loc, v,
                               origType, substType,
                               AbstractionPattern(substType), substType,
@@ -6879,6 +6898,7 @@ RValue SILGenFunction::emitOrigToSubstValue(SILLocation loc, RValue &&v,
                                             AbstractionPattern origType,
                                             CanType substType,
                                             SGFContext ctxt) {
+  llvm::errs() << "emitOrigToSubstValue 01: " << substType << '\n';
   return emitOrigToSubstValue(loc, std::move(v), origType, substType,
                               getLoweredType(substType), ctxt);
 }
@@ -6887,6 +6907,7 @@ RValue SILGenFunction::emitOrigToSubstValue(SILLocation loc, RValue &&v,
                                             CanType substType,
                                             SILType loweredResultTy,
                                             SGFContext ctxt) {
+  llvm::errs() << "emitOrigToSubstValue 00: " << loweredResultTy << '\n';
   return emitTransformedValue(loc, std::move(v),
                               origType, substType,
                               AbstractionPattern(substType), substType,
@@ -6911,6 +6932,8 @@ SILGenFunction::emitSubstToOrigValue(SILLocation loc, ManagedValue v,
                                      CanType substType,
                                      SILType loweredResultTy,
                                      SGFContext ctxt) {
+
+  llvm::errs() << "emitSubstToOrigValue 00: " << loweredResultTy << '\n';
   return emitTransformedValue(loc, v,
                               AbstractionPattern(substType), substType,
                               origType, substType,
@@ -6933,6 +6956,7 @@ RValue SILGenFunction::emitSubstToOrigValue(SILLocation loc, RValue &&v,
                                             CanType substType,
                                             SILType loweredResultTy,
                                             SGFContext ctxt) {
+  llvm::errs() << "emitSubstToOrigValue 01: " << loweredResultTy << '\n';
   return emitTransformedValue(loc, std::move(v),
                               AbstractionPattern(substType), substType,
                               origType, substType,
@@ -6992,6 +7016,7 @@ SILGenFunction::emitTransformedValue(SILLocation loc, ManagedValue v,
                                      CanType outputSubstType,
                                      SILType outputLoweredTy,
                                      SGFContext ctxt) {
+  llvm::errs() << "emitTransformedValue 00: " << outputLoweredTy << '\n';
   return Transform(*this, loc).transform(v,
                                          inputOrigType,
                                          inputSubstType,
@@ -7008,6 +7033,7 @@ SILGenFunction::emitTransformedValue(SILLocation loc, RValue &&v,
                                      CanType outputSubstType,
                                      SILType outputLoweredTy,
                                      SGFContext ctxt) {
+  llvm::errs() << "emitTransformedValue 01: " << outputLoweredTy << '\n';
   return Transform(*this, loc).transform(std::move(v),
                                          inputOrigType,
                                          inputSubstType,
@@ -7783,6 +7809,7 @@ ManagedValue SILGenFunction::emitActorIsolationErasureThunk(
 
   if (loweredIsolatedType->getPatternSubstitutions()) {
     loweredIsolatedType = loweredIsolatedType->getUnsubstitutedType(SGM.M);
+    llvm::errs() << "AAAAA createConvertFunction 04\n";
     func = B.createConvertFunction(
         loc, func, SILType::getPrimitiveObjectType(loweredIsolatedType));
   }
@@ -7832,6 +7859,7 @@ ManagedValue SILGenFunction::emitActorIsolationErasureThunk(
   if (expectedType != loweredNonIsolatedType) {
     auto escapingExpectedType = loweredNonIsolatedType->getWithExtInfo(
         loweredNonIsolatedType->getExtInfo().withNoEscape(false));
+    llvm::errs() << "AAAAA createConvertFunction 04\n";
     thunkedFn = B.createConvertFunction(
         loc, thunkedFn, SILType::getPrimitiveObjectType(escapingExpectedType));
   }

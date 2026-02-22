@@ -88,6 +88,7 @@ SILGenBuilder::createConvertFunction(SILLocation loc, ManagedValue fn,
   CleanupCloner cloner(*this, fn);
   SILValue result = createConvertFunction(loc, fn.forward(getSILGenFunction()),
                                           resultTy, withoutActuallyEscaping);
+  llvm::errs() << "SILGenBuilder::createConvertFunction: " << *result << '\n';
   return cloner.clone(result);
 }
 

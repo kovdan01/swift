@@ -322,14 +322,18 @@ public:
 
 inline bool isApplySiteOfDifferentiableClosure(FullApplySite applySite) {
   llvm::errs() << "isApplySiteOfDifferentiableClosure: ";
+  applySite.dump();
+  llvm::errs() << '\n';
+  llvm::errs() << "callee: " << applySite.getCallee() << '\n';
   if (applySite.getKind() != FullApplySiteKind::ApplyInst) {
     llvm::errs() << "false\n";
     return false;
   }
   auto callee = cast<ApplyInst>(applySite.getInstruction())->getCallee();
   auto silFunctionType = callee->getType().getAs<SILFunctionType>();
-  llvm::errs() << "resurn isSupportedAsDifferentiableClosure()\n";
-  return silFunctionType->isSupportedAsDifferentiableClosure();
+  bool flag = silFunctionType->isSupportedAsDifferentiableClosure();
+  llvm::errs() << "return isSupportedAsDifferentiableClosure() = " << (int)flag << "\n";
+  return flag;//silFunctionType->isSupportedAsDifferentiableClosure();
 }
 
 } // end namespace swift

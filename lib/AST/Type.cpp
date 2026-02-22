@@ -4818,12 +4818,20 @@ static CanType getResultTypeForSupportedDifferentiableClosure(TypeBase *type) {
 
       //return interfaceType->getReducedType(silFunctionType->getSubstGenericSignature());
 
+      llvm::errs() << "getResultTypeForSupportedDifferentiableClosure 00 ";
+      silFunctionType->print(llvm::errs());
+
       CanType resultType = silFunctionType->getSingleResult().getInterfaceType();
+      llvm::errs() << "\ngetResultTypeForSupportedDifferentiableClosure 01 " << resultType << '\n';
 
       if (resultType->hasTypeParameter()) {
+        llvm::errs() << "getResultTypeForSupportedDifferentiableClosure 02 hasTypeParameter!\n";
         assert(silFunctionType->hasPatternSubstitutions());
         auto subst = silFunctionType->getPatternSubstitutions();
         resultType = subst.getReplacementTypes().front()->getCanonicalType();
+        llvm::errs() << "\ngetResultTypeForSupportedDifferentiableClosure 03 " << subst << '\n';
+        llvm::errs() << "\ngetResultTypeForSupportedDifferentiableClosure 04 " << resultType << '\n';
+
 
         //        // for (unsigned i : indices(subst.getReplacementTypes())) {
         //        //   auto origType =
