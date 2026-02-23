@@ -962,6 +962,7 @@ SILType LinearFunctionExtractInst::
 getExtracteeType(
     SILValue function, LinearDifferentiableFunctionTypeComponent extractee,
     SILModule &module) {
+  llvm::errs() << "getExtracteeType: " << function << "\n";
   auto fnTy = function->getType().castTo<SILFunctionType>();
   assert(fnTy->getDifferentiabilityKind() == DifferentiabilityKind::Linear);
   auto originalFnTy = fnTy->getWithoutDifferentiability();

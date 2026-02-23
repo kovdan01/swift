@@ -3133,6 +3133,7 @@ public:
   DifferentiableFunctionExtractInst *createDifferentiableFunctionExtract(
       SILLocation Loc, NormalDifferentiableFunctionTypeComponent Extractee,
       SILValue Function, std::optional<SILType> ExtracteeType = std::nullopt) {
+    llvm::errs() << "createDifferentiableFunctionExtract: " << Function << '\n';
     return createDifferentiableFunctionExtract(
         Loc, Extractee, Function, OwnershipKind::Guaranteed, ExtracteeType);
   }
