@@ -767,6 +767,29 @@ public:
     auto origCallee = getOpValue(pai->getCallee());
     auto loc = pai->getLoc();
 
+    // MYTODO: maybe just assert empty subst map?
+    // if (pai->getSubstitutionMap().empty()) {
+    //   llvm::errs() << "VJPCloner::visitPartialApply empty subs\n";
+    //   origCallee = getBuilder().emitCopyValueOperation(loc, origCallee);
+    // } else {
+    //   auto substMap = getOpSubstitutionMap(pai->getSubstitutionMap());
+    //   llvm::errs() << "VJPCloner::visitPartialApply subst map: " << substMap << "\n";
+    //   auto vjpPartialApply = getBuilder().createPartialApply(
+    //       pai->getLoc(), origCallee, substMap, {},
+    //       ParameterConvention::Direct_Guaranteed);
+    //   origCallee = vjpPartialApply;
+    //   //originalFnTy = origCallee->getType().castTo<SILFunctionType>();
+
+    //   // TODO
+    //   // // Diagnose if new original function type is non-differentiable.
+    //   // if (diagnoseNondifferentiableOriginalFunctionType(originalFnTy,
+    //   //                                                   ai, origCallee, config)) {
+    //   //   llvm::errs() << "VJPCloner::visitPartialApply ERROR OCCURRED 00\n";
+    //   //   errorOccurred = true;
+    //   //   return;
+    //   // }
+    // }
+
     // Right now, we only support closures capturing exactly one argument with
     // the type equal to the result type.
     // TODO: do not hardcode indexes.
@@ -852,6 +875,9 @@ public:
   // If an `apply` has active results or active inout arguments, replace it
   // with an `apply` of its VJP.
   void visitApplyInst(ApplyInst *ai) {
+    llvm::errs() << "VJPCloner::visitApply BEGIN: ";
+    ai->dump();
+    llvm::errs() << "\n";
     // If callee should not be differentiated, do standard cloning.
     if (!pullbackInfo.shouldDifferentiateApplySite(ai)) {
       LLVM_DEBUG(getADDebugStream() << "No active results:\n" << *ai << '\n');
@@ -875,6 +901,29 @@ public:
       nestedApplyInfo = info;
 
       auto origCallee = getOpValue(ai->getCallee());
+
+      if (ai->getSubstitutionMap().empty()) {
+        llvm::errs() << "VJPCloner::visitApply closure empty subs\n";
+        origCallee = getBuilder().emitCopyValueOperation(ai->getLoc(), origCallee);
+      } else {
+        auto substMap = getOpSubstitutionMap(ai->getSubstitutionMap());
+        llvm::errs() << "VJPCloner::visitApply closure subst map: " << substMap << "\n";
+        auto vjpPartialApply = getBuilder().createPartialApply(
+            ai->getLoc(), origCallee, substMap, {},
+            ParameterConvention::Direct_Guaranteed);
+        origCallee = vjpPartialApply;
+        //originalFnTy = origCallee->getType().castTo<SILFunctionType>();
+
+               // TODO
+               // // Diagnose if new original function type is non-differentiable.
+               // if (diagnoseNondifferentiableOriginalFunctionType(originalFnTy,
+               //                                                   ai, origCallee, config)) {
+               //   llvm::errs() << "VJPCloner::visitPartialApply ERROR OCCURRED 00\n";
+               //   errorOccurred = true;
+               //   return;
+               // }
+      }
+
       llvm::SmallVector<SILValue, 8> vjpArgs;
 
       for (auto origArg : ai->getArguments())
@@ -1102,6 +1151,7 @@ public:
     auto *vjpCall = getBuilder().createApply(loc, vjpValue, SubstitutionMap(),
                                              vjpArgs, ai->getApplyOptions());
     LLVM_DEBUG(getADDebugStream() << "Applied vjp function\n" << *vjpCall);
+    llvm::errs() << "TYPE OF LAST ARG OF VJP APPLY: " << vjpArgs.back()->getType() << '\n';
     builder.emitDestroyValueOperation(loc, vjpValue);
 
     // Get the VJP results (original results and pullback).
