@@ -815,11 +815,11 @@ static CanSILFunctionType getAutoDiffPullbackType(
   auto getTangentResultConventionForOriginalParameter =
       [&](CanType tanType,
           ParameterConvention origParamConv) -> ResultConvention {
-    // llvm::errs() << "getTangentResultConventionForOriginalParameter 00\n";
-    // tanType->print(llvm::errs());
-    // llvm::errs() << "\ngetTangentResultConventionForOriginalParameter 01\n";
-    // originalFnTy->print(llvm::errs());
-    // llvm::errs() << "\ngetTangentResultConventionForOriginalParameter 02\n";
+    llvm::errs() << "getTangentResultConventionForOriginalParameter 00\n";
+    tanType->print(llvm::errs());
+    llvm::errs() << "\ngetTangentResultConventionForOriginalParameter 01\n";
+    originalFnTy->print(llvm::errs());
+    llvm::errs() << "\ngetTangentResultConventionForOriginalParameter 02\n";
 
     auto sig = buildDifferentiableGenericSignature(
       originalFnTy->getSubstGenericSignature(), tanType, origTypeOfAbstraction);
@@ -1033,9 +1033,6 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
     CanGenericSignature derivativeFnInvocationGenSig,
     bool isReabstractionThunk,
     CanType origTypeOfAbstraction) {
-  llvm::errs() << "\n\ngetAutoDiffDerivativeFunctionType BEGIN: ";
-  this->print(llvm::errs());
-  llvm::errs() << "\n";
   assert(parameterIndices);
   assert(!parameterIndices->isEmpty() && "Parameter indices must not be empty");
   assert(resultIndices);
@@ -1080,7 +1077,7 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
   llvm::errs() << "constrainedOriginalFnTy = ";
   constrainedOriginalFnTy->print(llvm::errs());
   llvm::errs() << "\norigTypeOfAbstraction = " << origTypeOfAbstraction << '\n';
-  llvm::errs() << "vjp/jvp closureType = " << closureType << '\n';
+  llvm::errs() << "closureType = " << closureType << '\n';
   
   // Compute the derivative function parameters.
   SmallVector<SILParameterInfo, 4> newParameters;

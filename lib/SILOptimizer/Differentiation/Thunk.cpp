@@ -366,10 +366,6 @@ SILValue reabstractFunction(
     SILBuilder &builder, SILOptFunctionBuilder &fb, SILLocation loc,
     SILValue fn, CanSILFunctionType toType,
     std::function<SubstitutionMap(SubstitutionMap)> remapSubstitutions) {
-  llvm::errs() << "reabstractFunction BEGIN: fn: " << fn << '\n';
-  llvm::errs() << "fn type: " << fn->getType() << '\n';
-  // MYTODO: assert that noescape is false (except for diff closures)
-  bool isNoescape = fn->getType().getAs<SILFunctionType>()->isNoEscape();
   auto &module = *fn->getModule();
   auto fromType = fn->getType().getAs<SILFunctionType>();
   auto unsubstFromType = fromType->getUnsubstitutedType(module);
@@ -380,48 +376,19 @@ SILValue reabstractFunction(
                                               unsubstFromType, unsubstToType);
   auto *thunkRef = builder.createFunctionRef(loc, thunk);
 
-  // MYTODO: noescape?
-  if (fromType != unsubstFromType) {
-    llvm::errs() << "fromType: " << fromType << '\n';
-    llvm::errs() << "unsubstFromType: " << unsubstFromType << '\n';
-    llvm::errs() << "unsubstFromType primitive: " << SILType::getPrimitiveObjectType(unsubstFromType) << '\n';
-    llvm::errs() << "unsubstFromType isNoEscape: " << (int)unsubstFromType->isNoEscape() << '\n';
+  if (fromType != unsubstFromType)
     fn = builder.createConvertFunction(
         loc, fn, SILType::getPrimitiveObjectType(unsubstFromType),
         /*withoutActuallyEscaping*/ false);
-  }
 
   fn = builder.createPartialApply(
       loc, thunkRef, remapSubstitutions(thunk->getForwardingSubstitutionMap()),
       {fn}, fromType->getCalleeConvention());
 
-  if (isNoescape) {
-    llvm::errs() << "reabstractFunction: no escape conversion\n";
-    SILType type = fn->getType();
-    auto functionType = type.getAs<SILFunctionType>();
-    auto noEscapeFunctionType =
-        swift::SILType::getPrimitiveObjectType(functionType->getWithExtInfo(
-            functionType->getExtInfo().withNoEscape(true)));
-    fn = builder.createConvertEscapeToNoEscape(
-        loc, fn,
-        noEscapeFunctionType, /*MYTODO isLifetimeGuaranteed=*/true);
-    llvm::errs() << "fn noescape: " << fn << '\n';
-    llvm::errs() << "fn noescape type: " << fn->getType() << '\n';
-  }
-
-  if (toType != unsubstToType) {
-    llvm::errs() << "reabstractFunction: CREATE CONVERT\n";
-    llvm::errs() << "toType: " << toType << '\n';
-    llvm::errs() << "unsubstToType: " << unsubstToType << '\n';
-    llvm::errs() << "toType primitive: " << SILType::getPrimitiveObjectType(toType) << '\n';
-    llvm::errs() << "toType isNoEscape: " << (int)toType->isNoEscape() << '\n';
-    llvm::errs() << "fn type: " << fn->getType() << '\n';
-
+  if (toType != unsubstToType)
     fn = builder.createConvertFunction(loc, fn,
                                        SILType::getPrimitiveObjectType(toType),
-                                           toType->isNoEscape());
-                                       ///*withoutActuallyEscaping*/ false);
-  }
+                                       /*withoutActuallyEscaping*/ false);
 
   return fn;
 }
