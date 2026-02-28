@@ -342,6 +342,10 @@ static bool isArchetypeValidInFunction(ArchetypeType *A, const SILFunction *F) {
     if (A->getGenericEnvironment() == genericEnv)
       return true;
 
+  llvm::errs() << "INVALID ARCHETYPE: ";
+  A->print(llvm::errs());
+  llvm::errs() << '\n';
+
   return false;
 }
 

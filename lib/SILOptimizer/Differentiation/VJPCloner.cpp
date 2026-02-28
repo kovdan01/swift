@@ -753,6 +753,7 @@ public:
 
   // TODO: additional tests for cases when `partial_apply` result is wrapped in
   // `convert_escape_to_noescape`
+  // TODO: what if supported as diff closure, but do not need to do that?
   void visitPartialApplyInst(PartialApplyInst *pai) {
     if (!pai->isSupportedAsDifferentiableClosure()) {
       TypeSubstCloner::visitPartialApplyInst(pai);
@@ -798,6 +799,10 @@ public:
         IndexSubset::get(context.getASTContext(), 1, {0}),
         IndexSubset::get(context.getASTContext(), 1, {0}), origCallee);
 
+    llvm::errs() << "VJPCloner for pai: diffFuncInst: ";
+    diffFuncInst->print(llvm::errs());
+    llvm::errs() << "\ntype of diffFuncInst: " << diffFuncInst->getType() << '\n';
+
     context.getDifferentiableFunctionInstWorklist().push_back(diffFuncInst);
 
     SILValue vjpValue;
@@ -806,15 +811,36 @@ public:
           auto extractedVJP = getBuilder().createDifferentiableFunctionExtract(
               loc, NormalDifferentiableFunctionTypeComponent::VJP,
               borrowedADFunc);
+
+          llvm::errs() << "VJPCloner for pai: extractedVJP: ";
+          extractedVJP->print(llvm::errs());
+          llvm::errs() << "\ntype of extractedVJP: " << extractedVJP->getType() << '\n';
+
           vjpValue = getBuilder().emitCopyValueOperation(loc, extractedVJP);
         });
     getBuilder().emitDestroyValueOperation(loc, diffFuncInst);
 
+    // TODO: 1?
     llvm::SmallVector<SILValue, 8> vjpArgs;
     for (auto origArg : pai->getArguments())
       vjpArgs.push_back(getOpValue(origArg));
+
+    // TODO: would it be correct?
+    assert(vjpArgs.size() == 1);
+
+    // // TODO: ensure that we only have 1 type param in vjp
+    // CanGenericSignature genSig = vjpValue->getType().getAs<SILFunctionType>()->getSubstGenericSignature();
+    // llvm::SmallVector<Type, 1> replacementTypes = {vjpArgs.front()->getType().getASTType()};
+
+    // llvm::errs() << "genSig->getNumConformanceRequirements(): " << genSig->getNumConformanceRequirements() << '\n';
+
+
+    // auto substMap = SubstitutionMap::get(genSig,
+    //                                      ArrayRef<Type>(replacementTypes.data(), replacementTypes.size()),
+    //                                      /*TODO conformance*/ArrayRef<ProtocolConformanceRef>{});
+
     auto *newPai = getBuilder().createPartialApply(
-        loc, vjpValue, pai->getSubstitutionMap(), vjpArgs, pai->getCalleeConvention());
+        loc, vjpValue, getOpSubstitutionMap(pai->getSubstitutionMap())/*substMap*//*pai->getSubstitutionMap()*/, vjpArgs, pai->getCalleeConvention());
 
     llvm::errs() << "VJP: CREATE PAI ";
     newPai->print(llvm::errs());
@@ -930,7 +956,7 @@ public:
         vjpArgs.push_back(getOpValue(origArg));
 
       auto *vjpCall =
-          getBuilder().createApply(ai->getLoc(), origCallee, ai->getSubstitutionMap()/*SubstitutionMap()*/,
+          getBuilder().createApply(ai->getLoc(), origCallee, getOpSubstitutionMap(ai->getSubstitutionMap())/*SubstitutionMap()*/,
                                    vjpArgs, ai->getApplyOptions());
 
       llvm::errs() << "CREATED VJP CALL: ";
@@ -1143,8 +1169,57 @@ public:
         vjpFnTy->getNumParameters() + vjpFnTy->getNumIndirectFormalResults();
     vjpArgs.reserve(numVJPArgs);
     // Collect substituted arguments.
-    for (auto origArg : ai->getArguments())
-      vjpArgs.push_back(getOpValue(origArg));
+    for (auto [argIdx, origArg] : llvm::enumerate(ai->getArguments())) {
+      auto vjpArg = getOpValue(origArg);
+      llvm::errs() << "ai->getNumIndirectResults() = " << ai->getNumIndirectResults() << '\n';
+      if (argIdx >= ai->getNumIndirectResults()) {
+        auto paramType = vjpValue->getType().getAs<SILFunctionType>()->getParameters()[argIdx - ai->getNumIndirectResults()].getInterfaceType();
+
+        // auto paramType = vjpValue->getType().getAs<SILFunctionType>()->getParameters()[argIdx - ai->getNumIndirectResults()].getSILStorageInterfaceType();
+
+        llvm::errs() << "\nVJP TRUE PARAM TYPE: ";
+        paramType->print(llvm::errs());
+        llvm::errs() << "\nVJP ARG TYPE: ";
+        vjpArg->getType().print(llvm::errs());
+        llvm::errs() << "\n";
+        if (vjpArg->getType().is<SILFunctionType>()) {
+          auto silFunctionType = vjpArg->getType().getAs<SILFunctionType>();
+          llvm::errs() << "MAYBE NEED REABSTRACTION?\n";
+          llvm::errs() << "VJP ARG SIL TYPE: ";
+          silFunctionType.print(llvm::errs());
+          llvm::errs() << "\nVJP ARG TYPE: ";
+          silFunctionType->getCanonicalType()->print(llvm::errs());
+          llvm::errs() << "\n";
+
+          if (silFunctionType->getCanonicalType() != paramType) {
+            llvm::errs() << "DO REABSTRACT!\n";
+            // Set non-reabstracted original pullback type in nested apply info.
+            SILOptFunctionBuilder fb(context.getTransform());
+            vjpArg = reabstractFunction(
+                getBuilder(), fb, ai->getLoc(), vjpArg,
+                //getLoweredType(paramType).castTo<SILFunctionType>(),
+                vjpValue->getType().getAs<SILFunctionType>()->getParameters()[argIdx - ai->getNumIndirectResults()].getSILStorageInterfaceType().getAs<SILFunctionType>(),
+                [this](SubstitutionMap subs) -> SubstitutionMap {
+                  return this->getOpSubstitutionMap(subs);
+                });
+            llvm::errs() << "NEW VJP ARG AFTER REABSTRACT: ";
+            llvm::errs() << vjpArg << '\n';
+          }
+
+
+
+        }
+          // // Set non-reabstracted original pullback type in nested apply info.
+          // nestedApplyInfo.originalPullbackType = actualPullbackType;
+          // SILOptFunctionBuilder fb(context.getTransform());
+          // pullback = reabstractFunction(
+          //     getBuilder(), fb, ai->getLoc(), pullback, loweredPullbackType,
+          //     [this](SubstitutionMap subs) -> SubstitutionMap {
+          //       return this->getOpSubstitutionMap(subs);
+          //     });
+      }
+      vjpArgs.push_back(vjpArg);
+    }
     assert(vjpArgs.size() == numVJPArgs);
     // Apply the VJP.
     // The VJP should be specialized, so no substitution map is necessary.
