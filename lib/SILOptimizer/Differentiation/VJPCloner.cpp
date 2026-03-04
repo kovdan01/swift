@@ -1910,7 +1910,8 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
   auto pbGenericSig = vjp->getLoweredFunctionType()->getInvocationGenericSignature();
   auto *pbGenericEnv = pbGenericSig.getGenericEnvironment();
 
-  llvm::errs() << "createEmptyPullback pbGenericSig = " << pbGenericSig << "\n";
+  llvm::errs() << "createEmptyPullback invocation sig = " << pbGenericSig << "\n";
+  llvm::errs() << "createEmptyPullback generic sig = " << vjp->getLoweredFunctionType()->getSubstGenericSignature() << "\n";
 
   auto pbType = SILFunctionType::get(
       pbGenericSig, SILExtInfo::getThin(), origTy->getCoroutineKind(),
