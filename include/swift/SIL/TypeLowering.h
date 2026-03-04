@@ -837,7 +837,6 @@ public:
   const TypeLowering &
   getTypeLowering(Type t, TypeExpansionContext forExpansion) {
     AbstractionPattern pattern(t->getCanonicalType());
-    //llvm::errs() << "getTypeLowering: pattern: " << pattern << '\n';
     return getTypeLowering(pattern, t, forExpansion);
   }
 
@@ -894,9 +893,6 @@ public:
                                       TypeExpansionContext forExpansion);
 
   CanType getLoweredRValueType(TypeExpansionContext context, Type t) {
-    llvm::errs() << "getLoweredRValueType BEGIN\n";
-    llvm::errs() << "type: " << t << '\n';
-    llvm::errs() << "\ngetLoweredRValueType END\n";
     return getLoweredType(t, context).getRawASTType();
   }
 

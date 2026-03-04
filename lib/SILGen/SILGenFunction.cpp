@@ -1112,10 +1112,8 @@ SILGenFunction::emitClosureValue(SILLocation loc, SILDeclRef constant,
           !actualType->isSendable() && resultType->isSendable()) {
         auto extInfo = resultType->getExtInfo().withSendable(false);
         resultType = resultType->getWithExtInfo(extInfo);
-        llvm::errs() << "AAAAA createConvertFunction 00 BEGIN\n";
         result = B.createConvertFunction(
             loc, result, SILType::getPrimitiveObjectType(resultType));
-        llvm::errs() << "AAAAA createConvertFunction 00 END\n";
       }
     }
   }

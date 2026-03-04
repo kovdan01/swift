@@ -3423,11 +3423,7 @@ RValue RValueEmitter::visitAbstractClosureExpr(AbstractClosureExpr *e,
   }
 
   // Otherwise, emit the expression using the simple type of the expression.
-  llvm::errs() << "visitAbstractClosureExpr 00 BEGIN: ";
-  e->dump(llvm::errs());
-  llvm::errs() << "\nvisitAbstractClosureExpr 00 END\n";
   auto info = SGF.getClosureTypeInfo(e);
-  llvm::errs() << "visitAbstractClosureExpr 01: " << info.ExpectedLoweredType << '\n';
   auto closure = emitClosureReference(e, info);
 
   return RValue(SGF, e, e->getType()->getCanonicalType(), closure);
@@ -3442,7 +3438,6 @@ RValueEmitter::emitClosureReference(AbstractClosureExpr *e,
   // Generate the closure value (if any) for the closure expr's function
   // reference.
   SILLocation loc = e;
-  llvm::errs() << "emitClosureReference: " << contextInfo.ExpectedLoweredType << '\n';
   return SGF.emitClosureValue(loc, SILDeclRef(e), contextInfo,
                               SubstitutionMap());
 }

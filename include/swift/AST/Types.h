@@ -726,14 +726,6 @@ public:
   /// the given generic signature.
   bool isBitwiseCopyable(GenericSignature sig);
 
-  // /// Returns true if this contextual type satisfies a conformance to
-  // /// Differentiable. If `tangentVectorEqualsSelf` is true, also check
-  // /// whether the given type satisfies `TangentVector == Self`.
-  // bool isDifferentiable(bool tangentVectorEqualsSelf = false);
-
-  // /// MYTODO
-  // bool isDifferentiable(GenericSignature sig, bool tangentVectorEqualsSelf = false);
-
   /// Are values of this type essentially just class references,
   /// possibly with some sort of additional information?
   ///
@@ -4047,8 +4039,6 @@ public:
   bool containsPackExpansionParam() const {
     return containsPackExpansionType(getParams());
   }
-
-  //bool isSupportedAsDifferentiableClosure() const;
 
   static bool containsPackExpansionType(ArrayRef<Param> params);
 
