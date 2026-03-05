@@ -121,6 +121,8 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
   auto thunkDeclType =
       thunkType->getWithExtInfo(thunkType->getExtInfo().withNoEscape(false));
 
+  llvm::errs() << "getOrCreateReabstractionThunk 00: " << thunkDeclType << "\n";
+
   auto fromInterfaceType = fromType->mapTypeOutOfEnvironment()->getCanonicalType();
   auto toInterfaceType = toType->mapTypeOutOfEnvironment()->getCanonicalType();
 
@@ -140,6 +142,8 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
   auto *entry = thunk->createBasicBlock();
   SILBuilder builder(entry);
   createEntryArguments(thunk);
+
+  llvm::errs() << "getOrCreateReabstractionThunk 10: " << *entry << "\n";
 
   SILFunctionConventions fromConv(fromType, module);
   SILFunctionConventions toConv(toType, module);
