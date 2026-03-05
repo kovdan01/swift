@@ -256,8 +256,23 @@ SILDifferentiabilityWitness *getOrCreateMinimalASTDifferentiabilityWitness(
 
 /// Creates arguments in the entry block based on the function type.
 inline void createEntryArguments(SILFunction *f) {
+  llvm::errs() << "createEntryArguments f lowered type: " << f->getLoweredFunctionType() << "\n";
   auto *entry = f->getEntryBlock();
   auto conv = f->getConventions();
+
+  llvm::errs() << "createEntryArguments conv.funcTy: " << conv.funcTy << "\n";
+  llvm::errs() << "createEntryArguments conv.funcTy.params BEGIN 00\n";
+  for (auto param : conv.funcTy->getParameters()) {
+    llvm::errs() << param.getInterfaceType() << "\n";
+  }
+  llvm::errs() << "createEntryArguments conv.funcTy.params END 00\n";
+
+  llvm::errs() << "createEntryArguments conv.funcTy.params BEGIN 01\n";
+  for (auto param : f->getLoweredFunctionType()->getParameters()) {
+    llvm::errs() << param.getInterfaceType() << "\n";
+  }
+  llvm::errs() << "createEntryArguments conv.funcTy.params END 01\n";
+
   auto &ctx = f->getASTContext();
   auto moduleDecl = f->getModule().getSwiftModule();
   assert((entry->getNumArguments() == 0 || conv.getNumSILArguments() == 0) &&
@@ -273,21 +288,30 @@ inline void createEntryArguments(SILFunction *f) {
   };
   for (auto indResTy :
        conv.getIndirectSILResultTypes(f->getTypeExpansionContext())) {
-    if (indResTy.hasArchetype())
+    if (indResTy.hasArchetype()) {
+      llvm::errs() << "createEntryArguments 00 " << indResTy << "\n";
       indResTy = indResTy.mapTypeOutOfEnvironment();
+    }
+    llvm::errs() << "createEntryArguments 01 " << indResTy << "\n";
     createFunctionArgument(f->mapTypeIntoEnvironment(indResTy).getAddressType());
   }
   if (auto indErrorResTy =
           conv.getIndirectErrorResultType(f->getTypeExpansionContext())) {
-    if (indErrorResTy.hasArchetype())
+    if (indErrorResTy.hasArchetype()) {
+      llvm::errs() << "createEntryArguments 10 " << indErrorResTy << "\n";
       indErrorResTy = indErrorResTy.mapTypeOutOfEnvironment();
+    }
+    llvm::errs() << "createEntryArguments 11 " << indErrorResTy << "\n";
     createFunctionArgument(
         f->mapTypeIntoEnvironment(indErrorResTy).getAddressType());
   }
 
   for (auto paramTy : conv.getParameterSILTypes(f->getTypeExpansionContext())) {
-    if (paramTy.hasArchetype())
+    if (paramTy.hasArchetype()) {
+      llvm::errs() << "createEntryArguments 20 " << paramTy << "\n";
       paramTy = paramTy.mapTypeOutOfEnvironment();
+    }
+    llvm::errs() << "createEntryArguments 21 " << paramTy << "\n";
     createFunctionArgument(f->mapTypeIntoEnvironment(paramTy));
   }
 }
