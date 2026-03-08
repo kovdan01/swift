@@ -1634,32 +1634,67 @@ SILCombiner::legacyVisitGlobalValueInst(GlobalValueInst *globalValue) {
 SILInstruction *
 SILCombiner::visitDifferentiableFunctionExtractInst(DifferentiableFunctionExtractInst *DFEI) {
   auto *DFI = dyn_cast<DifferentiableFunctionInst>(DFEI->getOperand());
-  if (!DFI)
-    return nullptr;
+  if (!DFI) {
+    if (!hasOwnership())
+      return nullptr;
+    auto *BBI = dyn_cast<BeginBorrowInst>(DFEI->getOperand());
+    if (!BBI)
+      return nullptr;
+    DFI = dyn_cast<DifferentiableFunctionInst>(BBI->getOperand());
+    if (!DFI)
+      return nullptr;
+  }
 
   if (!DFI->hasExtractee(DFEI->getExtractee()))
     return nullptr;
 
   SILValue newValue = DFI->getExtractee(DFEI->getExtractee());
 
+  auto originalInsertionPoint = Builder.getInsertionPoint();
+  Builder.setInsertionPoint(DFI); // MYTODO: diff fn is consuming?
+
+  if (hasOwnership() && newValue->getOwnershipKind() == OwnershipKind::Owned) {
+    SILValue newValueBeforeCopy = newValue;
+    newValue = Builder.emitCopyValueOperation(DFEI->getLoc(), newValueBeforeCopy);
+    Builder.emitDestroyValue(DFEI->getLoc(), newValueBeforeCopy);
+  }
+
   // If the type of the `differentiable_function` operand does not precisely
   // match the type of the original `differentiable_function_extract`,
   // create a `convert_function`.
+  bool needConvert = false;
   if (newValue->getType() != DFEI->getType()) {
     CanSILFunctionType opTI = newValue->getType().castTo<SILFunctionType>();
     CanSILFunctionType resTI = DFEI->getType().castTo<SILFunctionType>();
     if (!opTI->isABICompatibleWith(resTI, *DFEI->getFunction()).isCompatible())
       return nullptr;
 
-    std::tie(newValue, std::ignore) =
-      castValueToABICompatibleType(&Builder, parentTransform->getPassManager(),
-                                   DFEI->getLoc(),
-                                   newValue,
-                                   newValue->getType(), DFEI->getType(), {});
+    newValue = Builder.createConvertFunction(DFEI->getLoc(), newValue, DFEI->getType(),
+                                  /*WithoutActuallyEscaping=*/false);
+
+    needConvert = true;
   }
 
-  replaceInstUsesWith(*DFEI, newValue);
-  return eraseInstFromFunction(*DFEI);
+  Builder.setInsertionPoint(originalInsertionPoint);
+
+  if (hasOwnership()) {
+    OwnershipRAUWHelper helper(ownershipFixupContext, DFEI, newValue, /*respectLexicalFlags=*/ false);
+    assert(helper.isValid());
+    helper.perform();
+
+    if (needConvert) {
+      Operand *use = newValue->getSingleUse();
+      assert(use != nullptr); // MYTODO
+      assert(llvm::isa<CopyValueInst>(use->getUser()));
+      Builder.setInsertionPoint(use->getUser()->getNextInstruction());
+      Builder.emitDestroyValueOperation(DFEI->getLoc(), newValue);
+    }
+  } else {
+    replaceInstUsesWith(*DFEI, newValue);
+    eraseInstFromFunction(*DFEI);
+  }
+
+  return nullptr;
 }
 
 // Simplify `pack_length` with constant-length pack.
