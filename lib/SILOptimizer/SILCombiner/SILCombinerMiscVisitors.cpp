@@ -1634,8 +1634,14 @@ SILCombiner::legacyVisitGlobalValueInst(GlobalValueInst *globalValue) {
 SILInstruction *
 SILCombiner::visitDifferentiableFunctionExtractInst(DifferentiableFunctionExtractInst *DFEI) {
   auto *DFI = dyn_cast<DifferentiableFunctionInst>(DFEI->getOperand());
-  if (!DFI)
-    return nullptr;
+  if (!DFI) {
+    auto *BBI = dyn_cast<BeginBorrowInst>(DFEI->getOperand());
+    if (!BBI)
+      return nullptr;
+    DFI = dyn_cast<DifferentiableFunctionInst>(BBI->getOperand());
+    if (!DFI)
+      return nullptr;
+  }
 
   if (!DFI->hasExtractee(DFEI->getExtractee()))
     return nullptr;
