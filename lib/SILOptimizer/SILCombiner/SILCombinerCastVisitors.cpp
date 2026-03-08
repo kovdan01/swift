@@ -860,6 +860,15 @@ SILInstruction *SILCombiner::visitConvertEscapeToNoEscapeInst(
 
 SILInstruction *
 SILCombiner::visitConvertFunctionInst(ConvertFunctionInst *cfi) {
+
+  SILFunction *parentFn = cfi->getFunction();
+
+  // llvm::errs() << "visitConvertFunctionInst CFI: " << *cfi << "\n";
+  // llvm::errs() << "visitConvertFunctionInst 00 parentFn BEGIN " << parentFn->getName() << "\n";
+  // parentFn->print(llvm::errs());
+  // llvm::errs() << "\nvisitConvertFunctionInst 00 parentFn END " << parentFn->getName() << "\n";
+
+
   // If this conversion only changes substitutions, then rewrite applications
   // of the converted function as applications of the original.
   //
@@ -1045,5 +1054,10 @@ SILCombiner::visitConvertFunctionInst(ConvertFunctionInst *cfi) {
   // Replace a convert_function that only has refcounting uses with its
   // operand.
   tryEliminateOnlyOwnershipUsedForwardingInst(cfi, getInstModCallbacks());
+
+  // llvm::errs() << "visitConvertFunctionInst 01 parentFn BEGIN " << parentFn->getName() << "\n";
+  // parentFn->print(llvm::errs());
+  // llvm::errs() << "\nvisitConvertFunctionInst 01 parentFn END " << parentFn->getName() << "\n";
+
   return nullptr;
 }

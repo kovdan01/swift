@@ -285,6 +285,8 @@ public:
   SILInstruction *visitConvertFunctionInst(ConvertFunctionInst *CFI);
   SILInstruction *
   visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *Cvt);
+  // SILInstruction *
+  // visitDifferentiableFunctionInst(DifferentiableFunctionInst *DFI);
   SILInstruction *
   visitDifferentiableFunctionExtractInst(DifferentiableFunctionExtractInst *DFEI);
   

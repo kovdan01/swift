@@ -213,6 +213,9 @@ bool SILValueOwnershipChecker::isCompatibleDefUse(
                  << "Conv: " << ownershipKind << '\n'
                  << "Constraint:\n"
                  << constraint << '\n';
+    llvm::errs() << "PARENT FN BEGIN " << op->getFunction()->getName() << "\n";
+    op->getFunction()->print(llvm::errs());
+    llvm::errs() << "\nPARENT FN END " << op->getFunction()->getName() << "\n";
   });
   return false;
 }

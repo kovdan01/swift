@@ -1635,6 +1635,8 @@ SILInstruction *
 SILCombiner::visitDifferentiableFunctionExtractInst(DifferentiableFunctionExtractInst *DFEI) {
   auto *DFI = dyn_cast<DifferentiableFunctionInst>(DFEI->getOperand());
   if (!DFI) {
+    if (!hasOwnership())
+      return nullptr;
     auto *BBI = dyn_cast<BeginBorrowInst>(DFEI->getOperand());
     if (!BBI)
       return nullptr;
@@ -1646,7 +1648,16 @@ SILCombiner::visitDifferentiableFunctionExtractInst(DifferentiableFunctionExtrac
   if (!DFI->hasExtractee(DFEI->getExtractee()))
     return nullptr;
 
+  SILFunction *parentFn = DFEI->getFunction();
+
+  // llvm::errs() << "visitDifferentiableFunctionExtractInst DFEI: " << *DFEI << "\n";
+  // llvm::errs() << "visitDifferentiableFunctionExtractInst 00 parentFn BEGIN " << parentFn->getName() << "\n";
+  // parentFn->print(llvm::errs());
+  // llvm::errs() << "\nvisitDifferentiableFunctionExtractInst 00 parentFn END " << parentFn->getName() << "\n";
+
   SILValue newValue = DFI->getExtractee(DFEI->getExtractee());
+
+  newValue = Builder.emitCopyValueOperation(DFEI->getLoc(), newValue);
 
   // If the type of the `differentiable_function` operand does not precisely
   // match the type of the original `differentiable_function_extract`,
@@ -1657,16 +1668,52 @@ SILCombiner::visitDifferentiableFunctionExtractInst(DifferentiableFunctionExtrac
     if (!opTI->isABICompatibleWith(resTI, *DFEI->getFunction()).isCompatible())
       return nullptr;
 
+    SILValue newValueBeforeCast = newValue;
+
     std::tie(newValue, std::ignore) =
       castValueToABICompatibleType(&Builder, parentTransform->getPassManager(),
                                    DFEI->getLoc(),
                                    newValue,
                                    newValue->getType(), DFEI->getType(), {});
+
+    if (hasOwnership() && newValue != newValueBeforeCast) {
+      Operand *use = DFI->getSingleConsumingUse();
+      assert(use != nullptr);
+      auto *DVI = dyn_cast<DestroyValueInst>(use->getUser());
+      assert(DVI != nullptr);
+      Builder.setInsertionPoint(DVI);
+      Builder.emitDestroyValueOperation(DFEI->getLoc(), newValue);
+    }
   }
 
   replaceInstUsesWith(*DFEI, newValue);
-  return eraseInstFromFunction(*DFEI);
+  eraseInstFromFunction(*DFEI);
+
+  // llvm::errs() << "visitDifferentiableFunctionExtractInst 01 parentFn BEGIN " << parentFn->getName() << "\n";
+  // parentFn->print(llvm::errs());
+  // llvm::errs() << "\nvisitDifferentiableFunctionExtractInst 01 parentFn END " << parentFn->getName() << "\n";
+
+  return nullptr;
 }
+
+// SILInstruction *
+// SILCombiner::visitDifferentiableFunctionInst(DifferentiableFunctionInst *DFI) {
+//   std::size_t useCount = 0;
+//   for (Operand *use : DFI->getUses()) {
+//     ++useCount;
+//     if (useCount > 1)
+//       return nullptr;
+//   }
+//   // MYTODO: assert count 1?
+//   if (useCount == 0)
+//     return nullptr;
+
+//   Operand *use = *DFI->getUses().begin();
+//   auto *DVI = dyn_cast<DestroyValueInst>(use->getUser());
+//   assert(DVI != nullptr);
+//   eraseInstFromFunction(*DVI);
+//   return eraseInstFromFunction(*DFI);
+// }
 
 // Simplify `pack_length` with constant-length pack.
 //

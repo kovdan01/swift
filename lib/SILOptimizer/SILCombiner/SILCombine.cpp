@@ -592,9 +592,9 @@ static FunctionTest SILCombineVisitInstruction(
 bool SILCombiner::runOnFunction(SILFunction &F) {
   clear();
 
-  llvm::errs() << "SILCombiner::runOnFunction " << F.getName() << " BEGIN\n";
-  F.print(llvm::errs());
-  llvm::errs() << "\nSILCombiner::runOnFunction " << F.getName() << " END\n";
+  // llvm::errs() << "SILCombiner::runOnFunction " << F.getName() << " BEGIN\n";
+  // F.print(llvm::errs());
+  // llvm::errs() << "\nSILCombiner::runOnFunction " << F.getName() << " END\n";
 
 
   bool Changed = false;

@@ -84,6 +84,13 @@ static bool foldInverseReabstractionThunks(PartialApplyInst *PAI,
 }
 
 SILInstruction *SILCombiner::visitPartialApplyInst(PartialApplyInst *pai) {
+  // SILFunction *parentFn = pai->getFunction();
+  // llvm::errs() << "visitPartialApplyInst PAI: " << *pai << "\n";
+  // llvm::errs() << "visitPartialApplyInst 00 parentFn BEGIN " << parentFn->getName() << "\n";
+  // parentFn->print(llvm::errs());
+  // llvm::errs() << "\nvisitPartialApplyInst 00 parentFn END " << parentFn->getName() << "\n";
+
+
   // partial_apply without any substitutions or arguments is just a
   // thin_to_thick_function. thin_to_thick_function supports only thin operands.
   if (!pai->hasSubstitutions() && (pai->getNumArguments() == 0) &&
@@ -123,6 +130,10 @@ SILInstruction *SILCombiner::visitPartialApplyInst(PartialApplyInst *pai) {
   // was already done in tryOptimizeApplyOfPartialApply.
   if (tryDeleteDeadClosure(pai, getInstModCallbacks(), !argsAreKeptAlive))
     invalidatedStackNesting = true;
+
+  // llvm::errs() << "visitPartialApplyInst 01 parentFn BEGIN " << parentFn->getName() << "\n";
+  // parentFn->print(llvm::errs());
+  // llvm::errs() << "\nvisitPartialApplyInst 01 parentFn END " << parentFn->getName() << "\n";
 
   return nullptr;
 }
