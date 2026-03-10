@@ -1657,37 +1657,87 @@ SILCombiner::visitDifferentiableFunctionExtractInst(DifferentiableFunctionExtrac
 
   SILValue newValue = DFI->getExtractee(DFEI->getExtractee());
 
-  newValue = Builder.emitCopyValueOperation(DFEI->getLoc(), newValue);
+  //std::optional<OwnershipRAUWHelper> helper;
+  // if (hasOwnership()) {
+  //   helper = OwnershipRAUWHelper(ownershipFixupContext, DFEI, newValue, /*respectLexicalFlags=*/ false);
+  //   assert(helper->isValid());
+  // }
+
+  newValue->getOwnershipKind();
+
+  //newValue = Builder.emitCopyValueOperation(DFEI->getLoc(), newValue);
 
   // If the type of the `differentiable_function` operand does not precisely
   // match the type of the original `differentiable_function_extract`,
   // create a `convert_function`.
+  bool needConvert = false;
   if (newValue->getType() != DFEI->getType()) {
     CanSILFunctionType opTI = newValue->getType().castTo<SILFunctionType>();
     CanSILFunctionType resTI = DFEI->getType().castTo<SILFunctionType>();
     if (!opTI->isABICompatibleWith(resTI, *DFEI->getFunction()).isCompatible())
       return nullptr;
 
-    SILValue newValueBeforeCast = newValue;
+    //SILValue newValueBeforeCast = newValue;
 
-    std::tie(newValue, std::ignore) =
-      castValueToABICompatibleType(&Builder, parentTransform->getPassManager(),
-                                   DFEI->getLoc(),
-                                   newValue,
-                                   newValue->getType(), DFEI->getType(), {});
+    // if (hasOwnership()) {
+    //   newValue = helper->prepareReplacement();
+    //   // auto *transformedOper = Builder.createUncheckedBitwiseCast(
+    //   //     UBCI->getLoc(), replacement, UBCI->getType());
 
-    if (hasOwnership() && newValue != newValueBeforeCast) {
-      Operand *use = DFI->getSingleConsumingUse();
-      assert(use != nullptr);
-      auto *DVI = dyn_cast<DestroyValueInst>(use->getUser());
-      assert(DVI != nullptr);
-      Builder.setInsertionPoint(DVI);
-      Builder.emitDestroyValueOperation(DFEI->getLoc(), newValue);
-    }
+    //   // helper.perform(transformedOper);
+    //   // return nullptr;
+    // }
+
+    // std::tie(newValue, std::ignore) =
+    //   castValueToABICompatibleType(&Builder, parentTransform->getPassManager(),
+    //                                DFEI->getLoc(),
+    //                                newValue,
+    //                                newValue->getType(), DFEI->getType(), {});
+
+    newValue = Builder.createConvertFunction(DFEI->getLoc(), newValue, DFEI->getType(),
+                                  /*WithoutActuallyEscaping=*/false);
+
+    needConvert = true;
+
+    // if (hasOwnership()) {
+    //   helper->perform(newValue);
+    //   return nullptr;
+    // }
+
+    // if (hasOwnership() && newValue != newValueBeforeCast) {
+    //   Operand *use = DFI->getSingleConsumingUse();
+    //   assert(use != nullptr);
+    //   auto *DVI = dyn_cast<DestroyValueInst>(use->getUser());
+    //   assert(DVI != nullptr);
+    //   Builder.setInsertionPoint(DVI);
+    //   Builder.emitDestroyValueOperation(DFEI->getLoc(), newValue);
+    // }
   }
 
-  replaceInstUsesWith(*DFEI, newValue);
-  eraseInstFromFunction(*DFEI);
+  if (hasOwnership()) {
+    OwnershipRAUWHelper helper(ownershipFixupContext, DFEI, newValue, /*respectLexicalFlags=*/ false);
+    assert(helper.isValid());
+    helper.perform();
+
+    if (needConvert/* && newValue->getConsumingUses().empty()*/) {
+      Operand *use = newValue->getSingleUse();
+      if (use == nullptr) {
+        llvm::errs() << "FUNCTION BEGIN " << DFEI->getFunction()->getName() << "\n";
+        llvm::errs() << "NEW VALUE = " << newValue << "\n";
+        llvm::errs() << "DFEI = " << *DFEI << "\n";
+        DFEI->getFunction()->print(llvm::errs());
+        llvm::errs() << "FUNCTION END " << DFEI->getFunction()->getName() << "\n";
+        llvm::errs().flush();
+      }
+      assert(use != nullptr); // MYTODO
+      assert(llvm::isa<CopyValueInst>(use->getUser()));
+      Builder.setInsertionPoint(use->getUser());
+      Builder.emitDestroyValue(DFEI->getLoc(), newValue);
+    }
+  } else {
+    replaceInstUsesWith(*DFEI, newValue);
+    eraseInstFromFunction(*DFEI);
+  }
 
   // llvm::errs() << "visitDifferentiableFunctionExtractInst 01 parentFn BEGIN " << parentFn->getName() << "\n";
   // parentFn->print(llvm::errs());
