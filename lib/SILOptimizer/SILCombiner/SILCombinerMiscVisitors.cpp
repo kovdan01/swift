@@ -1657,15 +1657,31 @@ SILCombiner::visitDifferentiableFunctionExtractInst(DifferentiableFunctionExtrac
 
   SILValue newValue = DFI->getExtractee(DFEI->getExtractee());
 
+  // bool isTttf = false;
+  // if (auto *_ = llvm::dyn_cast_or_null<ThinToThickFunctionInst>(newValue.getDefiningInstruction())) {
+  //   isTttf = true;
+  //   llvm::errs() << "visitDifferentiableFunctionExtractInst 00 DFEI = " << *DFEI << "\n";
+  //   llvm::errs() << "PARENT FN 00 BEGIN " << parentFn->getName() << "\n";
+  //   parentFn->print(llvm::errs());
+  //   llvm::errs() << "PARENT FN 00 END " << parentFn->getName() << "\n";
+  // }
+
   //std::optional<OwnershipRAUWHelper> helper;
   // if (hasOwnership()) {
   //   helper = OwnershipRAUWHelper(ownershipFixupContext, DFEI, newValue, /*respectLexicalFlags=*/ false);
   //   assert(helper->isValid());
   // }
 
-  newValue->getOwnershipKind();
+  //newValue->getOwnershipKind();
 
-  //newValue = Builder.emitCopyValueOperation(DFEI->getLoc(), newValue);
+  auto originalInsertionPoint = Builder.getInsertionPoint();
+  Builder.setInsertionPoint(DFI); // MYTODO: diff fn is consuming?
+
+  if (hasOwnership() && newValue->getOwnershipKind() == OwnershipKind::Owned) {
+    SILValue newValueBeforeCopy = newValue;
+    newValue = Builder.emitCopyValueOperation(DFEI->getLoc(), newValueBeforeCopy);
+    Builder.emitDestroyValue(DFEI->getLoc(), newValueBeforeCopy);
+  }
 
   // If the type of the `differentiable_function` operand does not precisely
   // match the type of the original `differentiable_function_extract`,
@@ -1694,6 +1710,7 @@ SILCombiner::visitDifferentiableFunctionExtractInst(DifferentiableFunctionExtrac
     //                                newValue,
     //                                newValue->getType(), DFEI->getType(), {});
 
+
     newValue = Builder.createConvertFunction(DFEI->getLoc(), newValue, DFEI->getType(),
                                   /*WithoutActuallyEscaping=*/false);
 
@@ -1714,6 +1731,8 @@ SILCombiner::visitDifferentiableFunctionExtractInst(DifferentiableFunctionExtrac
     // }
   }
 
+  Builder.setInsertionPoint(originalInsertionPoint);
+
   if (hasOwnership()) {
     OwnershipRAUWHelper helper(ownershipFixupContext, DFEI, newValue, /*respectLexicalFlags=*/ false);
     assert(helper.isValid());
@@ -1731,18 +1750,19 @@ SILCombiner::visitDifferentiableFunctionExtractInst(DifferentiableFunctionExtrac
       }
       assert(use != nullptr); // MYTODO
       assert(llvm::isa<CopyValueInst>(use->getUser()));
-      Builder.setInsertionPoint(use->getUser());
-      Builder.emitDestroyValue(DFEI->getLoc(), newValue);
+      Builder.setInsertionPoint(use->getUser()->getNextInstruction());
+      Builder.emitDestroyValueOperation(DFEI->getLoc(), newValue);
     }
   } else {
     replaceInstUsesWith(*DFEI, newValue);
     eraseInstFromFunction(*DFEI);
   }
 
-  // llvm::errs() << "visitDifferentiableFunctionExtractInst 01 parentFn BEGIN " << parentFn->getName() << "\n";
-  // parentFn->print(llvm::errs());
-  // llvm::errs() << "\nvisitDifferentiableFunctionExtractInst 01 parentFn END " << parentFn->getName() << "\n";
-
+  // if (isTttf) {
+  //   llvm::errs() << "visitDifferentiableFunctionExtractInst 01 parentFn BEGIN " << parentFn->getName() << "\n";
+  //   parentFn->print(llvm::errs());
+  //   llvm::errs() << "\nvisitDifferentiableFunctionExtractInst 01 parentFn END " << parentFn->getName() << "\n";
+  // }
   return nullptr;
 }
 
