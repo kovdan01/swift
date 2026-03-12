@@ -716,6 +716,17 @@ public struct Builder {
     return notifyNew(bridged.createDestructureTuple(tuple.bridged).getAs(DestructureTupleInst.self))
   }
 
+//  public func createDifferentiableFunction(type: Type, elements: [Value]) -> StructInst {
+//    let structInst = elements.withBridgedValues { valuesRef in
+//      return bridged.createStruct(type.bridged, valuesRef)
+//    }
+//    return notifyNew(structInst.getAs(StructInst.self))
+//  }
+//
+//  public func createStructExtract(struct: Value, fieldIndex: Int) -> StructExtractInst {
+//    return notifyNew(bridged.createStructExtract(`struct`.bridged, fieldIndex).getAs(StructExtractInst.self))
+//  }
+
   public func createProjectBox(box: Value, fieldIndex: Int) -> ProjectBoxInst {
     return notifyNew(bridged.createProjectBox(box.bridged, fieldIndex).getAs(ProjectBoxInst.self))
   }

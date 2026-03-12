@@ -1632,7 +1632,7 @@ SILCombiner::legacyVisitGlobalValueInst(GlobalValueInst *globalValue) {
 // %jvp' = %jvp
 // %vjp' = %vjp
 SILInstruction *
-SILCombiner::visitDifferentiableFunctionExtractInst(DifferentiableFunctionExtractInst *DFEI) {
+SILCombiner::legacyVisitDifferentiableFunctionExtractInst(DifferentiableFunctionExtractInst *DFEI) {
   auto *DFI = dyn_cast<DifferentiableFunctionInst>(DFEI->getOperand());
   if (!DFI)
     return nullptr;

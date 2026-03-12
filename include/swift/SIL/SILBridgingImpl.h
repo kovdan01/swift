@@ -1900,6 +1900,18 @@ BridgedCanType BridgedInstruction::AnyPackIndexInst_getIndexedPackType() const {
   return getAs<swift::AnyPackIndexInst>()->getIndexedPackType();
 }
 
+bool BridgedInstruction::DifferentiableFunctionInst_hasExtractee(SwiftInt extractee) const {
+  return getAs<swift::DifferentiableFunctionInst>()->hasExtractee(swift::NormalDifferentiableFunctionTypeComponent(extractee));
+}
+
+BridgedValue BridgedInstruction::DifferentiableFunctionInst_getExtractee(SwiftInt extractee) const {
+  return {getAs<swift::DifferentiableFunctionInst>()->getExtractee(swift::NormalDifferentiableFunctionTypeComponent(extractee))};
+}
+
+SwiftInt BridgedInstruction::DifferentiableFunctionExtractInst_extractee() const {
+  return getAs<swift::DifferentiableFunctionExtractInst>()->getExtractee().rawValue;
+}
+
 //===----------------------------------------------------------------------===//
 //                     VarDeclInst and DebugVariableInst
 //===----------------------------------------------------------------------===//
