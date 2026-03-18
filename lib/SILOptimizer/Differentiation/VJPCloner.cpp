@@ -1191,7 +1191,7 @@ public:
             CanSILFunctionType toType = swift::SILType::getPrimitiveObjectType(toTypeNoEscape->getWithExtInfo(
                 toTypeNoEscape->getExtInfo().withNoEscape(false))).getAs<SILFunctionType>();
             llvm::errs() << "toType: " << toType << '\n';
-            llvm::errs() << "valBeforeReabstract: " << valBeforeReabstract << '\n';
+
 
             // Set non-reabstracted original pullback type in nested apply info.
             SILOptFunctionBuilder fb(context.getTransform());
@@ -1905,9 +1905,7 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
   // Set pullback generic signature equal to VJP generic signature.
   // Do not use witness generic signature, which may have same-type requirements
   // binding all generic parameters to concrete types.
-
   // MYTODO: is this correct?
-  // patterns subs seem to only be present for differentiable closures
   //auto pbGenericSig = vjp->getLoweredFunctionType()->getSubstGenericSignature();
   auto pbGenericSig = vjp->getLoweredFunctionType()->getInvocationGenericSignature();
   auto *pbGenericEnv = pbGenericSig.getGenericEnvironment();
