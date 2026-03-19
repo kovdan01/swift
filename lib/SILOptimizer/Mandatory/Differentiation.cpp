@@ -617,7 +617,11 @@ DifferentiationTransformer::createPrivateDifferentiabilityWitness(
   }
 
   // Soundness check passed. Create a new differentiability witness
+  // MYTODO
   GenericSignature contextualDerivativeGenSig = GenericSignature();
+  // GenericSignature contextualDerivativeGenSig =
+  // originalFn->getLoweredFunctionType()->getSubstGenericSignature();
+  // originalFn->getGenericSignature();
   if (invoker.getKind() ==
       DifferentiationInvoker::Kind::IndirectDifferentiation)
     contextualDerivativeGenSig = invoker.getIndirectDifferentiation()
