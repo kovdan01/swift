@@ -469,19 +469,6 @@ Type TypeSubstituter::transformDependentMemberType(DependentMemberType *dependen
   auto result = conformance.getTypeWitness(assocType, IFS.getOptions());
   if (result->is<ErrorType>()) {
     auto substBase = origBase.subst(IFS);
-
-    llvm::errs() << "DependentMemberType BEGIN\n";
-    dependent->print(llvm::errs());
-    llvm::errs() << "\nDependentMemberType MIDDLE 00\n";
-    assocType->print(llvm::errs());
-    llvm::errs() << "\nDependentMemberType MIDDLE 01\n";
-    origBase.print(llvm::errs());
-    llvm::errs() << "\nDependentMemberType MIDDLE 02\n";
-    proto->print(llvm::errs());
-    llvm::errs() << "\nDependentMemberType MIDDLE 03\n";
-    conformance.print(llvm::errs());
-    llvm::errs() << "\nDependentMemberType END\n";
-
     return DependentMemberType::get(ErrorType::get(substBase), assocType);
   }
   return result;

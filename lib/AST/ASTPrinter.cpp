@@ -7606,11 +7606,11 @@ public:
     // terms of the outer environment.  But this wouldn't necessarily be
     // true with higher-rank polymorphism.
     if (auto substitutions = T->getPatternSubstitutions()) {
-      Printer << " for1";
+      Printer << " for";
       printSubstitutions(substitutions);
     }
     if (auto substitutions = T->getInvocationSubstitutions()) {
-      Printer << " for2";
+      Printer << " for";
       printSubstitutions(substitutions);
     }
   }

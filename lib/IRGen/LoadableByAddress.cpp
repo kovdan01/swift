@@ -161,24 +161,11 @@ static bool isFuncOrOptionalFuncType(SILType Ty) {
 bool LargeSILTypeMapper::shouldTransformFunctionType(GenericEnvironment *env,
                                                      CanSILFunctionType fnType,
                                                      irgen::IRGenModule &IGM) {
-  llvm::errs() << "shouldTransformFunctionType env 00: ";
-  if (env)
-    env->dump(llvm::errs());
-  else
-    llvm::errs() << "NULL";
-  llvm::errs() << "\n";
-
   // Map substituted function types according to their substituted generic
   // signature.
   if (fnType->getPatternSubstitutions()) {
     env = getSubstGenericEnvironment(fnType);
   }
-  llvm::errs() << "shouldTransformFunctionType env 01: ";
-  if (env)
-    env->dump(llvm::errs());
-  else
-      llvm::errs() << "NULL";
-  llvm::errs() << "\n";
 
   if (shouldTransformResults(env, fnType, IGM))
     return true;
@@ -323,13 +310,6 @@ LargeSILTypeMapper::getNewSILFunctionType(GenericEnvironment *env,
     env = getSubstGenericEnvironment(fnType);
   }
 
-  llvm::errs() << "getNewSILFunctionType: env = ";
-  if (env)
-    env->dump(llvm::errs());
-  else
-    llvm::errs() << "NULL";
-  llvm::errs() << "\n";
-  
   auto newParams = getNewParameters(env, fnType, IGM);
   auto newYields = getNewYields(env, fnType, IGM);
   auto newResults = getNewResults(env, fnType, IGM, mustTransform);
@@ -865,17 +845,10 @@ void LargeValueVisitor::visitApply(ApplySite applySite) {
     return;
   }
   // Check callee - need new generic env:
-
-  llvm::errs() << "LargeValueVisitor::visitApply 00: ";
-  applySite->print(llvm::errs());
-  llvm::errs() << "\n";
-
   CanSILFunctionType origSILFunctionType = applySite.getSubstCalleeType();
-  llvm::errs() << "LargeValueVisitor::visitApply 01: " << origSILFunctionType << '\n';
   GenericEnvironment *genEnvCallee = nullptr;
   auto newSILFunctionType = pass.Mapper.getNewSILFunctionType(
       genEnvCallee, origSILFunctionType, pass.Mod);
-  llvm::errs() << "LargeValueVisitor::visitApply 02: " << newSILFunctionType << '\n';
   if (origSILFunctionType != newSILFunctionType) {
     pass.applies.push_back(applySite.getInstruction());
   }

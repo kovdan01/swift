@@ -59,21 +59,8 @@ SILType SILBuilder::getPartialApplyResultType(
     SILFunctionTypeIsolation resultIsolation,
     PartialApplyInst::OnStackKind onStack) {
   CanSILFunctionType FTI = origTy.castTo<SILFunctionType>();
-  llvm::errs() << "getPartialApplyResultType FTI 00: ";
-  FTI.print(llvm::errs());
-  llvm::errs() << "\n";
   if (!subs.empty())
     FTI = FTI->substGenericArgs(M, subs, context);
-  llvm::errs() << "getPartialApplyResultType FTI 01: ";
-  FTI.print(llvm::errs());
-  llvm::errs() << "\n";
-  llvm::errs() << "getPartialApplyResultType subs 02: ";
-  subs.dump(llvm::errs());
-  llvm::errs() << "\n";
-  llvm::errs() << "getPartialApplyResultType getInvocationGenericSignature: "
-               << (int)(bool)FTI->getInvocationGenericSignature() << "\n";
-  llvm::errs() << "getPartialApplyResultType getInvocationSubstitutions: "
-               << (int)(bool)FTI->getInvocationSubstitutions() << "\n";
 
   ASSERT(!FTI->isPolymorphic()
          && "must provide substitutions for generic partial_apply");

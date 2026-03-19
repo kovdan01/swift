@@ -254,9 +254,6 @@ public:
     auto vjpSubstMap = vjp->getForwardingSubstitutionMap();
     auto *pullbackRef = Builder.createFunctionRef(loc, pullback);
 
-    llvm::errs() << "VJPCloner::visitReturnInst 00: " << vjpSubstMap << '\n';
-    llvm::errs() << "VJPCloner::visitReturnInst 01: " << *pullbackRef << '\n';
-
     // Prepare partial application arguments.
     SILValue partialApplyArg;
     PartialApplyInst *pullbackPartialApply;
@@ -758,16 +755,17 @@ public:
   // `convert_escape_to_noescape`
   void visitPartialApplyInst(PartialApplyInst *pai) {
     if (!pai->isSupportedAsDifferentiableClosure()) {
+      for (Operand &op : pai->getArgumentOperands()) {
+        if (activityInfo.isActive(op.get(), getConfig())) {
+          context.emitNondifferentiabilityError(
+              pai, invoker, diag::autodiff_nondifferentiable_argument);
+          errorOccurred = true;
+          return;
+        }
+      }
       TypeSubstCloner::visitPartialApplyInst(pai);
       return;
     }
-
-    llvm::errs() << "VJPCloner::visitPartialApplyInst 00: ";
-    pai->print(llvm::errs());
-    llvm::errs() << "\n";
-    llvm::errs() << "VJPCloner::visitPartialApplyInst parentFn BEGIN\n";
-    pai->getFunction()->print(llvm::errs());
-    llvm::errs() << "\nVJPCloner::visitPartialApplyInst parentFn END\n";
 
     // TODO: use the following logic only when an `apply` which needs to be
     // differentiated accepts the result of this `partial_apply` (either
@@ -778,26 +776,7 @@ public:
     auto origCallee = getOpValue(pai->getCallee());
     auto loc = pai->getLoc();
 
-    // if (pai->getSubstitutionMap().empty()) {
-    //   llvm::errs() << "visitPartialApplyInst empty subst map\n";
-      origCallee = builder.emitCopyValueOperation(loc, origCallee);
-      llvm::errs() << "after copy value: " << origCallee << "\n";
-    // } else {
-    //   auto substMap = getOpSubstitutionMap(pai->getSubstitutionMap());
-    //   llvm::errs() << "visitPartialApplyInst subst map: " << substMap << "\n";
-    //   auto vjpPartialApply = builder.createPartialApply(
-    //       pai->getLoc(), origCallee, substMap, {},
-    //       ParameterConvention::Direct_Guaranteed);
-    //   origCallee = vjpPartialApply;
-    //   // originalFnTy = origCallee->getType().castTo<SILFunctionType>();
-
-    //   //        // Diagnose if new original function type is non-differentiable.
-    //   // if (diagnoseNondifferentiableOriginalFunctionType(originalFnTy,
-    //   //                                                   ai, origCallee, config)) {
-    //   //   errorOccurred = true;
-    //   //   return;
-    //   // }
-    // }
+    origCallee = builder.emitCopyValueOperation(loc, origCallee);
 
     // MYTODO: index 0 not valid for indirect formal results?
     // Right now, we only support closures capturing exactly one argument with
@@ -826,45 +805,17 @@ public:
     auto *newPai = builder.createPartialApply(
         loc, vjpValue, getOpSubstitutionMap(pai->getSubstitutionMap()), vjpArgs, pai->getCalleeConvention());
 
-    llvm::errs() << "VJP: CREATE PAI ";
-    newPai->print(llvm::errs());
-    llvm::errs() << '\n';
-    llvm::errs() << "VJP: CREATE PAI TYPE: " << newPai->getType() << "\n";
-
     mapValue(pai, newPai);
   }
 
   void visitConvertFunctionInst(ConvertFunctionInst *cfi) {
-    llvm::errs() << "VJPCloner::visitConvertFunctionInst " << *cfi << '\n';
-    llvm::errs() << "parent fn begin\n";
-    cfi->getParent()->getParent()->print(llvm::errs());
-    llvm::errs() << "\nparent fn end\n";
     if (auto *pai = llvm::dyn_cast_or_null<PartialApplyInst>(cfi->getOperand().getDefiningInstruction())) {
       if (pai->isSupportedAsDifferentiableClosure()) {
         auto loc = cfi->getLoc();
-
-        llvm::errs() << "PAI for ConvertFunctionInst is differentiable closure " << *pai << "\n";
-        PartialApplyInst *newPAI = llvm::dyn_cast<PartialApplyInst>(getOpValue(pai).getDefiningInstruction());
-        llvm::errs() << "new PAI: " << *newPAI << "\n";
-        SILFunctionType *fnTypeFrom = getOpValue(cfi->getOperand())->getType().getAs<SILFunctionType>();
-        llvm::errs() << "fnTypeFrom: ";
-        fnTypeFrom->print(llvm::errs());
-        llvm::errs() << '\n';
-        llvm::errs() << "fnTypeFrom->getInvocationSubstitutions(): " << fnTypeFrom->getInvocationSubstitutions() << '\n';
-        llvm::errs() << "fnTypeFrom->getInvocationGenericSignature(): " << fnTypeFrom->getInvocationGenericSignature() << '\n';
-        llvm::errs() << "fnTypeFrom->getPatternSubstitutions(): " << fnTypeFrom->getPatternSubstitutions() << '\n';
-        llvm::errs() << "fnTypeFrom->getPatternGenericSignature(): " << fnTypeFrom->getPatternGenericSignature() << '\n';
-        llvm::errs() << "fnTypeFrom->getUnsubstitutedType(): " << fnTypeFrom->getUnsubstitutedType(getModule()) << '\n';
-        SILFunction *parentFn = cfi->getParent()->getParent();
-        CanType loweredRValueType = parentFn->getLoweredRValueType(fnTypeFrom->getCanonicalType());
-        llvm::errs() << "loweredRValueType: " << loweredRValueType << '\n';
-
-        auto *newCfi = getBuilder().createConvertFunction(loc, getOpValue(pai), /*TODO*/ getOpValue(pai)->getType() /*cfi->getType()*/, cfi->withoutActuallyEscaping());
-
-        llvm::errs() << "VJP: CREATE CONVERT FUNCTION ";
-        newCfi->print(llvm::errs());
-        llvm::errs() << '\n';
-
+        auto *newCfi = getBuilder().createConvertFunction(
+            loc, getOpValue(pai),
+            /*TODO*/ getOpValue(pai)->getType() /*cfi->getType()*/,
+            cfi->withoutActuallyEscaping());
         mapValue(cfi, newCfi);
         return;
       }
@@ -874,20 +825,6 @@ public:
   }
 
   void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *cetnei) {
-    // // llvm::errs() << "visitConvertEscapeToNoEscapeInst 00: ";
-    // // cetnei->print(llvm::errs());
-    // // llvm::errs() << "\n";
-
-    // // MYTODO: handle if not true
-    // assert(std::distance(cetnei->getUses().begin(), cetnei->getUses().end()) == 2);
-
-    // SILInstruction *useInst1 = cetnei->getUses().begin().getUser();
-    // SILInstruction *useInst2 = std::next(cetnei->getUses().begin()).getUser();
-
-    // // MYTODO: handle if not true
-    // assert((llvm::isa<DestroyValueInst>(useInst1) && llvm::isa<ApplyInst>(useInst2)) ||
-    //        (llvm::isa<DestroyValueInst>(useInst2) && llvm::isa<ApplyInst>(useInst1)));
-
     SILType type = getOpValue(cetnei->getOperand())->getType();
     auto functionType = type.getAs<SILFunctionType>();
     auto noEscapeFunctionType =
@@ -934,10 +871,6 @@ public:
           getBuilder().createApply(ai->getLoc(), origCallee, getOpSubstitutionMap(ai->getSubstitutionMap())/*SubstitutionMap()*/,
                                    vjpArgs, ai->getApplyOptions());
 
-      llvm::errs() << "CREATED VJP CALL: ";
-      vjpCall->print(llvm::errs());
-      llvm::errs() << '\n';
-
       // Get the VJP results (original results and pullback).
       SmallVector<SILValue, 8> vjpDirectResults;
       extractAllElements(vjpCall, getBuilder(), vjpDirectResults);
@@ -953,12 +886,6 @@ public:
       pullbackValues[ai->getParent()].push_back(pullback);
 
       return;
-    } else {
-      llvm::errs() << "VJPCloner::visitApplyInst - not a diff closure: ";
-      ai->getCallee()
-          ->getType()
-          .getAs<SILFunctionType>()->print(llvm::errs());
-      llvm::errs() << '\n';
     }
 
     // If callee is `array.uninitialized_intrinsic`, do standard cloning.
@@ -1144,87 +1071,50 @@ public:
         vjpFnTy->getNumParameters() + vjpFnTy->getNumIndirectFormalResults();
     vjpArgs.reserve(numVJPArgs);
 
-
-
-
     // Collect substituted arguments.
-    // for (auto origArg : ai->getArguments()) {
-    //   vjpArgs.push_back(getOpValue(origArg));
-    // }
-
     SmallVector<SILValue, 1> vjpArgsToDestroy;
 
     for (auto [argIdx, origArg] : llvm::enumerate(ai->getArguments())) {
       auto vjpArg = getOpValue(origArg);
-      llvm::errs() << "ai->getNumIndirectResults() = " << ai->getNumIndirectResults() << '\n';
       if (argIdx >= ai->getNumIndirectResults()) {
-        auto paramType = vjpValue->getType().getAs<SILFunctionType>()->getParameters()[argIdx - ai->getNumIndirectResults()].getInterfaceType();
-
-        llvm::errs() << "\nVJP TRUE PARAM TYPE: ";
-        paramType->print(llvm::errs());
-        llvm::errs() << "\nVJP ARG TYPE: ";
-        vjpArg->getType().print(llvm::errs());
-        llvm::errs() << "\n";
+        auto paramType =
+            vjpValue->getType()
+                .getAs<SILFunctionType>()
+                ->getParameters()[argIdx - ai->getNumIndirectResults()]
+                .getInterfaceType();
         if (vjpArg->getType().is<SILFunctionType>()) {
           auto silFunctionType = vjpArg->getType().getAs<SILFunctionType>();
-          llvm::errs() << "MAYBE NEED REABSTRACTION?\n";
-          llvm::errs() << "VJP ARG SIL TYPE: ";
-          silFunctionType.print(llvm::errs());
-          llvm::errs() << "\nVJP ARG TYPE: ";
-          silFunctionType->getCanonicalType()->print(llvm::errs());
-          llvm::errs() << "\n";
-
           if (silFunctionType->getCanonicalType() != paramType) {
-            llvm::errs() << "DO REABSTRACT!\n";
-
-
-            auto *cetnei = llvm::cast<ConvertEscapeToNoEscapeInst>(vjpArg->getDefiningInstruction());
-            llvm::errs() << "cetnei: ";
-            cetnei->print(llvm::errs());
-            llvm::errs() << "\n";
+            auto *cetnei = llvm::cast<ConvertEscapeToNoEscapeInst>(
+                vjpArg->getDefiningInstruction());
 
             SILValue valBeforeReabstract = cetnei->getOperand();
             SILValue valCopy = getBuilder().emitCopyValueOperation(loc, valBeforeReabstract);
             SILType toTypeNoEscapeSIL = vjpValue->getType().getAs<SILFunctionType>()->getParameters()[argIdx - ai->getNumIndirectResults()].getSILStorageInterfaceType();
-            CanSILFunctionType toTypeNoEscape = toTypeNoEscapeSIL.getAs<SILFunctionType>();
-
-
-            llvm::errs() << "toTypeNoEscape: " << toTypeNoEscape << '\n';
-
-            llvm::errs() << "toTypeNoEscape unsubst BEGIN\n";
-            auto unsubstType = toTypeNoEscape->getUnsubstitutedType(*vjpValue->getModule());
-            llvm::errs() << "toTypeNoEscape unsubst END: " << unsubstType << "\n";
-
-            CanSILFunctionType toType = swift::SILType::getPrimitiveObjectType(toTypeNoEscape->getWithExtInfo(
-                toTypeNoEscape->getExtInfo().withNoEscape(false))).getAs<SILFunctionType>();
-            llvm::errs() << "toType: " << toType << '\n';
-            llvm::errs() << "valBeforeReabstract: " << valBeforeReabstract << '\n';
-            llvm::errs() << "valBeforeReabstract type: " << valBeforeReabstract->getType() << '\n';
-            llvm::errs() << "valCopy: " << valCopy << '\n';
+            CanSILFunctionType toTypeNoEscape =
+                toTypeNoEscapeSIL.getAs<SILFunctionType>();
+            CanSILFunctionType toType =
+                swift::SILType::getPrimitiveObjectType(
+                    toTypeNoEscape->getWithExtInfo(
+                        toTypeNoEscape->getExtInfo().withNoEscape(false)))
+                    .getAs<SILFunctionType>();
 
             // Set non-reabstracted original pullback type in nested apply info.
             SILOptFunctionBuilder fb(context.getTransform());
             SILValue valAfterReabstract = reabstractFunction(
-                getBuilder(), fb, loc/*ai->getLoc()*/, valCopy/*valBeforeReabstract*/,
-                //getLoweredType(paramType).castTo<SILFunctionType>(),
-                toType,
-                [this](SubstitutionMap subs) -> SubstitutionMap {
+                getBuilder(), fb, loc /*ai->getLoc()*/,
+                valCopy /*valBeforeReabstract*/,
+                // getLoweredType(paramType).castTo<SILFunctionType>(),
+                toType, [this](SubstitutionMap subs) -> SubstitutionMap {
                   return this->getOpSubstitutionMap(subs);
                 });
-            llvm::errs() << "valAfterReabstract: " << valAfterReabstract << '\n';
-            llvm::errs() << "valAfterReabstract type: " << valAfterReabstract->getType() << '\n';
 
             auto *cetneiNew = getBuilder().createConvertEscapeToNoEscape(
                 loc/*cetnei->getLoc()*/, valAfterReabstract/*cetnei->getOperand()*/,
                 toTypeNoEscapeSIL, cetnei->isLifetimeGuaranteed());
 
-            llvm::errs() << "cetneiNew: ";
-            cetneiNew->print(llvm::errs());
-            llvm::errs() << "\n";
-
             // MYTODO: mapped values?
             cetnei->replaceAllUsesWith(cetneiNew);
-            llvm::errs() << "cetneiNew AFTER REPLACE\n";
 
             vjpArg = cetneiNew;
 
@@ -1671,7 +1561,6 @@ const DifferentiableActivityInfo &VJPCloner::getActivityInfo() const {
 
 SILFunction *VJPCloner::Implementation::createEmptyPullback() {
   auto origTy = original->getLoweredFunctionType();
-  //auto origTy = original->getLoweredFunctionType()->getUnsubstitutedType(getModule());
   // Get witness generic signature for remapping types.
   // Witness generic signature may have more requirements than VJP generic
   // signature: when witness generic signature has same-type requirements
@@ -1684,7 +1573,6 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
   auto getTangentParameterInfoForOriginalResult =
       [&](CanType tanType, ResultConvention origResConv) -> SILParameterInfo {
     tanType = tanType->getReducedType(witnessCanGenSig);
-    llvm::errs() << "getTangentParameterInfoForOriginalResult tanType = " << tanType << '\n';
     Lowering::AbstractionPattern pattern(witnessCanGenSig, tanType);
     auto &tl = context.getTypeConverter().getTypeLowering(
         pattern, tanType, TypeExpansionContext::minimal());
@@ -1770,59 +1658,16 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
     semanticResultParamIndices.push_back(i);
   }
 
-  llvm::errs() << "createEmptyPullback() for orig fn BEGIN\n";
-  original->print(llvm::errs());
-  llvm::errs() << "\ncreateEmptyPullback() for orig fn END\n";
-  if (auto genSig = original->getLoweredFunctionType()->getSubstGenericSignature()) {
-    llvm::errs() << "createEmptyPullback() genSig: ";
-    genSig->print(llvm::errs());
-    llvm::errs() << "\n";
-  } else {
-    llvm::errs() << "createEmptyPullback() genSig: NULL\n";
-  }
-  llvm::errs() << "createEmptyPullback() witnessCanGenSig: ";
-  if (witnessCanGenSig) {
-    witnessCanGenSig->print(llvm::errs());
-  }
-  else {
-    llvm::errs() << "NULL";
-    //witnessCanGenSig = original->getLoweredFunctionType()->getSubstGenericSignature();
-  }
-  llvm::errs() << "\n";
-
-  llvm::errs() << "original->getLoweredFunctionType(): " << original->getLoweredFunctionType() << "\n";
-  llvm::errs() << "original->getLoweredFunctionType()->getUnsubstitutedType: " << original->getLoweredFunctionType()->getUnsubstitutedType(getModule()) << "\n";
-
-
   unsigned firstSemanticParamResultIdx = origTy->getNumResults();
   unsigned firstYieldResultIndex = firstSemanticParamResultIdx +
       origTy->getNumAutoDiffSemanticResultsParameters();
   for (auto resultIndex : config.resultIndices->getIndices()) {
     // Handle formal result.
     if (resultIndex < firstSemanticParamResultIdx) {
-      //auto origResult = origTy->getResults()[resultIndex];
       auto origResult = origTy->getUnsubstitutedType(getModule())->getResults()[resultIndex];
 
       origResult = origResult.getWithInterfaceType(
           origResult.getInterfaceType()->getReducedType(witnessCanGenSig));
-
-      llvm::errs() << "getTangentParameterInfoForOriginalResult BEFORE 00\n";
-      llvm::errs() << origResult.getInterfaceType() << '\n';
-      llvm::errs() << "getTangentParameterInfoForOriginalResult BEFORE 01\n";
-      llvm::errs() << origResult.getInterfaceType()
-          ->getAutoDiffTangentSpace(lookupConformance)
-              ->getType() << '\n';
-      llvm::errs() << "getTangentParameterInfoForOriginalResult BEFORE 02\n";
-      llvm::errs() << origResult.getInterfaceType()
-          ->getAutoDiffTangentSpace(lookupConformance)
-          ->getType()
-          ->getReducedType(witnessCanGenSig) << '\n';
-      llvm::errs() << "getTangentParameterInfoForOriginalResult BEFORE 03\n";
-      if (witnessCanGenSig)
-        witnessCanGenSig->print(llvm::errs());
-      else
-        llvm::errs() << "NULL";
-      llvm::errs() << "\ngetTangentParameterInfoForOriginalResult BEFORE 04\n";
 
       auto paramInfo = getTangentParameterInfoForOriginalResult(
           origResult.getInterfaceType()
@@ -1920,13 +1765,11 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
   auto pbGenericSig = vjp->getLoweredFunctionType()->getInvocationGenericSignature();
   auto *pbGenericEnv = pbGenericSig.getGenericEnvironment();
 
-  llvm::errs() << "createEmptyPullback pbGenericSig = " << pbGenericSig << "\n";
-
   auto pbType = SILFunctionType::get(
       pbGenericSig, SILExtInfo::getThin(), origTy->getCoroutineKind(),
-      origTy->getCalleeConvention(), pbParams, pbYields, adjResults, std::nullopt,
-      vjp->getLoweredFunctionType()->getPatternSubstitutions(), vjp->getLoweredFunctionType()->getInvocationSubstitutions(),
-      //origTy->getPatternSubstitutions(), origTy->getInvocationSubstitutions(),
+      origTy->getCalleeConvention(), pbParams, pbYields, adjResults,
+      std::nullopt, vjp->getLoweredFunctionType()->getPatternSubstitutions(),
+      vjp->getLoweredFunctionType()->getInvocationSubstitutions(),
       original->getASTContext());
 
   SILOptFunctionBuilder fb(context.getTransform());
@@ -2072,7 +1915,6 @@ bool VJPCloner::Implementation::run() {
   // Generate pullback code.
   PullbackCloner PullbackCloner(cloner);
   if (PullbackCloner.run()) {
-    llvm::errs() << "PULLBACK CLONER ERROR " << original->getName() << '\n';
     errorOccurred = true;
   }
   if (!errorOccurred) {

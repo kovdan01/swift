@@ -366,48 +366,28 @@ SILValue reabstractFunction(
     SILBuilder &builder, SILOptFunctionBuilder &fb, SILLocation loc,
     SILValue fn, CanSILFunctionType toType,
     std::function<SubstitutionMap(SubstitutionMap)> remapSubstitutions) {
-  llvm::errs() << "\n\nreabstractFunction BEGIN\n";
-
   auto &module = *fn->getModule();
   auto fromType = fn->getType().getAs<SILFunctionType>();
-
   auto unsubstFromType = fromType->getUnsubstitutedType(module);
-  llvm::errs() << "reabstractFunction unsubstFromType: " << unsubstFromType << "\n";
-
   auto unsubstToType = toType->getUnsubstitutedType(module);
-  llvm::errs() << "reabstractFunction unsubstToType: " << unsubstToType << "\n";
-
   auto *thunk = getOrCreateReabstractionThunk(fb, module, loc,
                                               /*caller*/ fn->getFunction(),
                                               unsubstFromType, unsubstToType);
-
-  llvm::errs() << "reabstractFunction thunk BEGIN\n";
-  thunk->print(llvm::errs());
-  llvm::errs() << "\nreabstractFunction thunk END\n";
-
   auto *thunkRef = builder.createFunctionRef(loc, thunk);
-
-  llvm::errs() << "reabstractFunction thunkRef: " << *thunkRef << "\n";
 
   if (fromType != unsubstFromType)
     fn = builder.createConvertFunction(
         loc, fn, SILType::getPrimitiveObjectType(unsubstFromType),
         /*withoutActuallyEscaping*/ false);
 
-  llvm::errs() << "reabstractFunction 00: " << fn << "\n";
-
   fn = builder.createPartialApply(
       loc, thunkRef, remapSubstitutions(thunk->getForwardingSubstitutionMap()),
       {fn}, fromType->getCalleeConvention());
-
-  llvm::errs() << "reabstractFunction 01: " << fn << "\n";
 
   if (toType != unsubstToType)
     fn = builder.createConvertFunction(loc, fn,
                                        SILType::getPrimitiveObjectType(toType),
                                        /*withoutActuallyEscaping*/ false);
-
-  llvm::errs() << "reabstractFunction 02: " << fn << "\n\n\n";
 
   return fn;
 }

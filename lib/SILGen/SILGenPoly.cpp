@@ -577,7 +577,6 @@ ManagedValue Transform::transform(ManagedValue v,
 
   //  - functions
   if (auto outputFnType = dyn_cast<AnyFunctionType>(outputSubstType)) {
-    llvm::errs() << "transformFunction: loweredResultTy = " << loweredResultTy << '\n';
     auto inputFnType = cast<AnyFunctionType>(inputSubstType);
     return transformFunction(v,
                              inputOrigType, inputFnType,
@@ -732,7 +731,6 @@ ManagedValue Transform::transform(ManagedValue v,
                                              loweredOpenedType,
                                              AccessKind::Read);
       payload = payload.ensurePlusOne(SGF, Loc);
-      llvm::errs() << "transform 00: " << loweredResultTy << '\n';
       return transform(payload,
                        AbstractionPattern::getOpaque(),
                        openedType,
@@ -6872,14 +6870,9 @@ SILGenFunction::emitOrigToSubstValue(SILLocation loc, ManagedValue v,
   return emitOrigToSubstValue(loc, v, origType, substType,
                               getLoweredType(substType), ctxt);
 }
-ManagedValue
-SILGenFunction::emitOrigToSubstValue(SILLocation loc, ManagedValue v,
-                                     AbstractionPattern origType,
-                                     CanType substType,
-                                     SILType loweredResultTy,
-                                     SGFContext ctxt) {
-
-  llvm::errs() << "emitOrigToSubstValue 02: " << loweredResultTy << '\n';
+ManagedValue SILGenFunction::emitOrigToSubstValue(
+    SILLocation loc, ManagedValue v, AbstractionPattern origType,
+    CanType substType, SILType loweredResultTy, SGFContext ctxt) {
   return emitTransformedValue(loc, v,
                               origType, substType,
                               AbstractionPattern(substType), substType,
@@ -6892,7 +6885,6 @@ RValue SILGenFunction::emitOrigToSubstValue(SILLocation loc, RValue &&v,
                                             AbstractionPattern origType,
                                             CanType substType,
                                             SGFContext ctxt) {
-  llvm::errs() << "emitOrigToSubstValue 01: " << substType << '\n';
   return emitOrigToSubstValue(loc, std::move(v), origType, substType,
                               getLoweredType(substType), ctxt);
 }
@@ -6901,7 +6893,6 @@ RValue SILGenFunction::emitOrigToSubstValue(SILLocation loc, RValue &&v,
                                             CanType substType,
                                             SILType loweredResultTy,
                                             SGFContext ctxt) {
-  llvm::errs() << "emitOrigToSubstValue 00: " << loweredResultTy << '\n';
   return emitTransformedValue(loc, std::move(v),
                               origType, substType,
                               AbstractionPattern(substType), substType,
@@ -6920,14 +6911,9 @@ SILGenFunction::emitSubstToOrigValue(SILLocation loc, ManagedValue v,
                               getLoweredType(origType, substType), ctxt);
 }
 
-ManagedValue
-SILGenFunction::emitSubstToOrigValue(SILLocation loc, ManagedValue v,
-                                     AbstractionPattern origType,
-                                     CanType substType,
-                                     SILType loweredResultTy,
-                                     SGFContext ctxt) {
-
-  llvm::errs() << "emitSubstToOrigValue 00: " << loweredResultTy << '\n';
+ManagedValue SILGenFunction::emitSubstToOrigValue(
+    SILLocation loc, ManagedValue v, AbstractionPattern origType,
+    CanType substType, SILType loweredResultTy, SGFContext ctxt) {
   return emitTransformedValue(loc, v,
                               AbstractionPattern(substType), substType,
                               origType, substType,
@@ -6950,7 +6936,6 @@ RValue SILGenFunction::emitSubstToOrigValue(SILLocation loc, RValue &&v,
                                             CanType substType,
                                             SILType loweredResultTy,
                                             SGFContext ctxt) {
-  llvm::errs() << "emitSubstToOrigValue 01: " << loweredResultTy << '\n';
   return emitTransformedValue(loc, std::move(v),
                               AbstractionPattern(substType), substType,
                               origType, substType,

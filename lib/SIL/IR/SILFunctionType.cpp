@@ -112,21 +112,12 @@ CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
 
   auto subs = getCombinedSubstitutions();
   auto substComponentType = [&](CanType type) {
-    llvm::errs() << "\n\nsubstComponentType 00\n";
-    if (!type->hasTypeParameter()) return type;
-    llvm::errs() << "substComponentType 01: " << type << "\n";
-    llvm::errs() << "substComponentType 02: " << SILType::getPrimitiveObjectType(type) << "\n";
-    llvm::errs() << "substComponentType 03: " << subs << "\n";
-
-    // if (type->is<SILFunctionType>()) {
-    //   type = type->getAs<SILFunctionType>()->getUnsubstitutedType(M);
-    // }
-    // llvm::errs() << "substComponentType 04: " << type << "\n\n\n";
-
+    if (!type->hasTypeParameter())
+      return type;
     return SILType::getPrimitiveObjectType(type)
              .subst(M, subs).getASTType();
   };
-  
+
   for (auto param : getParameters()) {
     params.push_back(param.map(substComponentType));
   }
@@ -134,20 +125,11 @@ CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
   for (auto yield : getYields()) {
     yields.push_back(yield.map(substComponentType));
   }
-  
-  llvm::errs() << "getUnsubstitutedType 10: ";
-  this->print(llvm::errs());
-  llvm::errs() << "\n";
 
   for (auto result : getResults()) {
-    llvm::errs() << "getUnsubstitutedType 11: " << result << "\n";
     results.push_back(result.map(substComponentType));
   }
 
-  llvm::errs() << "getUnsubstitutedType 20: ";
-  this->print(llvm::errs());
-  llvm::errs() << "\n";
-  
   if (auto error = getOptionalErrorResult()) {
     errorResult = error->map(substComponentType);
   }
@@ -940,20 +922,11 @@ static CanSILFunctionType getAutoDiffPullbackType(
 /// - The invocation generic signature is replaced by the
 ///   `constrainedInvocationGenSig` argument.
 static SILFunctionType *getConstrainedAutoDiffOriginalFunctionType(
-    SILFunctionType *original, IndexSubset *parameterIndices, IndexSubset *resultIndices,
-    LookupConformanceFn lookupConformance,
+    SILFunctionType *original, IndexSubset *parameterIndices,
+    IndexSubset *resultIndices, LookupConformanceFn lookupConformance,
     CanGenericSignature constrainedInvocationGenSig) {
-  llvm::errs() << "getConstrainedAutoDiffOriginalFunctionType 00: ";
-  original->print(llvm::errs());
-  llvm::errs() << "\n";
   auto originalInvocationGenSig = original->getInvocationGenericSignature();
   if (!originalInvocationGenSig) {
-    llvm::errs() << "getConstrainedAutoDiffOriginalFunctionType 01: ";
-    if (constrainedInvocationGenSig)
-      constrainedInvocationGenSig->print(llvm::errs());
-    else
-      llvm::errs() << "NULL";
-    llvm::errs() << "\n";
     assert(!constrainedInvocationGenSig ||
            constrainedInvocationGenSig->areAllParamsConcrete() &&
                "derivative function cannot have invocation generic signature "

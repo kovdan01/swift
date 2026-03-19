@@ -984,11 +984,7 @@ public:
   }
 
   void visitConvertFunctionInst(ConvertFunctionInst *cfi) {
-    llvm::errs() << "PullbackCloner::visitConvertFunction: ";
-    cfi->dump();
-    llvm::errs() << '\n';
     visitValueOwnershipInst(cfi);
-    //SILInstructionVisitor::visitConvertFunctionInst(cfi);
   }
 
   void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *cetnei) {
@@ -1319,29 +1315,14 @@ public:
       if (isApplySiteOfDifferentiableClosure(fai)) {
         auto origArg = fai.getCallee();
         auto tan = *allResultsIt++;
-        // if (!tan->getType().isAddress()) {
-        //   recordTemporary(tan);
-        //   addAdjointValue(bb, origArg, makeConcreteAdjointValue(tan), loc);
-        // } else {
-        //   auto *tmpBuf = builder.createAllocStack(loc, tan->getType());
-        //   llvm::errs() << "BEFORE emitStoreValueOperation 00\n";
-        //   builder.emitStoreValueOperation(loc, tan, tmpBuf,
-        //                                   StoreOwnershipQualifier::Init);
-        //   llvm::errs() << "AFTER emitStoreValueOperation 00\n";
-        //   addToAdjointBuffer(bb, origArg, tmpBuf, loc);
-        //   builder.emitDestroyAddrAndFold(loc, tmpBuf);
-        //   builder.createDeallocStack(loc, tmpBuf);
-        // }
 
         if (tan->getType().isAddress()) {
           addToAdjointBuffer(bb, origArg, tan, loc);
         } else {
           if (origArg->getType().isAddress()) {
             auto *tmpBuf = builder.createAllocStack(loc, tan->getType());
-            llvm::errs() << "BEFORE emitStoreValueOperation 00\n";
             builder.emitStoreValueOperation(loc, tan, tmpBuf,
                                             StoreOwnershipQualifier::Init);
-            llvm::errs() << "AFTER emitStoreValueOperation 00\n";
             addToAdjointBuffer(bb, origArg, tmpBuf, loc);
             builder.emitDestroyAddrAndFold(loc, tmpBuf);
             builder.createDeallocStack(loc, tmpBuf);
@@ -1365,10 +1346,8 @@ public:
       } else {
         if (origArg->getType().isAddress()) {
           auto *tmpBuf = builder.createAllocStack(loc, tan->getType());
-          llvm::errs() << "BEFORE emitStoreValueOperation 01\n";
           builder.emitStoreValueOperation(loc, tan, tmpBuf,
                                           StoreOwnershipQualifier::Init);
-          llvm::errs() << "AFTER emitStoreValueOperation 01\n";
           addToAdjointBuffer(bb, origArg, tmpBuf, loc);
           builder.emitDestroyAddrAndFold(loc, tmpBuf);
           builder.createDeallocStack(loc, tmpBuf);

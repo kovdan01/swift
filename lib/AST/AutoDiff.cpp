@@ -324,18 +324,11 @@ autodiff::getSemanticResults(SILFunctionType *functionType,
 }
 
 GenericSignature autodiff::getConstrainedDerivativeGenericSignature(
-    SILFunctionType *originalFnTy,
-    IndexSubset *diffParamIndices, IndexSubset *diffResultIndices,
-    GenericSignature derivativeGenSig, LookupConformanceFn lookupConformance,
-    bool isTranspose) {
-  llvm::errs() << "getConstrainedDerivativeGenericSignature 00: ";
-  derivativeGenSig.print(llvm::errs());
-
+    SILFunctionType *originalFnTy, IndexSubset *diffParamIndices,
+    IndexSubset *diffResultIndices, GenericSignature derivativeGenSig,
+    LookupConformanceFn lookupConformance, bool isTranspose) {
   if (!derivativeGenSig)
     derivativeGenSig = originalFnTy->getInvocationGenericSignature();
-  llvm::errs() << "\ngetConstrainedDerivativeGenericSignature 01: ";
-  derivativeGenSig.print(llvm::errs());
-  llvm::errs() << "\n";
   if (!derivativeGenSig)
     return nullptr;
   auto &ctx = originalFnTy->getASTContext();
