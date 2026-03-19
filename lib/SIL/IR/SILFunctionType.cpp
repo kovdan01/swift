@@ -118,10 +118,10 @@ CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
     llvm::errs() << "substComponentType 02: " << SILType::getPrimitiveObjectType(type) << "\n";
     llvm::errs() << "substComponentType 03: " << subs << "\n";
 
-    if (type->is<SILFunctionType>()) {
-      type = type->getAs<SILFunctionType>()->getUnsubstitutedType(M);
-    }
-    llvm::errs() << "substComponentType 04: " << type << "\n\n\n";
+    // if (type->is<SILFunctionType>()) {
+    //   type = type->getAs<SILFunctionType>()->getUnsubstitutedType(M);
+    // }
+    // llvm::errs() << "substComponentType 04: " << type << "\n\n\n";
 
     return SILType::getPrimitiveObjectType(type)
              .subst(M, subs).getASTType();

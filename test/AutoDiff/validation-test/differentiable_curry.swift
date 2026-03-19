@@ -110,6 +110,13 @@ func nilCoalescingNonLazy(_ x: S?, _ y: S) -> S {
   return x!
 }
 
+protocol MultiplyDifferentiable : Differentiable {
+  @differentiable(reverse)
+  static func * (lhs: Self, rhs: Self) -> Self
+}
+
+extension Float : MultiplyDifferentiable {}
+
 NilCoalescingTests.test("Float") {
   @differentiable(reverse)
   func lazy1(_ x: Float?, _ y: Float) -> Float {
@@ -127,12 +134,22 @@ NilCoalescingTests.test("Float") {
   }
 
   @differentiable(reverse)
+  func lazyGenericGeneric1<T>(_ x: T?, _ y: T) -> T where T: MultiplyDifferentiable, T.TangentVector == T {
+    return nilCoalescingGenericLazy(x, y * y)
+  }
+
+  @differentiable(reverse)
   func nonLazy(_ x: Float?, _ y: Float) -> Float {
     return nilCoalescingNonLazy(x, y * y)
   }
 
   @differentiable(reverse)
   func nonLazyGeneric(_ x: Float?, _ y: Float) -> Float {
+    return nilCoalescingGenericNonLazy(x, y * y)
+  }
+
+  @differentiable(reverse)
+  func nonLazyGenericGeneric<T>(_ x: T?, _ y: T) -> T where T: MultiplyDifferentiable, T.TangentVector == T {
     return nilCoalescingGenericNonLazy(x, y * y)
   }
 
@@ -145,18 +162,27 @@ NilCoalescingTests.test("Float") {
   let pbLazyGeneric1 = pullback(at: Float?(nil), Float(3), of: lazyGeneric1)
   let lazyGenericResult1 = pbLazyGeneric1(Float(1))
 
+  let pbLazyGenericGeneric1 = pullback(at: Float?(nil), Float(3), of: lazyGenericGeneric1)
+  let lazyGenericGenericResult1 = pbLazyGenericGeneric1(Float(1))
+
   let pbNonLazy = pullback(at: Float?(nil), Float(3), of: nonLazy)
   let nonLazyResult = pbNonLazy(Float(1))
 
   let pbNonLazyGeneric = pullback(at: Float?(nil), Float(3), of: nonLazyGeneric)
   let nonLazyGenericResult = pbNonLazyGeneric(Float(1))
 
+  let pbNonLazyGenericGeneric = pullback(at: Float?(nil), Float(3), of: nonLazyGenericGeneric)
+  let nonLazyGenericGenericResult = pbNonLazyGenericGeneric(Float(1))
+
   let expectedResult = (Optional<Float>.TangentVector(0), Float(6))
+
   expectEqual(lazyResult1, expectedResult)
   expectEqual(lazyResult2, expectedResult)
   expectEqual(lazyGenericResult1, expectedResult)
+  expectEqual(lazyGenericGenericResult1, expectedResult)
   expectEqual(nonLazyResult, expectedResult)
   expectEqual(nonLazyGenericResult, expectedResult)
+  expectEqual(nonLazyGenericGenericResult, expectedResult)
 }
 
 NilCoalescingTests.test("Double") {
