@@ -309,7 +309,7 @@ LargeSILTypeMapper::getNewSILFunctionType(GenericEnvironment *env,
   if (fnType->getPatternSubstitutions()) {
     env = getSubstGenericEnvironment(fnType);
   }
-  
+
   auto newParams = getNewParameters(env, fnType, IGM);
   auto newYields = getNewYields(env, fnType, IGM);
   auto newResults = getNewResults(env, fnType, IGM, mustTransform);
