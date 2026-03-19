@@ -829,6 +829,7 @@ public:
     llvm::errs() << "VJP: CREATE PAI ";
     newPai->print(llvm::errs());
     llvm::errs() << '\n';
+    llvm::errs() << "VJP: CREATE PAI TYPE: " << newPai->getType() << "\n";
 
     mapValue(pai, newPai);
   }
@@ -1186,12 +1187,20 @@ public:
             SILValue valCopy = getBuilder().emitCopyValueOperation(loc, valBeforeReabstract);
             SILType toTypeNoEscapeSIL = vjpValue->getType().getAs<SILFunctionType>()->getParameters()[argIdx - ai->getNumIndirectResults()].getSILStorageInterfaceType();
             CanSILFunctionType toTypeNoEscape = toTypeNoEscapeSIL.getAs<SILFunctionType>();
+
+
             llvm::errs() << "toTypeNoEscape: " << toTypeNoEscape << '\n';
+
+            llvm::errs() << "toTypeNoEscape unsubst BEGIN\n";
+            auto unsubstType = toTypeNoEscape->getUnsubstitutedType(*vjpValue->getModule());
+            llvm::errs() << "toTypeNoEscape unsubst END: " << unsubstType << "\n";
 
             CanSILFunctionType toType = swift::SILType::getPrimitiveObjectType(toTypeNoEscape->getWithExtInfo(
                 toTypeNoEscape->getExtInfo().withNoEscape(false))).getAs<SILFunctionType>();
             llvm::errs() << "toType: " << toType << '\n';
-
+            llvm::errs() << "valBeforeReabstract: " << valBeforeReabstract << '\n';
+            llvm::errs() << "valBeforeReabstract type: " << valBeforeReabstract->getType() << '\n';
+            llvm::errs() << "valCopy: " << valCopy << '\n';
 
             // Set non-reabstracted original pullback type in nested apply info.
             SILOptFunctionBuilder fb(context.getTransform());
@@ -1203,6 +1212,7 @@ public:
                   return this->getOpSubstitutionMap(subs);
                 });
             llvm::errs() << "valAfterReabstract: " << valAfterReabstract << '\n';
+            llvm::errs() << "valAfterReabstract type: " << valAfterReabstract->getType() << '\n';
 
             auto *cetneiNew = getBuilder().createConvertEscapeToNoEscape(
                 loc/*cetnei->getLoc()*/, valAfterReabstract/*cetnei->getOperand()*/,

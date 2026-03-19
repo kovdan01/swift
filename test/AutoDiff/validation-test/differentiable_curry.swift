@@ -73,6 +73,21 @@ func ??(_ x: S?, _ y: () -> S) -> S {
   return x!
 }
 
+
+func nilCoalescingGenericLazy<T>(_ x: T?, _ y: @autoclosure () -> T) -> T where T : Differentiable, T.TangentVector == T {
+  if x == nil {
+    return y()
+  }
+  return x!
+}
+
+func nilCoalescingGenericNonLazy<T>(_ x: T?, _ y: T) -> T where T : Differentiable, T.TangentVector == T {
+  if x == nil {
+    return y
+  }
+  return x!
+}
+
 // Ensure that results are identical for lazy and non-lazy evaluation
 func nilCoalescingNonLazy(_ x: Float?, _ y: Float) -> Float {
   if x == nil {
@@ -107,8 +122,18 @@ NilCoalescingTests.test("Float") {
   }
 
   @differentiable(reverse)
+  func lazyGeneric1(_ x: Float?, _ y: Float) -> Float {
+    return nilCoalescingGenericLazy(x, y * y)
+  }
+
+  @differentiable(reverse)
   func nonLazy(_ x: Float?, _ y: Float) -> Float {
     return nilCoalescingNonLazy(x, y * y)
+  }
+
+  @differentiable(reverse)
+  func nonLazyGeneric(_ x: Float?, _ y: Float) -> Float {
+    return nilCoalescingGenericNonLazy(x, y * y)
   }
 
   let pbLazy1 = pullback(at: Float?(nil), Float(3), of: lazy1)
@@ -117,13 +142,21 @@ NilCoalescingTests.test("Float") {
   let pbLazy2 = pullback(at: Float?(nil), Float(3), of: lazy2)
   let lazyResult2 = pbLazy2(Float(1))
 
+  let pbLazyGeneric1 = pullback(at: Float?(nil), Float(3), of: lazyGeneric1)
+  let lazyGenericResult1 = pbLazyGeneric1(Float(1))
+
   let pbNonLazy = pullback(at: Float?(nil), Float(3), of: nonLazy)
   let nonLazyResult = pbNonLazy(Float(1))
+
+  let pbNonLazyGeneric = pullback(at: Float?(nil), Float(3), of: nonLazyGeneric)
+  let nonLazyGenericResult = pbNonLazyGeneric(Float(1))
 
   let expectedResult = (Optional<Float>.TangentVector(0), Float(6))
   expectEqual(lazyResult1, expectedResult)
   expectEqual(lazyResult2, expectedResult)
+  expectEqual(lazyGenericResult1, expectedResult)
   expectEqual(nonLazyResult, expectedResult)
+  expectEqual(nonLazyGenericResult, expectedResult)
 }
 
 NilCoalescingTests.test("Double") {

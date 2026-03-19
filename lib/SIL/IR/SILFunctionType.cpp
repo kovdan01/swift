@@ -112,7 +112,17 @@ CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
 
   auto subs = getCombinedSubstitutions();
   auto substComponentType = [&](CanType type) {
+    llvm::errs() << "\n\nsubstComponentType 00\n";
     if (!type->hasTypeParameter()) return type;
+    llvm::errs() << "substComponentType 01: " << type << "\n";
+    llvm::errs() << "substComponentType 02: " << SILType::getPrimitiveObjectType(type) << "\n";
+    llvm::errs() << "substComponentType 03: " << subs << "\n";
+
+    if (type->is<SILFunctionType>()) {
+      type = type->getAs<SILFunctionType>()->getUnsubstitutedType(M);
+    }
+    llvm::errs() << "substComponentType 04: " << type << "\n\n\n";
+
     return SILType::getPrimitiveObjectType(type)
              .subst(M, subs).getASTType();
   };
@@ -125,9 +135,18 @@ CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
     yields.push_back(yield.map(substComponentType));
   }
   
+  llvm::errs() << "getUnsubstitutedType 10: ";
+  this->print(llvm::errs());
+  llvm::errs() << "\n";
+
   for (auto result : getResults()) {
+    llvm::errs() << "getUnsubstitutedType 11: " << result << "\n";
     results.push_back(result.map(substComponentType));
   }
+
+  llvm::errs() << "getUnsubstitutedType 20: ";
+  this->print(llvm::errs());
+  llvm::errs() << "\n";
   
   if (auto error = getOptionalErrorResult()) {
     errorResult = error->map(substComponentType);
@@ -553,6 +572,26 @@ static CanType getAutoDiffTangentTypeForLinearMap(
   auto gpType = CanGenericTypeParamType::getType(0, gpIndex, context);
   substGenericParams.push_back(gpType);
   substReplacements.push_back(tanType);
+  return gpType;
+}
+
+static CanType getAutoDiffTypeForLinearMap(
+  Type originalType,
+  LookupConformanceFn lookupConformance,
+  SmallVectorImpl<GenericTypeParamType *> &substGenericParams,
+  SmallVectorImpl<Type> &substReplacements,
+  ASTContext &context
+) {
+  auto type = originalType->getCanonicalType();
+  // If concrete, the tangent type is concrete.
+  if (!type->hasArchetype() && !type->hasTypeParameter())
+    return type;
+  // Otherwise, the tangent type is a new generic parameter substituted for the
+  // tangent type.
+  auto gpIndex = substGenericParams.size();
+  auto gpType = CanGenericTypeParamType::getType(0, gpIndex, context);
+  substGenericParams.push_back(gpType);
+  substReplacements.push_back(type);
   return gpType;
 }
 
@@ -1059,11 +1098,13 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
     llvm::SmallVector<Type, 4> substReplacements;
     llvm::SmallVector<ProtocolConformanceRef, 4> substConformances;
 
-    auto paramTanType = getAutoDiffTangentTypeForLinearMap(
+    auto paramTanType = //singleResultType;
+    getAutoDiffTypeForLinearMap(
         singleResultType, lookupConformance,
         substGenericParams, substReplacements, ctx);
 
-    auto resultTanType = getAutoDiffTangentTypeForLinearMap(
+    auto resultTanType = //singleParamType;
+    getAutoDiffTypeForLinearMap(
       singleParamType, lookupConformance,
       substGenericParams, substReplacements, ctx);
 
