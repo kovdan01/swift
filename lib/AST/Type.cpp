@@ -4324,6 +4324,27 @@ Type AnyFunctionType::getGlobalActor() const {
   }
 }
 
+bool AnyFunctionType::isSupportedAsDifferentiableClosure() const {
+  // Right now, we only support closures capturing exactly one argument with the
+  // type equal to the result type. No other arguments except the captured one
+  // are supported.
+  // TODO: support arbitrary captured and non-captured arguments types.
+  if (getNumParams() != 0)
+    return false;
+
+  if (isThrowing())
+    return false;
+
+  CanType resultType = getResult()->getCanonicalType();
+
+  auto *differentiableProtocol =
+      getASTContext().getProtocol(KnownProtocolKind::Differentiable);
+  // MYTODO: can the protocol be null? e.g. if we do not have module imported
+  assert(differentiableProtocol != nullptr);
+  auto conf = swift::lookupConformance(resultType, differentiableProtocol);
+  return !conf.isInvalid();
+}
+
 llvm::ArrayRef<LifetimeDependenceInfo>
 AnyFunctionType::getLifetimeDependencies() const {
   switch (getKind()) {
@@ -4857,10 +4878,25 @@ static CanType getResultTypeForSupportedDifferentiableClosure(TypeBase *type) {
           silFunctionType->getSingleResult().getInterfaceType();
 
       if (resultType->hasTypeParameter()) {
+        // MYTODO: do we need to use replacement types?
         assert(silFunctionType->hasPatternSubstitutions());
         auto subst = silFunctionType->getPatternSubstitutions();
         resultType = subst.getReplacementTypes().front()->getCanonicalType();
       }
+      return resultType;
+    }
+  }
+
+  if (auto *anyFunctionType = type->getAs<AnyFunctionType>()) {
+    if (anyFunctionType->isSupportedAsDifferentiableClosure()) {
+      CanType resultType = anyFunctionType->getResult()->getCanonicalType();
+
+      // if (resultType->hasTypeParameter()) {
+      //   // MYTODO: do we need to use replacement types?
+      //   assert(silFunctionType->hasPatternSubstitutions());
+      //   auto subst = silFunctionType->getPatternSubstitutions();
+      //   resultType = subst.getReplacementTypes().front()->getCanonicalType();
+      // }
       return resultType;
     }
   }
@@ -4872,6 +4908,12 @@ std::optional<TangentSpace>
 TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
   assert(lookupConformance);
   auto &ctx = getASTContext();
+
+  // MYTODO
+  if (auto resultType = getResultTypeForSupportedDifferentiableClosure(this)) {
+    auto capturedArgsType = resultType;
+    return capturedArgsType->getAutoDiffTangentSpace(lookupConformance);
+  }
 
   Type cacheKey = this;
   auto lookup = ctx.AutoDiffTangentSpaces.find(cacheKey);
@@ -5151,12 +5193,16 @@ AnyFunctionType::getAutoDiffDerivativeFunctionLinearMapType(
       auto paramType = diffParam.getPlainType();
       auto paramTan = paramType->getAutoDiffTangentSpace(lookupConformance);
       // Error if parameter has no tangent space.
-      if (!paramTan)
+      if (!paramTan) {
+        llvm::errs() << "PARAM TYPE 10: " << paramType << "\n";
+        assert(false);
+        llvm::errs() << "PARAM TYPE 11: " << paramType << "\n";
         return llvm::make_error<DerivativeFunctionTypeError>(
             this,
             DerivativeFunctionTypeError::Kind::
                 NonDifferentiableDifferentiabilityParameter,
             DerivativeFunctionTypeError::TypeAndIndex(paramType, i));
+      }
 
       differentialParams.push_back(AnyFunctionType::Param(
           paramTan->getType(), Identifier(), diffParam.getParameterFlags()));
@@ -5199,12 +5245,16 @@ AnyFunctionType::getAutoDiffDerivativeFunctionLinearMapType(
       auto paramType = diffParam.getPlainType();
       auto paramTan = paramType->getAutoDiffTangentSpace(lookupConformance);
       // Error if parameter has no tangent space.
-      if (!paramTan)
+      if (!paramTan) {
+        llvm::errs() << "PARAM TYPE 00: " << paramType << "\n";
+        assert(false);
+        llvm::errs() << "PARAM TYPE 01: " << paramType << "\n";
         return llvm::make_error<DerivativeFunctionTypeError>(
             this,
             DerivativeFunctionTypeError::Kind::
                 NonDifferentiableDifferentiabilityParameter,
             DerivativeFunctionTypeError::TypeAndIndex(paramType, i));
+      }
 
       if (diffParam.isAutoDiffSemanticResult()) {
         if (paramType->isVoid())
