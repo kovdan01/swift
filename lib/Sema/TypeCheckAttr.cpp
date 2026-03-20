@@ -6636,6 +6636,11 @@ static bool checkFunctionSignature(
                   [&](AnyFunctionType::Param x, AnyFunctionType::Param y) {
                     auto xInstanceTy = x.getOldType()->getMetatypeInstanceType();
                     auto yInstanceTy = y.getOldType()->getMetatypeInstanceType();
+
+                    // FIXME
+                    if (x.isAutoClosure() && y.isAutoClosure())
+                      return true;
+
                     return xInstanceTy->isEqual(
                         requiredGenSig.getReducedType(yInstanceTy));
                   }))
@@ -6704,8 +6709,33 @@ getDerivativeOriginalFunctionType(AnyFunctionType *derivativeFnTy) {
   assert(derivativeResult && derivativeResult->getNumElements() == 2 &&
          "Expected derivative result to be a two-element tuple");
   auto originalResult = derivativeResult->getElement(0).getType();
+
+  llvm::SmallVector<AnyFunctionType::Param, 4> params;
+  for (const AnyFunctionType::Param &param : curryLevels.back()->getParams()) {
+    llvm::errs() << "getDerivativeOriginalFunctionType 00\n";
+    if (!param.isAutoClosure()) {
+      params.emplace_back(param);
+      continue;
+    }
+    llvm::errs() << "getDerivativeOriginalFunctionType 01: " << param.getOldType() << "\n";
+
+    auto aft = llvm::cast<AnyFunctionType>(param.getOldType().getPointer());
+    llvm::errs() << "getDerivativeOriginalFunctionType 02\n";
+    assert(aft->getParams().empty());
+    llvm::errs() << "getDerivativeOriginalFunctionType 03\n";
+    assert(!aft->isThrowing());
+    llvm::errs() << "getDerivativeOriginalFunctionType 04\n";
+    auto resultTuple = llvm::cast<TupleType>(aft->getResult().getPointer());
+    llvm::errs() << "getDerivativeOriginalFunctionType 05\n";
+    assert(resultTuple->getElementTypes().size() == 2);
+    llvm::errs() << "getDerivativeOriginalFunctionType 06\n";
+    auto resultType = resultTuple->getElementTypes().front();
+    auto newAft = makeFunctionType(aft->getParams(), resultType, aft->isThrowing(), aft->getThrownError(), aft->getOptGenericSignature());
+    params.emplace_back(newAft, param.getLabel(), param.getParameterFlags(), param.getInternalLabel());
+  }
+
   auto *originalType = makeFunctionType(
-      curryLevels.back()->getParams(), originalResult,
+      params/*curryLevels.back()->getParams()*/, originalResult,
       curryLevels.back()->isThrowing(), curryLevels.back()->getThrownError(),
       curryLevels.size() == 1 ? derivativeFnTy->getOptGenericSignature()
                               : nullptr);
@@ -6977,6 +7007,7 @@ bool resolveDifferentiableAttrDifferentiabilityParameters(
       SourceLoc loc = parsedDiffParams.empty()
                           ? attr->getLocation()
                           : parsedDiffParams[nonDiffParam.second].getLoc();
+      // MYTODO: closures?
       diags.diagnose(loc, diag::diff_params_clause_param_not_differentiable,
                      nonDiffParam.first);
       return;
@@ -7295,7 +7326,14 @@ static bool typeCheckDerivativeAttr(DerivativeAttr *attr) {
   // to be enabled.
   if (checkIfDifferentiableProgrammingEnabled(attr, D))
     return true;
+
+  llvm::errs() << "typeCheckDerivativeAttr 00\n";
+  D->print(llvm::errs());
+  llvm::errs() << "\ntypeCheckDerivativeAttr 01\n";
+
   auto *derivative = cast<FuncDecl>(D);
+  llvm::errs() << "typeCheckDerivativeAttr 02\n";
+
   auto originalName = attr->getOriginalFunctionName();
 
   auto *derivativeInterfaceType =
