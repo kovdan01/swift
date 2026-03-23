@@ -4894,21 +4894,12 @@ static CanType getResultTypeForSupportedDifferentiableClosure(TypeBase *type) {
     if (anyFunctionType->isSupportedAsDifferentiableClosure()) {
       CanType resultType = anyFunctionType->getResult()->getCanonicalType();
 
-      if (resultType->hasTypeParameter()) {
-        llvm::errs() << "AFT BEGIN\n";
-        anyFunctionType->print(llvm::errs());
-        llvm::errs() << "\nAFT END\n";
-        llvm::errs() << "AFT resultType 1: " << anyFunctionType->getResult() << "\n";
-        llvm::errs() << "AFT resultType 2: " << resultType << "\n";
-        llvm::errs() << "anyFunctionType->getOptGenericSignature(): " << anyFunctionType->getOptGenericSignature() << "\n";
-
-
-
-        // // MYTODO: do we need to use replacement types?
-        // assert(silFunctionType->hasPatternSubstitutions());
-        // auto subst = silFunctionType->getPatternSubstitutions();
-        // resultType = subst.getReplacementTypes().front()->getCanonicalType();
-      }
+      // if (resultType->hasTypeParameter()) {
+      //   // MYTODO: do we need to use replacement types?
+      //   assert(silFunctionType->hasPatternSubstitutions());
+      //   auto subst = silFunctionType->getPatternSubstitutions();
+      //   resultType = subst.getReplacementTypes().front()->getCanonicalType();
+      // }
       return resultType;
     }
   }
