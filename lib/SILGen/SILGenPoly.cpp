@@ -2935,13 +2935,16 @@ static ManagedValue applyTrivialConversions(SILGenFunction &SGF,
     outerASTTy = outerASTTy->mapTypeOutOfEnvironment()->getCanonicalType();
 
   if (innerASTTy == outerASTTy) {
+    llvm::errs() << "applyTrivialConversions 00\n";
     return innerValue;
   }
   if (innerASTTy->getClassOrBoundGenericClass()
       && outerASTTy->getClassOrBoundGenericClass()) {
     if (outerASTTy->isExactSuperclassOf(innerASTTy)) {
+      llvm::errs() << "applyTrivialConversions 01\n";
       return SGF.B.createUpcast(loc, innerValue, outerType);
     } else if (innerASTTy->isExactSuperclassOf(outerASTTy)) {
+      llvm::errs() << "applyTrivialConversions 02\n";
       return SGF.B.createUncheckedRefCast(loc, innerValue, outerType);
     }
   } else if (auto innerFnTy = dyn_cast<SILFunctionType>(innerASTTy)) {
@@ -2959,6 +2962,14 @@ static ManagedValue applyTrivialConversions(SILGenFunction &SGF,
         || abiDiffA == TypeConverter::ABIDifference::CompatibleCallingConvention
         || abiDiffB == TypeConverter::ABIDifference::CompatibleRepresentation
         || abiDiffB == TypeConverter::ABIDifference::CompatibleCallingConvention) {
+        llvm::errs() << "applyTrivialConversions 03\n";
+        llvm::errs() << "abiDiffA = " << (int)abiDiffA << "\n";
+        llvm::errs() << "abiDiffB = " << (int)abiDiffB << "\n";
+        llvm::errs() << "innerASTTy = " << innerASTTy << "\n";
+        llvm::errs() << "outerASTTy = " << outerASTTy << "\n";
+        llvm::errs() << "innerFnTy = " << innerFnTy << "\n";
+        llvm::errs() << "outerFnTy = " << outerFnTy << "\n";
+
         return SGF.B.createConvertFunction(loc, innerValue, outerType);
       }
     }
@@ -2974,6 +2985,8 @@ forwardFunctionArguments(SILGenFunction &SGF, SILLocation loc,
                          ArrayRef<ManagedValue> managedArgs,
                          SmallVectorImpl<SILValue> &forwardedArgs,
                          SILGenFunction::ThunkGenOptions options = {}) {
+  llvm::errs() << "forwardFunctionArguments 00\n";
+
   auto argTypes = fTy->getParameters();
 
   // If our callee has an implicit parameter, we have already inserted it, so
@@ -2983,23 +2996,47 @@ forwardFunctionArguments(SILGenFunction &SGF, SILLocation loc,
     argTypes = argTypes.drop_front();
   }
 
+  llvm::errs() << "forwardFunctionArguments 01\n";
+
   for (auto index : indices(managedArgs)) {
+    llvm::errs() << "forwardFunctionArguments 02 idx " << index << "\n";
+
     auto arg = managedArgs[index];
     auto argTy = argTypes[index];
+    llvm::errs() << "forwardFunctionArguments 03 idx " << index << "\n";
+
     auto argSubstTy =
         argTy.getArgumentType(SGF.SGM.M, fTy, SGF.getTypeExpansionContext());
 
+    llvm::errs() << "forwardFunctionArguments 04 idx " << index << "\n";
+    llvm::errs() << "forwardFunctionArguments 04 argTy " << argTy << "\n";
+    llvm::errs() << "forwardFunctionArguments 04 argSubstTy " << argSubstTy << "\n";
+
     arg = applyTrivialConversions(SGF, loc, arg,
                                   SILType::getPrimitiveObjectType(argSubstTy));
+
+    llvm::errs() << "forwardFunctionArguments 05 idx " << index << "\n";
+
 
     if (argTy.isConsumedInCaller()) {
       forwardedArgs.push_back(arg.ensurePlusOne(SGF, loc).forward(SGF));
       continue;
     }
 
+    llvm::errs() << "forwardFunctionArguments 06 idx " << index << "\n";
+
+
     if (isGuaranteedParameterInCallee(argTy.getConvention())) {
+      llvm::errs() << "forwardFunctionArguments 07 idx " << index << "\n";
+
+      // llvm::errs() << "emitManagedBeginBorrow BEGIN: ";
+      // arg.print(llvm::errs());
+      // llvm::errs() << "\nemitManagedBeginBorrow MIDDLE 00: " << arg.getValue() << "\n";
+
+      llvm::errs() << "emitManagedBeginBorrow BEFORE\n";
       auto forwardedArg =
           SGF.emitManagedBeginBorrow(loc, arg.getValue()).getValue();
+      llvm::errs() << "emitManagedBeginBorrow END\n";
       if (forwardedArg->getType().isObject() &&
           fTy->hasGuaranteedResult(/*loweredAddresses*/ true)) {
         forwardedArg = SGF.B.createUncheckedOwnership(loc, forwardedArg);
@@ -6679,7 +6716,11 @@ SILFunction *SILGenModule::getOrCreateCustomDerivativeThunk(
     arguments.push_back(indRes.getLValueAddress());
   for (auto indErrorRes : indirectErrorResults)
     arguments.push_back(indErrorRes.getLValueAddress());
+  llvm::errs() << "getOrCreateCustomDerivativeThunk fnRefType: " << fnRefType << "\n";
+  llvm::errs() << "forwardFunctionArguments BEFORE\n";
   forwardFunctionArguments(thunkSGF, loc, fnRefType, params, arguments);
+  llvm::errs() << "forwardFunctionArguments AFTER\n";
+
 
   SubstitutionMap subs = thunk->getForwardingSubstitutionMap();
   SILType substFnType = fnRef->getType().substGenericArgs(
