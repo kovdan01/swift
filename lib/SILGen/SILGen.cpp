@@ -1488,14 +1488,28 @@ void SILGenModule::emitDifferentiabilityWitness(
   // Set derivative function in differentiability witness.
   auto setDerivativeInDifferentiabilityWitness =
       [&](AutoDiffDerivativeFunctionKind kind, SILFunction *derivative) {
+        llvm::errs() << "getOrCreateCustomDerivativeThunk derivative BEGIN\n";
+        derivative->print(llvm::errs());
+        llvm::errs() << "\ngetOrCreateCustomDerivativeThunk derivative END\n";
+
         auto derivativeThunk = getOrCreateCustomDerivativeThunk(
             originalAFD, originalFunction, derivative, silConfig, kind);
+        llvm::errs() << "getOrCreateCustomDerivativeThunk derivativeThunk BEGIN\n";
+        derivativeThunk->print(llvm::errs());
+        llvm::errs() << "\ngetOrCreateCustomDerivativeThunk derivativeThunk END\n";
+
         // Check for existing same derivative.
         // TODO(TF-835): Remove condition below and simplify assertion to
         // `!diffWitness->getDerivative(kind)` after `@derivative` attribute
         // type-checking no longer generates implicit `@differentiable`
         // attributes.
         auto *existingDerivative = diffWitness->getDerivative(kind);
+
+        llvm::errs() << "setDerivativeInDifferentiabilityWitness BEGIN\n";
+        existingDerivative->print(llvm::errs());
+        llvm::errs() << "\nsetDerivativeInDifferentiabilityWitness END\n";
+
+
         if (existingDerivative && existingDerivative == derivativeThunk)
           return;
         assert(!existingDerivative &&
