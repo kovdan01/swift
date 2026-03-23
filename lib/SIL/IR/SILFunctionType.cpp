@@ -165,8 +165,6 @@ bool SILFunctionType::isSupportedAsDifferentiableClosure() const {
   if (hasErrorResult())
     return false;
 
-  // MYTODO: check throwing
-
   CanType resultType = getSingleResult().getInterfaceType();
 
   auto *differentiableProtocol =
