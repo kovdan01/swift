@@ -71,7 +71,7 @@ extension Optional.TangentVector: CustomReflectable {
   }
 }
 
-@derivative(of: ??, wrt: optional)
+@derivative(of: ??)
 @_transparent
 @_alwaysEmitIntoClient
 func _vjpNilCoalescing<T: Differentiable>(optional: T?, defaultValue: @autoclosure () throws -> T)
