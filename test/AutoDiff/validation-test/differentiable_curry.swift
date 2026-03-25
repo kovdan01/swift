@@ -81,6 +81,52 @@ func nilCoalescingGenericLazy<T>(_ x: T?, _ y: @autoclosure () -> T) -> T where 
   return x!
 }
 
+func nilCoalescingGenericLazyCustom<T>(_ x: T?, _ y: @autoclosure () -> T) -> T where T : Differentiable, T.TangentVector == T {
+  if x == nil {
+    return y()
+  }
+  return x!
+}
+
+// MYTODO: what if param names are different?
+@derivative(of: nilCoalescingGenericLazyCustom, wrt: (x, y))
+func vjpNilCoalescingGenericLazyCustom<T: Differentiable>(
+  _ x: T?,
+  _ y: @autoclosure () -> (value: T, pullback: (T) -> T)
+)
+  -> (value: T, pullback: (T.TangentVector) -> (Optional<T>.TangentVector, T.TangentVector))
+  where T.TangentVector == T
+{
+  let hasValue = x != nil
+  let defaultVJPRes : Optional<(value: T, pullback: (T) -> T)> = hasValue ? nil : y()
+  let value = nilCoalescingGenericLazyCustom(x, y().value)
+  func pullback(_ v: T.TangentVector) -> (Optional<T>.TangentVector, T.TangentVector) {
+    return hasValue ? (.init(v), .zero) : (.zero, defaultVJPRes!.pullback(v))
+  }
+  return (value, pullback)
+}
+
+func nilCoalescingLazyCustom(_ x: Float?, _ y: @autoclosure () -> Float) -> Float {
+  if x == nil {
+    return y()
+  }
+  return x!
+}
+
+// MYTODO: what if param names are different?
+@derivative(of: nilCoalescingLazyCustom, wrt: (x, y))
+func vjpNilCoalescingLazyCustom(
+  _ x: Float?,
+  _ y: @autoclosure () -> (value: Float, pullback: (Float) -> Float)
+)
+  -> (value: Float, pullback: (Float.TangentVector) -> (Optional<Float>.TangentVector, Float.TangentVector))
+{
+  func pullback(_ v: Float.TangentVector) -> (Optional<Float>.TangentVector, Float.TangentVector) {
+    return (Optional<Float>.TangentVector(37), Float.TangentVector(42))
+  }
+  return (nilCoalescingLazyCustom(x, y().value), pullback)
+}
+
 func nilCoalescingGenericNonLazy<T>(_ x: T?, _ y: T) -> T where T : Differentiable, T.TangentVector == T {
   if x == nil {
     return y
@@ -129,6 +175,11 @@ NilCoalescingTests.test("Float") {
   }
 
   @differentiable(reverse)
+  func lazyCustom(_ x: Float?, _ y: Float) -> Float {
+    return nilCoalescingLazyCustom(x, y * y)
+  }
+
+  @differentiable(reverse)
   func lazyGeneric1(_ x: Float?, _ y: Float) -> Float {
     return nilCoalescingGenericLazy(x, y * y)
   }
@@ -136,6 +187,11 @@ NilCoalescingTests.test("Float") {
   @differentiable(reverse)
   func lazyGenericGeneric1<T>(_ x: T?, _ y: T) -> T where T: MultiplyDifferentiable, T.TangentVector == T {
     return nilCoalescingGenericLazy(x, y * y)
+  }
+
+  @differentiable(reverse)
+  func lazyGenericGenericCustom<T>(_ x: T?, _ y: T) -> T where T: MultiplyDifferentiable, T.TangentVector == T {
+    return nilCoalescingGenericLazyCustom(x, y * y)
   }
 
   @differentiable(reverse)
@@ -159,11 +215,17 @@ NilCoalescingTests.test("Float") {
   let pbLazy2 = pullback(at: Float?(nil), Float(3), of: lazy2)
   let lazyResult2 = pbLazy2(Float(1))
 
+  let pbLazyCustom = pullback(at: Float?(nil), Float(3), of: lazyCustom)
+  let lazyResultCustom = pbLazyCustom(Float(1))
+
   let pbLazyGeneric1 = pullback(at: Float?(nil), Float(3), of: lazyGeneric1)
   let lazyGenericResult1 = pbLazyGeneric1(Float(1))
 
   let pbLazyGenericGeneric1 = pullback(at: Float?(nil), Float(3), of: lazyGenericGeneric1)
   let lazyGenericGenericResult1 = pbLazyGenericGeneric1(Float(1))
+
+  let pbLazyGenericGenericCustom = pullback(at: Float?(nil), Float(3), of: lazyGenericGenericCustom)
+  let lazyGenericGenericResultCustom = pbLazyGenericGenericCustom(Float(1))
 
   let pbNonLazy = pullback(at: Float?(nil), Float(3), of: nonLazy)
   let nonLazyResult = pbNonLazy(Float(1))
@@ -178,8 +240,10 @@ NilCoalescingTests.test("Float") {
 
   expectEqual(lazyResult1, expectedResult)
   expectEqual(lazyResult2, expectedResult)
+  expectEqual(lazyResultCustom, (Optional<Float>.TangentVector(37), Float.TangentVector(42)))
   expectEqual(lazyGenericResult1, expectedResult)
   expectEqual(lazyGenericGenericResult1, expectedResult)
+  expectEqual(lazyGenericGenericResultCustom, expectedResult)
   expectEqual(nonLazyResult, expectedResult)
   expectEqual(nonLazyGenericResult, expectedResult)
   expectEqual(nonLazyGenericGenericResult, expectedResult)
