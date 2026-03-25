@@ -4902,8 +4902,6 @@ static CanType getResultTypeForSupportedDifferentiableClosure(TypeBase *type) {
         llvm::errs() << "AFT resultType 2: " << resultType << "\n";
         llvm::errs() << "anyFunctionType->getOptGenericSignature(): " << anyFunctionType->getOptGenericSignature() << "\n";
 
-
-
         // // MYTODO: do we need to use replacement types?
         // assert(silFunctionType->hasPatternSubstitutions());
         // auto subst = silFunctionType->getPatternSubstitutions();

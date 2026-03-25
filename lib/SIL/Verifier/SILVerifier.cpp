@@ -2257,6 +2257,55 @@ public:
     require(site.getNumArguments() == substConv.getNumSILArguments(),
             "apply doesn't have right number of arguments for function");
     for (size_t i = 0, size = site.getNumArguments(); i < size; ++i) {
+      auto lhs_ = site.getArguments()[i]->getType();
+      auto rhs_ = substConv.getSILArgumentType(i, F.getTypeExpansionContext());
+      if (lhs_ != rhs_) {
+        auto lhs = lhs_.getAs<SILFunctionType>();
+        auto rhs = rhs_.getAs<SILFunctionType>();
+        llvm::errs()
+            << "function type ptr 00: "
+            << site.getCalleeFunction()->getLoweredFunctionType().getPointer()
+            << "\n";
+        llvm::errs() << "lhs.getOpaqueValue() = " << lhs_.getOpaqueValue()
+                     << "\n";
+        llvm::errs() << "rhs.getOpaqueValue() = " << rhs_.getOpaqueValue()
+                     << "\n";
+
+        llvm::errs() << "LHS PATTERN GEN SIG: "
+                     << lhs->getPatternGenericSignature() << "\n";
+        llvm::errs() << "RHS PATTERN GEN SIG: "
+                     << rhs->getPatternGenericSignature() << "\n";
+        llvm::errs() << "EQUAL? "
+                     << (int)(lhs->getPatternGenericSignature() ==
+                              rhs->getPatternGenericSignature())
+                     << "\n";
+
+        llvm::errs() << "\nLHS PATTERN GEN SIG PTR: "
+                     << lhs->getPatternGenericSignature().getPointer() << "\n";
+        llvm::errs() << "RHS PATTERN GEN SIG PTR: "
+                     << rhs->getPatternGenericSignature().getPointer()
+                     << "\n\n";
+
+        llvm::errs() << "LHS INV GEN SIG: "
+                     << lhs->getInvocationGenericSignature() << "\n";
+        llvm::errs() << "RHS INV GEN SIG: "
+                     << rhs->getInvocationGenericSignature() << "\n";
+        llvm::errs() << "EQUAL? "
+                     << (int)(lhs->getInvocationGenericSignature() ==
+                              rhs->getInvocationGenericSignature())
+                     << "\n";
+        for (const auto &[idx, lhsRes] : llvm::enumerate(lhs->getResults())) {
+          auto rhsRes = rhs->getResults()[idx];
+          llvm::errs() << "LHS RES " << idx << ": "
+                       << lhsRes.getSILStorageInterfaceType() << "\n";
+          llvm::errs() << "RHS RES " << idx << ": "
+                       << rhsRes.getSILStorageInterfaceType() << "\n";
+          llvm::errs() << "EQUAL? "
+                       << (int)(lhsRes.getSILStorageInterfaceType() ==
+                                rhsRes.getSILStorageInterfaceType())
+                       << "\n";
+        }
+      }
       requireSameType(
           site.getArguments()[i]->getType(),
           substConv.getSILArgumentType(i, F.getTypeExpansionContext()),

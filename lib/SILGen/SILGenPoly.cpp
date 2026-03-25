@@ -2969,6 +2969,9 @@ static ManagedValue applyTrivialConversions(SILGenFunction &SGF,
         llvm::errs() << "outerASTTy = " << outerASTTy << "\n";
         llvm::errs() << "innerFnTy = " << innerFnTy << "\n";
         llvm::errs() << "outerFnTy = " << outerFnTy << "\n";
+        llvm::errs() << "EQUAL? " << (int)(innerFnTy == outerFnTy) << "\n";
+        llvm::errs() << "innerASTTy PTR = " << innerASTTy.getPointer() << "\n";
+        llvm::errs() << "outerASTTy PTR = " << outerASTTy.getPointer() << "\n";
 
         return SGF.B.createConvertFunction(loc, innerValue, outerType);
       }
@@ -3008,12 +3011,24 @@ forwardFunctionArguments(SILGenFunction &SGF, SILLocation loc,
     auto argSubstTy =
         argTy.getArgumentType(SGF.SGM.M, fTy, SGF.getTypeExpansionContext());
 
+    auto x = SILType::getPrimitiveObjectType(argSubstTy);
+
     llvm::errs() << "forwardFunctionArguments 04 idx " << index << "\n";
     llvm::errs() << "forwardFunctionArguments 04 argTy " << argTy << "\n";
     llvm::errs() << "forwardFunctionArguments 04 argSubstTy " << argSubstTy << "\n";
+    llvm::errs() << "forwardFunctionArguments 04 argTy opaque 1 "
+                 << argTy.getSILStorageInterfaceType().getOpaqueValue() << "\n";
+    llvm::errs() << "forwardFunctionArguments 04 argTy opaque 2 "
+                 << argTy
+                        .getArgumentType(SGF.getModule(), fTy,
+                                         SGF.getTypeExpansionContext())
+                        .getPointer()
+                 << "\n";
+    llvm::errs() << "forwardFunctionArguments 04 argSubstTy opaque "
+                 << x.getOpaqueValue() << "\n";
 
-    arg = applyTrivialConversions(SGF, loc, arg,
-                                  SILType::getPrimitiveObjectType(argSubstTy));
+    arg = applyTrivialConversions(SGF, loc, arg, x);
+    // SILType::getPrimitiveObjectType(argSubstTy));
 
     llvm::errs() << "forwardFunctionArguments 05 idx " << index << "\n";
 
@@ -3033,7 +3048,12 @@ forwardFunctionArguments(SILGenFunction &SGF, SILLocation loc,
       // arg.print(llvm::errs());
       // llvm::errs() << "\nemitManagedBeginBorrow MIDDLE 00: " << arg.getValue() << "\n";
 
+      llvm::errs() << "SGF.getFunction().getGenericSignature(): "
+                   << SGF.getFunction().getGenericSignature() << "\n";
+      llvm::errs() << "SGF.getFunction().getName(): "
+                   << SGF.getFunction().getName() << "\n";
       llvm::errs() << "emitManagedBeginBorrow BEFORE\n";
+
       auto forwardedArg =
           SGF.emitManagedBeginBorrow(loc, arg.getValue()).getValue();
       llvm::errs() << "emitManagedBeginBorrow END\n";
@@ -6673,10 +6693,75 @@ SILFunction *SILGenModule::getOrCreateCustomDerivativeThunk(
       loc, params, &indirectResults, &indirectErrorResults);
 
   auto *fnRef = thunkSGF.B.createFunctionRef(loc, customDerivativeFn);
+
+  // llvm::errs() << "fnRef->getType(): " << fnRef->getType() << "\n";
+  // llvm::errs() << "opaque: " << fnRef->getType().getOpaqueValue() << "\n";
+  // llvm::errs() << "fnRef->getType().mapTypeOutOfEnvironment(): " <<
+  // fnRef->getType().mapTypeOutOfEnvironment() << "\n"; llvm::errs() <<
+  // "opaque: " << fnRef->getType().mapTypeOutOfEnvironment().getOpaqueValue()
+  // << "\n";
+
   auto fnRefType =
-      thunkSGF.F.mapTypeIntoEnvironment(fnRef->getType().mapTypeOutOfEnvironment())
+      thunkSGF.F
+          .mapTypeIntoEnvironment(fnRef->getType().mapTypeOutOfEnvironment())
           .castTo<SILFunctionType>()
           ->getUnsubstitutedType(M);
+  // llvm::errs() << "fnRefType: " << fnRefType << "\n";
+  // llvm::errs() << "opaque: " << fnRefType->getCanonicalType().getPointer() <<
+  // "\n";
+
+  // auto fnRefTypeSubst = fnRef->getType().substGenericArgs(
+  //       M, thunk->getForwardingSubstitutionMap(),
+  //       thunk->getTypeExpansionContext()).getAs<SILFunctionType>();
+
+  // llvm::errs() << "fnRefTypeSubst: " << fnRefTypeSubst << "\n";
+  // llvm::errs() << "opaque: " <<
+  // fnRefTypeSubst->getCanonicalType().getPointer() << "\n";
+
+  // SILFunctionConventions substConv_(fnRefTypeSubst, M);
+  // for (const auto &[idx, param, rhsParam] :
+  // llvm::enumerate(fnRefTypeSubst->getParameters(),
+  // substConv_.getParameterSILTypes(thunk->getTypeExpansionContext()))) {
+  //   llvm::errs() << "param type A: " << param.getInterfaceType() << "\n";
+  //   llvm::errs() << "opaque A: " << param.getInterfaceType().getPointer() <<
+  //   "\n"; llvm::errs() << "param type B: " <<
+  //   param.getArgumentType(customDerivativeFn) << "\n"; llvm::errs() <<
+  //   "opaque B: " << param.getArgumentType(customDerivativeFn).getPointer() <<
+  //   "\n";
+
+  //   SILType param_ = rhsParam;
+  //   llvm::errs() << "param type C: " << param_ << "\n";
+  //   llvm::errs() << "opaque C: " << param_.getOpaqueValue() << "\n";
+
+  //   SILType arg_ = substConv_.getSILArgumentType(idx +
+  //   substConv_.getNumIndirectSILResults(), thunk->getTypeExpansionContext());
+  //   llvm::errs() << "arg type D: " << arg_ << "\n";
+  //   llvm::errs() << "opaque D: " << arg_.getOpaqueValue() << "\n";
+
+  //   {
+  //   SILFunctionConventions substConv2_(fnRefType, M);
+  //   SILType maybeRightType = substConv2_.getSILType(
+  //         fnRefType->getParameters()[idx/* -
+  //         substConv2_.getNumIndirectSILResults() -
+  //                                 substConv2_.getNumIndirectSILErrorResults()*/],
+  //                                 thunk->getTypeExpansionContext());
+
+  //   llvm::errs() << "maybeRightType 00: " << maybeRightType << "\n";
+  //   llvm::errs() << "opaque: " << maybeRightType.getOpaqueValue() << "\n";
+  //   }
+
+  //   {
+  //   SILFunctionConventions substConv2_(fnRefTypeSubst, M);
+  //   SILType maybeRightType = substConv2_.getSILType(
+  //         fnRefTypeSubst->getParameters()[idx/* -
+  //         substConv2_.getNumIndirectSILResults() -
+  //                                 substConv2_.getNumIndirectSILErrorResults()*/],
+  //                                 thunk->getTypeExpansionContext());
+
+  //   llvm::errs() << "maybeRightType 01: " << maybeRightType << "\n";
+  //   llvm::errs() << "opaque: " << maybeRightType.getOpaqueValue() << "\n";
+  //   }
+  // }
 
   // Special support for thunking class initializer derivatives.
   //
@@ -6710,25 +6795,63 @@ SILFunction *SILGenModule::getOrCreateCustomDerivativeThunk(
     params.push_back(ManagedValue::forObjectRValueWithoutOwnership(metatype));
   }
 
+  auto fnRefTypeSubst =
+      fnRef->getType()
+          .substGenericArgs(M, thunk->getForwardingSubstitutionMap(),
+                            thunk->getTypeExpansionContext())
+          .getAs<SILFunctionType>();
+
+  // SILFunctionConventions substConv_(fnRefTypeSubst, M);
+  // for (const auto &[idx, param] :
+  // llvm::enumerate(fnRefTypeSubst->getParameters())) {
+  //   SILFunctionConventions conv(fnRefTypeSubst, M);
+  //   SILType maybeRightType = conv.getSILType(
+  //         param, thunk->getTypeExpansionContext());
+  //   //params[i] =
+  // }
+
   // Collect thunk arguments, converting ownership.
   SmallVector<SILValue, 8> arguments;
-  for (auto indRes : indirectResults)
+  for (auto indRes : indirectResults) {
     arguments.push_back(indRes.getLValueAddress());
-  for (auto indErrorRes : indirectErrorResults)
+    // customDerivativeFn->;
+    //  if (arguments.size() >
+    //  customDerivativeFn->getConventions().getNumIndirectSILResults() &&
+    //      arguments.back()->getType().getASTType() !=
+    //      customDerivativeFn->getLoweredFunctionType()->getParameters()[arguments.size()
+    //      - 1].getInterfaceType()) {
+    //    llvm::errs() << "DIFFERENT ARG IN CUSTOM THUNK 00: "
+    //                 << arguments.back()->getType().getASTType() << "\n";
+    //    llvm::errs() << "DIFFERENT ARG IN CUSTOM THUNK 01: "
+    //                 <<
+    //                 customDerivativeFn->getLoweredFunctionType()->getParameters()[arguments.size()
+    //                 - 1].getInterfaceType() << "\n";
+    //    assert(arguments.back()->getType().is<SILFunctionType>());
+    //    //llvm::errs() << "DIFFERENT ARG IN CUSTOM THUNK\n";
+    //  }
+  }
+  for (auto indErrorRes : indirectErrorResults) {
     arguments.push_back(indErrorRes.getLValueAddress());
+  }
   llvm::errs() << "getOrCreateCustomDerivativeThunk fnRefType: " << fnRefType << "\n";
   llvm::errs() << "forwardFunctionArguments BEFORE\n";
-  forwardFunctionArguments(thunkSGF, loc, fnRefType, params, arguments);
+  forwardFunctionArguments(thunkSGF, loc, fnRefTypeSubst /*fnRefType*/, params,
+                           arguments);
   llvm::errs() << "forwardFunctionArguments AFTER\n";
-
 
   SubstitutionMap subs = thunk->getForwardingSubstitutionMap();
   SILType substFnType = fnRef->getType().substGenericArgs(
       M, subs, thunk->getTypeExpansionContext());
 
+  // fnRefType.getAs<SILFunctionType>()
+  //  SILFunctionType x;
+  //  x.substGenericArgs()
+
   // Apply function argument.
   auto apply =
       thunkSGF.emitApplyWithRethrow(loc, fnRef, substFnType, subs, arguments);
+
+  llvm::errs() << "emitApplyWithRethrow: " << apply << "\n";
 
   // Self reordering thunk is necessary if wrt at least two parameters,
   // including self.

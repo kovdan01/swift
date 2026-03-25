@@ -1506,7 +1506,7 @@ void SILGenModule::emitDifferentiabilityWitness(
         auto *existingDerivative = diffWitness->getDerivative(kind);
 
         llvm::errs() << "setDerivativeInDifferentiabilityWitness BEGIN\n";
-        existingDerivative->print(llvm::errs());
+        // existingDerivative->print(llvm::errs());
         llvm::errs() << "\nsetDerivativeInDifferentiabilityWitness END\n";
 
 

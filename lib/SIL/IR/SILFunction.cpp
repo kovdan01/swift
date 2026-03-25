@@ -617,11 +617,13 @@ SILTypeProperties SILFunction::getTypeProperties(SILType type) const {
 
 const TypeLowering &
 SILFunction::getTypeLowering(AbstractionPattern orig, Type subst) const {
+  llvm::errs() << "SILFunction::getTypeLowering 00\n";
   return getModule().Types.getTypeLowering(orig, subst,
                                            TypeExpansionContext(*this));
 }
 
 const TypeLowering &SILFunction::getTypeLowering(Type t) const {
+  llvm::errs() << "SILFunction::getTypeLowering 01\n";
   return getModule().Types.getTypeLowering(t, TypeExpansionContext(*this));
 }
 
@@ -651,7 +653,11 @@ SILType SILFunction::getLoweredLoadableType(Type t) const {
 }
 
 const TypeLowering &SILFunction::getTypeLowering(SILType type) const {
-  return getModule().Types.getTypeLowering(type, *this);
+  llvm::errs() << "SILFunction::getTypeLowering 02\n";
+  // return getModule().Types.getTypeLowering(type, *this);
+  return getModule().Types.getTypeLowering(
+      type, TypeExpansionContext(*this),
+      this->getLoweredFunctionType()->getSubstGenericSignature());
 }
 
 SILType SILFunction::getLoweredType(SILType t) const {

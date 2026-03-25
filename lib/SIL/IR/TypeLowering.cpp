@@ -3894,12 +3894,12 @@ const TypeLowering &
 TypeConverter::getTypeLowering(SILType type,
                                TypeExpansionContext forExpansion,
                                CanGenericSignature sig) {
-  llvm::errs() << "\n\ngetTypeLowering sig: " << sig << '\n';
-  llvm::errs() << "getTypeLowering type: " << type << '\n';
-  llvm::errs() << "getTypeLowering AST type: " << type.getASTType() << '\n';
+  // llvm::errs() << "\n\ngetTypeLowering sig: " << sig << '\n';
+  // llvm::errs() << "getTypeLowering type: " << type << '\n';
+  // llvm::errs() << "getTypeLowering AST type: " << type.getASTType() << '\n';
   // The type lowering for a type parameter relies on its context.
   assert(sig || !type.getASTType()->hasTypeParameter());
-  llvm::errs() << "getTypeLowering AFTER ASSERT\n\n";
+  // llvm::errs() << "getTypeLowering AFTER ASSERT\n\n";
 
   // We use the Raw AST type to ensure that moveonlywrapped values use the move
   // only type lowering. This ensures that trivial moveonlywrapped values are
@@ -3915,6 +3915,16 @@ TypeConverter::getTypeLowering(SILType type,
 
 const TypeLowering &
 TypeConverter::getTypeLowering(SILType t, SILFunction &F) {
+  assert(false);
+  llvm::errs()
+      << "\nTypeConverter::getTypeLowering(SILType t, SILFunction &F) BEGIN\n";
+  llvm::errs().flush();
+  llvm::errs() << "sig: "
+               << F.getLoweredFunctionType()->getSubstGenericSignature()
+               << "\n";
+  llvm::errs()
+      << "\nTypeConverter::getTypeLowering(SILType t, SILFunction &F) END\n";
+
   return getTypeLowering(t, TypeExpansionContext(F),
                        F.getLoweredFunctionType()->getSubstGenericSignature());
 }

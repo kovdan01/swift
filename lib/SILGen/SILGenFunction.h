@@ -841,6 +841,9 @@ public:
     return F.getTypeLowering(t);
   }
   const TypeLowering &getTypeLowering(SILType type) {
+    llvm::errs()
+        << "SGF: const TypeLowering &getTypeLowering(SILType type) {\n";
+    llvm::errs().flush();
     return F.getTypeLowering(type);
   }
 
