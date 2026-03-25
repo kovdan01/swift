@@ -6679,14 +6679,7 @@ SILFunction *SILGenModule::getOrCreateCustomDerivativeThunk(
     arguments.push_back(indRes.getLValueAddress());
   for (auto indErrorRes : indirectErrorResults)
     arguments.push_back(indErrorRes.getLValueAddress());
-
-  auto fnRefTypeSubst =
-      fnRef->getType()
-          .substGenericArgs(M, thunk->getForwardingSubstitutionMap(),
-                            thunk->getTypeExpansionContext())
-          .getAs<SILFunctionType>();
-
-  forwardFunctionArguments(thunkSGF, loc, fnRefTypeSubst, params, arguments);
+  forwardFunctionArguments(thunkSGF, loc, fnRefType, params, arguments);
 
   SubstitutionMap subs = thunk->getForwardingSubstitutionMap();
   SILType substFnType = fnRef->getType().substGenericArgs(

@@ -3802,8 +3802,6 @@ public:
   Type getGlobalActor() const;
   Type getThrownError() const;
 
-  bool isSupportedAsDifferentiableClosure() const;
-
   /// A dependent type that determines whether the function is @Sendable. This
   /// is only used within the constraint system, and will contain type
   /// variables if present.
