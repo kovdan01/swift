@@ -3802,6 +3802,8 @@ public:
   Type getGlobalActor() const;
   Type getThrownError() const;
 
+  bool isSupportedAsDifferentiableClosure() const;
+
   /// A dependent type that determines whether the function is @Sendable. This
   /// is only used within the constraint system, and will contain type
   /// variables if present.
@@ -6227,7 +6229,9 @@ public:
   /// Return the unsubstituted function type equivalent to this type; that is, the type that has the same
   /// argument and result types as `this` type after substitutions, if any.
   CanSILFunctionType getUnsubstitutedType(SILModule &M) const;
-                                    
+
+  bool isSupportedAsDifferentiableClosure() const;
+
   void Profile(llvm::FoldingSetNodeID &ID) {
     Profile(ID, getInvocationGenericSignature(),
             getExtInfo(), getCoroutineKind(), getCalleeConvention(),
