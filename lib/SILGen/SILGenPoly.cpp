@@ -6679,7 +6679,14 @@ SILFunction *SILGenModule::getOrCreateCustomDerivativeThunk(
     arguments.push_back(indRes.getLValueAddress());
   for (auto indErrorRes : indirectErrorResults)
     arguments.push_back(indErrorRes.getLValueAddress());
-  forwardFunctionArguments(thunkSGF, loc, fnRefType, params, arguments);
+
+  auto fnRefTypeSubst =
+      fnRef->getType()
+          .substGenericArgs(M, thunk->getForwardingSubstitutionMap(),
+                            thunk->getTypeExpansionContext())
+          .getAs<SILFunctionType>();
+
+  forwardFunctionArguments(thunkSGF, loc, fnRefTypeSubst, params, arguments);
 
   SubstitutionMap subs = thunk->getForwardingSubstitutionMap();
   SILType substFnType = fnRef->getType().substGenericArgs(
@@ -6883,12 +6890,11 @@ SILGenFunction::emitOrigToSubstValue(SILLocation loc, ManagedValue v,
   return emitOrigToSubstValue(loc, v, origType, substType,
                               getLoweredType(substType), ctxt);
 }
-ManagedValue
-SILGenFunction::emitOrigToSubstValue(SILLocation loc, ManagedValue v,
-                                     AbstractionPattern origType,
-                                     CanType substType,
-                                     SILType loweredResultTy,
-                                     SGFContext ctxt) {
+ManagedValue SILGenFunction::emitOrigToSubstValue(SILLocation loc, ManagedValue v,
+                                                  AbstractionPattern origType,
+                                                  CanType substType,
+                                                  SILType loweredResultTy,
+                                                  SGFContext ctxt) {
   return emitTransformedValue(loc, v,
                               origType, substType,
                               AbstractionPattern(substType), substType,
