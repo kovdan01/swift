@@ -6139,8 +6139,8 @@ SpecializeAttrTargetDeclRequest::evaluate(Evaluator &evaluator,
   }
 
   return nullptr;
-
 }
+
 /// Returns true if the given type conforms to `Differentiable` in the given
 /// context. If `tangentVectorEqualsSelf` is true, also check whether the given
 /// type satisfies `TangentVector == Self`.
@@ -6636,6 +6636,11 @@ static bool checkFunctionSignature(
                   [&](AnyFunctionType::Param x, AnyFunctionType::Param y) {
                     auto xInstanceTy = x.getOldType()->getMetatypeInstanceType();
                     auto yInstanceTy = y.getOldType()->getMetatypeInstanceType();
+
+                    // MYTODO FIXME
+                    if (x.isAutoClosure() && y.isAutoClosure())
+                      return true;
+
                     return xInstanceTy->isEqual(
                         requiredGenSig.getReducedType(yInstanceTy));
                   }))
@@ -6686,8 +6691,9 @@ makeFunctionType(ArrayRef<AnyFunctionType::Param> parameters, Type resultType,
 
 /// Computes the original function type corresponding to the given derivative
 /// function type. Used for `@derivative` attribute type-checking.
-static AnyFunctionType *
-getDerivativeOriginalFunctionType(AnyFunctionType *derivativeFnTy) {
+static AnyFunctionType *getDerivativeOriginalFunctionType(
+    AnyFunctionType *derivativeFnTy,
+    ArrayRef<ParsedAutoDiffParameter> parsedParams) {
   // Unwrap curry levels. At most, two parameter lists are necessary, for
   // curried method types with a `(Self)` parameter list.
   SmallVector<AnyFunctionType *, 2> curryLevels;
@@ -6704,9 +6710,63 @@ getDerivativeOriginalFunctionType(AnyFunctionType *derivativeFnTy) {
   assert(derivativeResult && derivativeResult->getNumElements() == 2 &&
          "Expected derivative result to be a two-element tuple");
   auto originalResult = derivativeResult->getElement(0).getType();
+
+  llvm::SmallVector<AnyFunctionType::Param, 4> params;
+  for (const auto &[idx, param] :
+       llvm::enumerate(curryLevels.back()->getParams())) {
+    // MYTODO: regular closure
+    if (!param.isAutoClosure()) {
+      params.emplace_back(param);
+      continue;
+    }
+
+    if (!parsedParams.empty() &&
+        !llvm::any_of(
+            parsedParams,
+            [idx, &param](const ParsedAutoDiffParameter &parsedParam) {
+              if (parsedParam.getKind() == ParsedAutoDiffParameter::Kind::Named)
+                return parsedParam.getName() == (param.hasInternalLabel()
+                                                     ? param.getInternalLabel()
+                                                     : param.getLabel());
+              if (parsedParam.getKind() ==
+                  ParsedAutoDiffParameter::Kind::Ordered)
+                return parsedParam.getIndex() == idx;
+              return false;
+            })) {
+      params.emplace_back(param);
+      continue;
+    }
+
+    auto aft = llvm::cast<AnyFunctionType>(param.getOldType().getPointer());
+    // MYTODO: additional check for regular closure
+    if (!aft->getParams().empty() || aft->isThrowing()) {
+      params.emplace_back(param);
+      continue;
+    }
+
+    auto *resultTuple =
+        llvm::dyn_cast<TupleType>(aft->getResult().getPointer());
+    if (resultTuple == nullptr) {
+      params.emplace_back(param);
+      continue;
+    }
+
+    if (resultTuple->getElementTypes().size() != 2) {
+      params.emplace_back(param);
+      continue;
+    }
+
+    auto resultType = resultTuple->getElementTypes().front();
+    auto newAft =
+        makeFunctionType(aft->getParams(), resultType, aft->isThrowing(),
+                         aft->getThrownError(), aft->getOptGenericSignature());
+    params.emplace_back(newAft, param.getLabel(), param.getParameterFlags(),
+                        param.getInternalLabel());
+  }
+
   auto *originalType = makeFunctionType(
-      curryLevels.back()->getParams(), originalResult,
-      curryLevels.back()->isThrowing(), curryLevels.back()->getThrownError(),
+      params, originalResult, curryLevels.back()->isThrowing(),
+      curryLevels.back()->getThrownError(),
       curryLevels.size() == 1 ? derivativeFnTy->getOptGenericSignature()
                               : nullptr);
 
@@ -6977,6 +7037,7 @@ bool resolveDifferentiableAttrDifferentiabilityParameters(
       SourceLoc loc = parsedDiffParams.empty()
                           ? attr->getLocation()
                           : parsedDiffParams[nonDiffParam.second].getLoc();
+      // MYTODO: closures?
       diags.diagnose(loc, diag::diff_params_clause_param_not_differentiable,
                      nonDiffParam.first);
       return;
@@ -7336,8 +7397,8 @@ static bool typeCheckDerivativeAttr(DerivativeAttr *attr) {
   attr->setDerivativeKind(kind);
 
   // Compute expected original function type and look up original function.
-  auto *originalFnType =
-      getDerivativeOriginalFunctionType(derivativeInterfaceType);
+  auto *originalFnType = getDerivativeOriginalFunctionType(
+      derivativeInterfaceType, attr->getParsedParameters());
 
   // Returns true if the derivative function and original function candidate are
   // defined in compatible type contexts. If the derivative function and the
