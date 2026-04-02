@@ -10,7 +10,8 @@ func o(ff: F) -> Double {
     while 0.0 < y {
         // This one is not differentiable since rhs of ?? is an autoclosure that we cannot differentiate wrt.
         // The variant below has rhs as non-active and therefore everything works.
-        // expected-note @+1 {{cannot differentiate through a non-differentiable argument; do you want to use 'withoutDerivative(at:)'}}
+        // expected-note @+2 {{cannot differentiate through a non-differentiable argument; do you want to use 'withoutDerivative(at:)'}}
+        // expected-note @+1 {{active closure is not differentiable}}
 	y = ff.g() ?? y
     }
     return y

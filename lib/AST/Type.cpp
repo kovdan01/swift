@@ -4326,6 +4326,28 @@ Type AnyFunctionType::getGlobalActor() const {
   }
 }
 
+static bool isSupportedAsDifferentiableClosure(AnyFunctionType *aft) {
+  // Right now, we only support closures capturing exactly one argument with the
+  // type equal to the result type. No other arguments except the captured one
+  // are supported.
+  // TODO: support arbitrary captured and non-captured arguments types.
+  if (aft->getNumParams() != 0)
+    return false;
+
+  if (aft->isThrowing())
+    return false;
+
+  CanType resultType = aft->getResult()->getCanonicalType();
+
+  auto *differentiableProtocol =
+      aft->getASTContext().getProtocol(KnownProtocolKind::Differentiable);
+  if (differentiableProtocol == nullptr)
+    return false;
+
+  auto conf = swift::lookupConformance(resultType, differentiableProtocol);
+  return !conf.isInvalid();
+}
+
 llvm::ArrayRef<LifetimeDependenceInfo>
 AnyFunctionType::getLifetimeDependencies() const {
   switch (getKind()) {
@@ -4853,10 +4875,45 @@ Type AnyFunctionType::getEffectiveThrownErrorTypeOrNever() const {
   return getASTContext().getNeverType();
 }
 
+static CanType getResultTypeForSupportedDifferentiableClosure(TypeBase *type) {
+  if (auto *silFunctionType = type->getAs<SILFunctionType>()) {
+    if (silFunctionType->isSupportedAsDifferentiableClosure()) {
+      CanType resultType =
+          silFunctionType->getSingleResult().getInterfaceType();
+
+      if (resultType->hasTypeParameter()) {
+        assert(silFunctionType->hasPatternSubstitutions());
+        auto subst = silFunctionType->getPatternSubstitutions();
+        resultType = resultType.subst(subst)->getCanonicalType();
+      }
+
+      return resultType;
+    }
+  }
+
+  if (auto *anyFunctionType = type->getAs<AnyFunctionType>()) {
+    if (isSupportedAsDifferentiableClosure(anyFunctionType)) {
+      CanType resultType = anyFunctionType->getResult()->getCanonicalType();
+      return resultType;
+    }
+  }
+
+  return CanType{};
+}
+
 std::optional<TangentSpace>
 TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
   assert(lookupConformance);
   auto &ctx = getASTContext();
+
+  // Tangent of closure is tangent of captured arguments.
+  // As for now, assume that exactly 1 argument is captured and its type is
+  // equal to the result type.
+  // TODO: handle arbitrary captured arg types and result types.
+  if (auto resultType = getResultTypeForSupportedDifferentiableClosure(this)) {
+    auto capturedArgsType = resultType;
+    return capturedArgsType->getAutoDiffTangentSpace(lookupConformance);
+  }
 
   Type cacheKey = this;
   auto lookup = ctx.AutoDiffTangentSpaces.find(cacheKey);

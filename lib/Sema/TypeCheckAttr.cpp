@@ -6584,8 +6584,9 @@ static AbstractFunctionDecl *findAutoDiffOriginalFunctionDecl(
 /// type, disregarding parameter labels and tuple result labels.
 /// `checkGenericSignature` is used to check generic signatures, if specified.
 /// Otherwise, generic signatures are checked for equality.
-static bool checkFunctionSignature(
-    CanAnyFunctionType required, CanType candidate) {
+static bool
+checkCandidateForOriginalOfDerivativeOrTranspose(CanAnyFunctionType required,
+                                                 CanType candidate) {
   // Check that candidate is actually a function.
   auto candidateFnTy = dyn_cast<AnyFunctionType>(candidate);
   if (!candidateFnTy)
@@ -6624,6 +6625,16 @@ static bool checkFunctionSignature(
                   [&](AnyFunctionType::Param x, AnyFunctionType::Param y) {
                     auto xInstanceTy = x.getOldType()->getMetatypeInstanceType();
                     auto yInstanceTy = y.getOldType()->getMetatypeInstanceType();
+
+                    if (auto *xAft = llvm::dyn_cast<AnyFunctionType>(
+                            xInstanceTy.getPointer()))
+                      if (auto *yAft = llvm::dyn_cast<AnyFunctionType>(
+                              yInstanceTy.getPointer()))
+                        return checkCandidateForOriginalOfDerivativeOrTranspose(
+                            swift::cast<AnyFunctionType>(
+                                xAft->getCanonicalType()),
+                            yAft->getCanonicalType());
+
                     return xInstanceTy->isEqual(
                         requiredGenSig.getReducedType(yInstanceTy));
                   }))
@@ -6651,7 +6662,8 @@ static bool checkFunctionSignature(
   }
 
   // Required result type is a function. Recurse.
-  return checkFunctionSignature(requiredResultFnTy, candidateResultTy);
+  return checkCandidateForOriginalOfDerivativeOrTranspose(requiredResultFnTy,
+                                                          candidateResultTy);
 }
 
 /// Returns an `AnyFunctionType` from the given parameters, result type, and
@@ -6674,8 +6686,9 @@ makeFunctionType(ArrayRef<AnyFunctionType::Param> parameters, Type resultType,
 
 /// Computes the original function type corresponding to the given derivative
 /// function type. Used for `@derivative` attribute type-checking.
-static AnyFunctionType *
-getDerivativeOriginalFunctionType(AnyFunctionType *derivativeFnTy) {
+static AnyFunctionType *getDerivativeOriginalFunctionType(
+    AnyFunctionType *derivativeFnTy,
+    ArrayRef<ParsedAutoDiffParameter> parsedParams) {
   // Unwrap curry levels. At most, two parameter lists are necessary, for
   // curried method types with a `(Self)` parameter list.
   SmallVector<AnyFunctionType *, 2> curryLevels;
@@ -6692,9 +6705,61 @@ getDerivativeOriginalFunctionType(AnyFunctionType *derivativeFnTy) {
   assert(derivativeResult && derivativeResult->getNumElements() == 2 &&
          "Expected derivative result to be a two-element tuple");
   auto originalResult = derivativeResult->getElement(0).getType();
+
+  llvm::SmallVector<AnyFunctionType::Param, 4> params;
+  for (const auto &[idx, param] :
+       llvm::enumerate(curryLevels.back()->getParams())) {
+    if (!param.isAutoClosure()) {
+      params.emplace_back(param);
+      continue;
+    }
+
+    if (!parsedParams.empty() &&
+        !llvm::any_of(
+            parsedParams,
+            [idx, &param](const ParsedAutoDiffParameter &parsedParam) {
+              if (parsedParam.getKind() == ParsedAutoDiffParameter::Kind::Named)
+                return parsedParam.getName() == (param.hasInternalLabel()
+                                                     ? param.getInternalLabel()
+                                                     : param.getLabel());
+              if (parsedParam.getKind() ==
+                  ParsedAutoDiffParameter::Kind::Ordered)
+                return parsedParam.getIndex() == idx;
+              return false;
+            })) {
+      params.emplace_back(param);
+      continue;
+    }
+
+    auto aft = llvm::cast<AnyFunctionType>(param.getOldType().getPointer());
+    if (!aft->getParams().empty() || aft->isThrowing()) {
+      params.emplace_back(param);
+      continue;
+    }
+
+    auto *resultTuple =
+        llvm::dyn_cast<TupleType>(aft->getResult().getPointer());
+    if (resultTuple == nullptr) {
+      params.emplace_back(param);
+      continue;
+    }
+
+    if (resultTuple->getElementTypes().size() != 2) {
+      params.emplace_back(param);
+      continue;
+    }
+
+    auto resultType = resultTuple->getElementTypes().front();
+    auto newAft =
+        makeFunctionType(aft->getParams(), resultType, aft->isThrowing(),
+                         aft->getThrownError(), aft->getOptGenericSignature());
+    params.emplace_back(newAft, param.getLabel(), param.getParameterFlags(),
+                        param.getInternalLabel());
+  }
+
   auto *originalType = makeFunctionType(
-      curryLevels.back()->getParams(), originalResult,
-      curryLevels.back()->isThrowing(), curryLevels.back()->getThrownError(),
+      params, originalResult, curryLevels.back()->isThrowing(),
+      curryLevels.back()->getThrownError(),
       curryLevels.size() == 1 ? derivativeFnTy->getOptGenericSignature()
                               : nullptr);
 
@@ -7324,8 +7389,8 @@ static bool typeCheckDerivativeAttr(DerivativeAttr *attr) {
   attr->setDerivativeKind(kind);
 
   // Compute expected original function type and look up original function.
-  auto *originalFnType =
-      getDerivativeOriginalFunctionType(derivativeInterfaceType);
+  auto *originalFnType = getDerivativeOriginalFunctionType(
+      derivativeInterfaceType, attr->getParsedParameters());
 
   // Returns true if the derivative function and original function candidate are
   // defined in compatible type contexts. If the derivative function and the
@@ -7357,7 +7422,7 @@ static bool typeCheckDerivativeAttr(DerivativeAttr *attr) {
     if (!hasValidTypeContext(originalCandidate))
       return AbstractFunctionDeclLookupErrorKind::CandidateWrongTypeContext;
     // Error if the original candidate does not have the expected type.
-    if (!checkFunctionSignature(
+    if (!checkCandidateForOriginalOfDerivativeOrTranspose(
             cast<AnyFunctionType>(originalFnType->getCanonicalType()),
             originalCandidate->getInterfaceType()->getCanonicalType()))
       return AbstractFunctionDeclLookupErrorKind::CandidateTypeMismatch;
@@ -7943,7 +8008,7 @@ void AttributeChecker::visitTransposeAttr(TransposeAttr *attr) {
   auto isValidOriginalCandidate = [&](AbstractFunctionDecl *originalCandidate)
       -> std::optional<AbstractFunctionDeclLookupErrorKind> {
     // Error if the original candidate does not have the expected type.
-    if (!checkFunctionSignature(
+    if (!checkCandidateForOriginalOfDerivativeOrTranspose(
             cast<AnyFunctionType>(expectedOriginalFnType->getCanonicalType()),
             originalCandidate->getInterfaceType()->getCanonicalType()))
       return AbstractFunctionDeclLookupErrorKind::CandidateTypeMismatch;
