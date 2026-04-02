@@ -775,32 +775,21 @@ public:
       return;
     }
 
+    // if (SILFunction *calleeFn = pai->getCalleeFunction()) {
+    //   if (calleeFn->isThunk() != IsNotThunk) {
+    //     context.emitNondifferentiabilityError(
+    //         pai, invoker, diag::autodiff_nondifferentiable_argument);
+    //     context.diagnose(
+    //         pai->getLoc().getSourceLoc(),
+    //         diag::autodiff_nondifferentiable_argument_closure_thunk);
+    //     errorOccurred = true;
+    //     return;
+    //   }
+    // }
+
     auto &builder = getBuilder();
     auto origCallee = getOpValue(pai->getCallee());
     auto loc = pai->getLoc();
-
-    if (SILFunction *calleeFn = pai->getCalleeFunction()) {
-      if (calleeFn->isThunk() != IsNotThunk) {
-        assert(calleeFn->isThunk() == IsReabstractionThunk);
-        assert(pai->getArguments().size() == 1);
-        auto *cetnei = llvm::cast<ConvertEscapeToNoEscapeInst>(pai->getArgument(0).getDefiningInstruction());
-        auto mapped = getOpValue(cetnei);
-        auto copy = builder.emitCopyValueOperation(loc, mapped);
-        mapValue(pai, copy);
-        builder.emitDestroyValueOperation(loc, mapped);
-        return;
-
-        // context.emitNondifferentiabilityError(
-        //     pai, invoker, diag::autodiff_nondifferentiable_argument);
-        // context.diagnose(
-        //     pai->getLoc().getSourceLoc(),
-        //     diag::autodiff_nondifferentiable_argument_closure_thunk);
-        // errorOccurred = true;
-        // return;
-      }
-    }
-
-
 
     origCallee = builder.emitCopyValueOperation(loc, origCallee);
 
@@ -855,12 +844,6 @@ public:
 
   void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *cetnei) {
     SILType type = getOpValue(cetnei->getOperand())->getType();
-    if (type.getAs<SILFunctionType>()->isNoEscape()) {
-      auto copy = getBuilder().emitCopyValueOperation(cetnei->getLoc(), getOpValue(cetnei->getOperand()));
-      mapValue(cetnei, copy);
-      return;
-    }
-
     auto functionType = type.getAs<SILFunctionType>();
     auto noEscapeFunctionType =
         swift::SILType::getPrimitiveObjectType(functionType->getWithExtInfo(
@@ -1113,30 +1096,17 @@ public:
     for (auto [argIdx, origArg] : llvm::enumerate(ai->getArguments())) {
       auto vjpArg = getOpValue(origArg);
       if (argIdx >= ai->getNumIndirectResults()) {
-        llvm::errs() << "CCCCCCCCCC 00\n";
         auto paramType =
             vjpValue->getType()
                 .getAs<SILFunctionType>()
                 ->getParameters()[argIdx - ai->getNumIndirectResults()]
                 .getInterfaceType();
-        llvm::errs() << "BBBBBBB 00 BEGIN\n";
-        llvm::errs() << vjpArg << "\n";
-        llvm::errs() << "BBBBBBB 00 END\n";
-
         if (vjpArg->getType().is<SILFunctionType>()) {
-          llvm::errs() << "BBBBBBB 01\n";
-
           auto silFunctionType = vjpArg->getType().getAs<SILFunctionType>();
 
-          llvm::errs() << "BBBBBBB 02\n";
-
           if (silFunctionType->getCanonicalType() != paramType) {
-            llvm::errs() << "BBBBBBB 03\n";
-
             assert(origArg->getType().getAs<SILFunctionType>()->isSupportedAsDifferentiableClosure());
             assert(activityInfo.isActive(origArg, getConfig()));
-
-            llvm::errs() << "BBBBBBB 04\n";
 
             SILValue valCopy = vjpArg;
                 //getBuilder().emitCopyValueOperation(loc, vjpArg);
@@ -1154,15 +1124,6 @@ public:
                         toTypeNoEscape->getExtInfo().withNoEscape(false)))
                     .getAs<SILFunctionType>();
 
-            llvm::errs() << "AAAAAAA 00\n";
-            llvm::errs() << valCopy << "\n";
-            llvm::errs() << "AAAAAAA 01\n";
-            llvm::errs() << valCopy->getType() << "\n";
-            llvm::errs() << "AAAAAAA 02\n";
-            llvm::errs() << toType << "\n";
-            llvm::errs() << "AAAAAAA 03\n";
-
-
             // Set non-reabstracted original pullback type in nested apply info.
             SILOptFunctionBuilder fb(context.getTransform());
             SILValue valAfterReabstract = reabstractFunction(
@@ -1173,16 +1134,13 @@ public:
                   return this->getOpSubstitutionMap(subs);
                 });
 
-            llvm::errs() << "AAAAAAA 04\n";
-
-            // auto *cetnei = llvm::cast<ConvertEscapeToNoEscapeInst>(
-            //     vjpArg->getDefiningInstruction());
-            //auto *cetneiOrCopy = vjpArg->getDefiningInstruction();
+            auto *cetnei = llvm::cast<ConvertEscapeToNoEscapeInst>(
+                vjpArg->getDefiningInstruction());
 
             auto *cetneiNew = getBuilder().createConvertEscapeToNoEscape(
                 loc /*cetnei->getLoc()*/,
                 valAfterReabstract /*cetnei->getOperand()*/, toTypeNoEscapeSIL,
-                false/*cetnei->isLifetimeGuaranteed()*/);
+                cetnei->isLifetimeGuaranteed());
 
             auto cetneiNewCopy = getBuilder().emitCopyValueOperation(loc, cetneiNew);
 
@@ -1194,7 +1152,7 @@ public:
 
             auto *cetneiOrig = llvm::cast<ConvertEscapeToNoEscapeInst>(
                 origArg->getDefiningInstruction());
-            assert(ValueMap.at(cetneiOrig) == vjpArg);
+            assert(ValueMap.at(cetneiOrig) == cetnei);
             ValueMap[cetneiOrig] = cetneiNewCopy;
 
             vjpArgs.push_back(cetneiNewCopy);

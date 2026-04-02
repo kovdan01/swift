@@ -1162,8 +1162,8 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
   // reabstract) as their last parameter. Reabstraction thunk JVPs/VJPs have a
   // `@differentiable` function-typed last parameter instead.
   if (isReabstractionThunk) {
-    // assert(!parameterIndices->contains(getNumParameters() - 1) &&
-    //        "Function-typed parameter should not be wrt");
+    assert(!parameterIndices->contains(getNumParameters() - 1) &&
+           "Function-typed parameter should not be wrt");
     auto fnParam = newParameters.back();
     auto fnParamType = dyn_cast<SILFunctionType>(fnParam.getInterfaceType());
     assert(fnParamType);
