@@ -759,6 +759,7 @@ public:
         if (activityInfo.isActive(op.get(), getConfig())) {
           context.emitNondifferentiabilityError(
               pai, invoker, diag::autodiff_nondifferentiable_argument);
+          context.diagnose(pai->getLoc().getSourceLoc(), diag::autodiff_nondifferentiable_argument_closure_active);
           errorOccurred = true;
           return;
         }
@@ -770,6 +771,16 @@ public:
     if (!activityInfo.isActive(pai, getConfig())) {
       TypeSubstCloner::visitPartialApplyInst(pai);
       return;
+    }
+
+    if (SILFunction *calleeFn = pai->getCalleeFunction()) {
+      if (calleeFn->isThunk() != IsNotThunk) {
+        context.emitNondifferentiabilityError(
+            pai, invoker, diag::autodiff_nondifferentiable_argument);
+        context.diagnose(pai->getLoc().getSourceLoc(), diag::autodiff_nondifferentiable_argument_closure_thunk);
+        errorOccurred = true;
+        return;
+      }
     }
 
     auto &builder = getBuilder();

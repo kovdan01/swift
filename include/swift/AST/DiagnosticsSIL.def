@@ -652,6 +652,10 @@ NOTE(autodiff_function_assoc_func_unmet_requirements,none,
 NOTE(autodiff_nondifferentiable_argument,none,
      "cannot differentiate through a non-differentiable argument; do you want "
      "to use 'withoutDerivative(at:)'?", ())
+NOTE(autodiff_nondifferentiable_argument_closure_thunk,none,
+    "differentiable closure wrapped in unsupported thunk", ())
+NOTE(autodiff_nondifferentiable_argument_closure_active,none,
+    "active closure is not differentiable", ())
 NOTE(autodiff_nondifferentiable_result,none,
      "cannot differentiate through a non-differentiable result; do you want to "
      "use 'withoutDerivative(at:)'?", ())

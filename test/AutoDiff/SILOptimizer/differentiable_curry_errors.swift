@@ -19,7 +19,8 @@ func errorInoutAlias(ff: F) -> Float {
     // As for now, we do not support differentiation here since `y` is passed as `inout_alias`.
     // Currently we only support arguments with Object value category.
     // TODO: support captured argument with Address value category.
-    // expected-note @+1 {{cannot differentiate through a non-differentiable argument; do you want to use 'withoutDerivative(at:)'}}
+    // expected-note @+2 {{cannot differentiate through a non-differentiable argument; do you want to use 'withoutDerivative(at:)'}}
+    // expected-note @+1 {{active closure is not differentiable}}
     y = ff.g() ?? y
   }
   return y
@@ -35,6 +36,7 @@ public struct F: Differentiable {
 @differentiable(reverse)
 // expected-note @+1 {{when differentiating this function definition}}
 func errorManyArgs(_ x: Float?, _ a: Float, _ b: Float) -> Float {
-  // expected-note @+1 {{cannot differentiate through a non-differentiable argument; do you want to use 'withoutDerivative(at:)'}}
+  // expected-note @+2 {{cannot differentiate through a non-differentiable argument; do you want to use 'withoutDerivative(at:)'}}
+  // expected-note @+1 {{active closure is not differentiable}}
   return x ?? a + b
 }

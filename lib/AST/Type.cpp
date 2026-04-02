@@ -4891,18 +4891,9 @@ static CanType getResultTypeForSupportedDifferentiableClosure(TypeBase *type) {
     }
   }
 
-  // MYTODO: use a separate function for this
   if (auto *anyFunctionType = type->getAs<AnyFunctionType>()) {
     if (isSupportedAsDifferentiableClosure(anyFunctionType)) {
       CanType resultType = anyFunctionType->getResult()->getCanonicalType();
-
-      // if (resultType->hasTypeParameter()) {
-      //   // // MYTODO: do we need to use replacement types?
-      //   // assert(silFunctionType->hasPatternSubstitutions());
-      //   // auto subst = silFunctionType->getPatternSubstitutions();
-      //   // resultType =
-      //   subst.getReplacementTypes().front()->getCanonicalType();
-      // }
       return resultType;
     }
   }
@@ -4915,7 +4906,10 @@ TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
   assert(lookupConformance);
   auto &ctx = getASTContext();
 
-  // MYTODO
+  // Tangent of closure is tangent of captured arguments.
+  // As for now, assume that exactly 1 argument is captured and its type is
+  // equal to the result type.
+  // TODO: handle arbitrary captured arg types and result types.
   if (auto resultType = getResultTypeForSupportedDifferentiableClosure(this)) {
     auto capturedArgsType = resultType;
     return capturedArgsType->getAutoDiffTangentSpace(lookupConformance);
@@ -4966,17 +4960,6 @@ TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
   auto assocTy = conformance.getTypeWitness(assocDecl);
   if (!assocTy->hasError())
     return cache(TangentSpace::getTangentVector(assocTy));
-
-  // // Tangent of closure is tangent of captured arguments.
-  // // As for now, assume that exactly 1 argument is captured and its type is
-  // // equal to the result type.
-  // // TODO: handle arbitrary captured arg types and result types.
-  // if (auto resultType = getResultTypeForSupportedDifferentiableClosure(this)) {
-  //   auto capturedArgsType = resultType;
-  //   auto tangentOfCapturedArgs =
-  //       capturedArgsType->getAutoDiffTangentSpace(lookupConformance)->getType();
-  //   return cache(TangentSpace::getTangentVector(tangentOfCapturedArgs));
-  // }
 
   // Otherwise, there is no associated tangent space. Return `None`.
   return cache(std::nullopt);

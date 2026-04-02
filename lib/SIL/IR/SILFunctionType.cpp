@@ -150,31 +150,6 @@ CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
                               getWitnessMethodConformanceOrInvalid());
 }
 
-// bool isSupportedAsDifferentiableClosure(SILFunctionType *sft) {
-//   // Right now, we only support closures capturing exactly one argument with the
-//   // type equal to the result type. No other arguments except the captured one
-//   // are supported. Throwing closures are also not supported.
-//   // TODO: support arbitrary captured and non-captured arguments types.
-//   if (sft->getNumParameters() != 0)
-//     return false;
-
-//   if (sft->getNumResults() != 1)
-//     return false;
-
-//   if (sft->hasErrorResult())
-//     return false;
-
-//   CanType resultType = sft->getSingleResult().getInterfaceType();
-
-//   auto *differentiableProtocol =
-//       sft->getASTContext().getProtocol(KnownProtocolKind::Differentiable);
-//   if (differentiableProtocol == nullptr)
-//     return false;
-
-//   auto conf = swift::lookupConformance(resultType, differentiableProtocol);
-//   return !conf.isInvalid();
-// }
-
 bool SILFunctionType::isSupportedAsDifferentiableClosure() const {
   // Right now, we only support closures capturing exactly one argument with the
   // type equal to the result type. No other arguments except the captured one
@@ -187,6 +162,12 @@ bool SILFunctionType::isSupportedAsDifferentiableClosure() const {
     return false;
 
   if (this->hasErrorResult())
+    return false;
+
+  if (this->getNumYields() != 0)
+    return false;
+
+  if (this->isCoroutine())
     return false;
 
   CanType resultType = this->getSingleResult().getInterfaceType();
@@ -1093,11 +1074,11 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
     llvm::SmallVector<Type, 4> substReplacements;
     llvm::SmallVector<ProtocolConformanceRef, 4> substConformances;
 
-    auto paramTanType = // singleResultType;
+    auto paramTanType =
         getAutoDiffTypeForLinearMap(singleResultType, lookupConformance,
                                     substGenericParams, substReplacements, ctx);
 
-    auto resultTanType = // singleParamType;
+    auto resultTanType =
         getAutoDiffTypeForLinearMap(singleParamType, lookupConformance,
                                     substGenericParams, substReplacements, ctx);
 
@@ -1111,6 +1092,11 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
                                llvm::ArrayRef(substConformances));
     }
 
+
+    Lowering::AbstractionPattern pattern(substitutions, paramTanType);
+    auto &tl = TC.getTypeLowering(
+        pattern, paramTanType, TypeExpansionContext::minimal());
+
     ResultConvention singleResultConv =
         silFunctionType->getSingleResult().getConvention();
     ParameterConvention singleParamConv;
@@ -1120,13 +1106,13 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
     case ResultConvention::Owned:
     case ResultConvention::Autoreleased:
       // TODO
-      // if (props.isAddressOnly()) {
-      //   conv = ParameterConvention::Indirect_In_Guaranteed;
-      // } else {
-      //   conv = props.isTrivial() ? ParameterConvention::Direct_Unowned
-      //                            : ParameterConvention::Direct_Guaranteed;
-      // }
-      singleParamConv = ParameterConvention::Direct_Unowned;
+      if (tl.isAddressOnly()) {
+        singleParamConv = ParameterConvention::Indirect_In_Guaranteed;
+      } else {
+        singleParamConv = tl.isTrivial() ? ParameterConvention::Direct_Unowned
+                                 : ParameterConvention::Direct_Guaranteed;
+      }
+      //singleParamConv = ParameterConvention::Direct_Unowned;
       break;
     case ResultConvention::Pack:
       singleParamConv = ParameterConvention::Pack_Guaranteed;
@@ -1146,12 +1132,16 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
     SmallVector<SILResultInfo, 1> singleResult;
     singleResult.emplace_back(resultTanType, singleResultConv);
 
+    SmallVector<SILYieldInfo, 0> yields;
+    assert(silFunctionType->getNumYields() == 0);
+
+    auto coroutineKind = silFunctionType->getCoroutineKind();
+    assert(coroutineKind == SILCoroutineKind::None);
+
     CanSILFunctionType pullbackType = SILFunctionType::get(
-        // TODO check coroutine
-        GenericSignature(), SILFunctionType::ExtInfo(), SILCoroutineKind::None,
-        ParameterConvention::Direct_Guaranteed, singleParam, {}, singleResult,
-        std::nullopt, substitutions,
-        /*invocationSubstitutions*/ SubstitutionMap(), ctx);
+        GenericSignature(), SILFunctionType::ExtInfo(), coroutineKind,
+        silFunctionType->getCalleeConvention(), singleParam, yields, singleResult,
+        std::nullopt, substitutions, SubstitutionMap(), ctx);
 
     SmallVector<SILResultInfo, 2> vjpResults;
     vjpResults.emplace_back(silFunctionType->getSingleResult());
@@ -1165,7 +1155,6 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
         vjpResults, silFunctionType->getOptionalErrorResult(),
         silFunctionType->getPatternSubstitutions(),
         silFunctionType->getInvocationSubstitutions(),
-        ///*invocationSubstitutions*/ SubstitutionMap(),
         silFunctionType->getASTContext(),
         silFunctionType->getWitnessMethodConformanceOrInvalid());
 
@@ -1175,7 +1164,6 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
   // reabstract) as their last parameter. Reabstraction thunk JVPs/VJPs have a
   // `@differentiable` function-typed last parameter instead.
   if (isReabstractionThunk) {
-    // MYTODO: could be true for diff closure
     assert(!parameterIndices->contains(getNumParameters() - 1) &&
            "Function-typed parameter should not be wrt");
     auto fnParam = newParameters.back();

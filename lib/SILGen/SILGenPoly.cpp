@@ -6890,11 +6890,12 @@ SILGenFunction::emitOrigToSubstValue(SILLocation loc, ManagedValue v,
   return emitOrigToSubstValue(loc, v, origType, substType,
                               getLoweredType(substType), ctxt);
 }
-ManagedValue SILGenFunction::emitOrigToSubstValue(SILLocation loc, ManagedValue v,
-                                                  AbstractionPattern origType,
-                                                  CanType substType,
-                                                  SILType loweredResultTy,
-                                                  SGFContext ctxt) {
+ManagedValue
+SILGenFunction::emitOrigToSubstValue(SILLocation loc, ManagedValue v,
+                                     AbstractionPattern origType,
+                                     CanType substType,
+                                     SILType loweredResultTy,
+                                     SGFContext ctxt) {
   return emitTransformedValue(loc, v,
                               origType, substType,
                               AbstractionPattern(substType), substType,
