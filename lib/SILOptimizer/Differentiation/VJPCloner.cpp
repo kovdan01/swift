@@ -775,17 +775,17 @@ public:
       return;
     }
 
-    if (SILFunction *calleeFn = pai->getCalleeFunction()) {
-      if (calleeFn->isThunk() != IsNotThunk) {
-        context.emitNondifferentiabilityError(
-            pai, invoker, diag::autodiff_nondifferentiable_argument);
-        context.diagnose(
-            pai->getLoc().getSourceLoc(),
-            diag::autodiff_nondifferentiable_argument_closure_thunk);
-        errorOccurred = true;
-        return;
-      }
-    }
+    // if (SILFunction *calleeFn = pai->getCalleeFunction()) {
+    //   if (calleeFn->isThunk() != IsNotThunk) {
+    //     context.emitNondifferentiabilityError(
+    //         pai, invoker, diag::autodiff_nondifferentiable_argument);
+    //     context.diagnose(
+    //         pai->getLoc().getSourceLoc(),
+    //         diag::autodiff_nondifferentiable_argument_closure_thunk);
+    //     errorOccurred = true;
+    //     return;
+    //   }
+    // }
 
     auto &builder = getBuilder();
     auto origCallee = getOpValue(pai->getCallee());
@@ -1103,18 +1103,14 @@ public:
                 .getInterfaceType();
         if (vjpArg->getType().is<SILFunctionType>()) {
           auto silFunctionType = vjpArg->getType().getAs<SILFunctionType>();
+
           if (silFunctionType->getCanonicalType() != paramType) {
-            // MYTODO assert is diff closure
-            // MYTODO assert is active - otherwise type equal
+            assert(origArg->getType().getAs<SILFunctionType>()->isSupportedAsDifferentiableClosure());
+            assert(activityInfo.isActive(origArg, getConfig()));
 
-            // MYTODO: insert checks against noescape for "is diff closure"
+            SILValue valCopy = vjpArg;
+                //getBuilder().emitCopyValueOperation(loc, vjpArg);
 
-            auto *cetnei = llvm::cast<ConvertEscapeToNoEscapeInst>(
-                vjpArg->getDefiningInstruction());
-
-            SILValue valBeforeReabstract = cetnei->getOperand();
-            SILValue valCopy =
-                getBuilder().emitCopyValueOperation(loc, valBeforeReabstract);
             SILType toTypeNoEscapeSIL =
                 vjpValue->getType()
                     .getAs<SILFunctionType>()
@@ -1138,22 +1134,87 @@ public:
                   return this->getOpSubstitutionMap(subs);
                 });
 
+            auto *cetnei = llvm::cast<ConvertEscapeToNoEscapeInst>(
+                vjpArg->getDefiningInstruction());
+
             auto *cetneiNew = getBuilder().createConvertEscapeToNoEscape(
                 loc /*cetnei->getLoc()*/,
                 valAfterReabstract /*cetnei->getOperand()*/, toTypeNoEscapeSIL,
                 cetnei->isLifetimeGuaranteed());
 
+            auto cetneiNewCopy = getBuilder().emitCopyValueOperation(loc, cetneiNew);
+
             // FIXME: this does not replace values in SILCloner.ValueMap.
             // Right now, it looks like that we have no remaining non-destroying
             // differentiable closure users. It looks like that for each closure
             // use, a separate `function_ref` is created
-            cetnei->replaceAllUsesWith(cetneiNew);
+            //cetnei->replaceAllUsesWith(cetneiNew);
 
-            vjpArg = cetneiNew;
+            auto *cetneiOrig = llvm::cast<ConvertEscapeToNoEscapeInst>(
+                origArg->getDefiningInstruction());
+            assert(ValueMap.at(cetneiOrig) == cetnei);
+            ValueMap[cetneiOrig] = cetneiNewCopy;
 
+            vjpArgs.push_back(cetneiNewCopy);
+
+            //vjpArgsToDestroy.emplace_back(cetneiNewCopy);
             vjpArgsToDestroy.emplace_back(cetneiNew);
             vjpArgsToDestroy.emplace_back(valAfterReabstract);
+
+            continue;
           }
+
+
+          // if (silFunctionType->getCanonicalType() != paramType) {
+          //   assert(origArg->getType().getAs<SILFunctionType>()->isSupportedAsDifferentiableClosure());
+          //   assert(activityInfo.isActive(origArg, getConfig()));
+
+          //   auto *cetnei = llvm::cast<ConvertEscapeToNoEscapeInst>(
+          //       vjpArg->getDefiningInstruction());
+
+          //   SILValue valBeforeReabstract = cetnei->getOperand();
+          //   SILValue valCopy =
+          //       getBuilder().emitCopyValueOperation(loc, valBeforeReabstract);
+          //   SILType toTypeNoEscapeSIL =
+          //       vjpValue->getType()
+          //           .getAs<SILFunctionType>()
+          //           ->getParameters()[argIdx - ai->getNumIndirectResults()]
+          //           .getSILStorageInterfaceType();
+          //   CanSILFunctionType toTypeNoEscape =
+          //       toTypeNoEscapeSIL.getAs<SILFunctionType>();
+          //   CanSILFunctionType toType =
+          //       swift::SILType::getPrimitiveObjectType(
+          //           toTypeNoEscape->getWithExtInfo(
+          //               toTypeNoEscape->getExtInfo().withNoEscape(false)))
+          //           .getAs<SILFunctionType>();
+
+          //          // Set non-reabstracted original pullback type in nested apply info.
+          //   SILOptFunctionBuilder fb(context.getTransform());
+          //   SILValue valAfterReabstract = reabstractFunction(
+          //       getBuilder(), fb, loc /*ai->getLoc()*/,
+          //       valCopy /*valBeforeReabstract*/,
+          //       // getLoweredType(paramType).castTo<SILFunctionType>(),
+          //       toType, [this](SubstitutionMap subs) -> SubstitutionMap {
+          //         return this->getOpSubstitutionMap(subs);
+          //       });
+
+          //   auto *cetneiNew = getBuilder().createConvertEscapeToNoEscape(
+          //       loc /*cetnei->getLoc()*/,
+          //       valAfterReabstract /*cetnei->getOperand()*/, toTypeNoEscapeSIL,
+          //       cetnei->isLifetimeGuaranteed());
+
+          //          // FIXME: this does not replace values in SILCloner.ValueMap.
+          //          // Right now, it looks like that we have no remaining non-destroying
+          //          // differentiable closure users. It looks like that for each closure
+          //          // use, a separate `function_ref` is created
+          //   cetnei->replaceAllUsesWith(cetneiNew);
+
+          //   vjpArg = cetneiNew;
+
+          //   vjpArgsToDestroy.emplace_back(cetneiNew);
+          //   vjpArgsToDestroy.emplace_back(valAfterReabstract);
+          // }
+
         }
       }
       vjpArgs.push_back(vjpArg);
