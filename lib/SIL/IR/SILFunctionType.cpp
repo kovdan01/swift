@@ -112,12 +112,11 @@ CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
 
   auto subs = getCombinedSubstitutions();
   auto substComponentType = [&](CanType type) {
-    if (!type->hasTypeParameter())
-      return type;
+    if (!type->hasTypeParameter()) return type;
     return SILType::getPrimitiveObjectType(type)
              .subst(M, subs).getASTType();
   };
-
+  
   for (auto param : getParameters()) {
     params.push_back(param.map(substComponentType));
   }
@@ -125,11 +124,11 @@ CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
   for (auto yield : getYields()) {
     yields.push_back(yield.map(substComponentType));
   }
-
+  
   for (auto result : getResults()) {
     results.push_back(result.map(substComponentType));
   }
-
+  
   if (auto error = getOptionalErrorResult()) {
     errorResult = error->map(substComponentType);
   }
@@ -151,24 +150,49 @@ CanSILFunctionType SILFunctionType::getUnsubstitutedType(SILModule &M) const {
                               getWitnessMethodConformanceOrInvalid());
 }
 
+// bool isSupportedAsDifferentiableClosure(SILFunctionType *sft) {
+//   // Right now, we only support closures capturing exactly one argument with the
+//   // type equal to the result type. No other arguments except the captured one
+//   // are supported. Throwing closures are also not supported.
+//   // TODO: support arbitrary captured and non-captured arguments types.
+//   if (sft->getNumParameters() != 0)
+//     return false;
+
+//   if (sft->getNumResults() != 1)
+//     return false;
+
+//   if (sft->hasErrorResult())
+//     return false;
+
+//   CanType resultType = sft->getSingleResult().getInterfaceType();
+
+//   auto *differentiableProtocol =
+//       sft->getASTContext().getProtocol(KnownProtocolKind::Differentiable);
+//   if (differentiableProtocol == nullptr)
+//     return false;
+
+//   auto conf = swift::lookupConformance(resultType, differentiableProtocol);
+//   return !conf.isInvalid();
+// }
+
 bool SILFunctionType::isSupportedAsDifferentiableClosure() const {
   // Right now, we only support closures capturing exactly one argument with the
   // type equal to the result type. No other arguments except the captured one
   // are supported. Throwing closures are also not supported.
   // TODO: support arbitrary captured and non-captured arguments types.
-  if (getNumParameters() != 0)
+  if (this->getNumParameters() != 0)
     return false;
 
-  if (getNumResults() != 1)
+  if (this->getNumResults() != 1)
     return false;
 
-  if (hasErrorResult())
+  if (this->hasErrorResult())
     return false;
 
-  CanType resultType = getSingleResult().getInterfaceType();
+  CanType resultType = this->getSingleResult().getInterfaceType();
 
   auto *differentiableProtocol =
-      getASTContext().getProtocol(KnownProtocolKind::Differentiable);
+      this->getASTContext().getProtocol(KnownProtocolKind::Differentiable);
   if (differentiableProtocol == nullptr)
     return false;
 
@@ -920,8 +944,8 @@ static CanSILFunctionType getAutoDiffPullbackType(
 /// - The invocation generic signature is replaced by the
 ///   `constrainedInvocationGenSig` argument.
 static SILFunctionType *getConstrainedAutoDiffOriginalFunctionType(
-    SILFunctionType *original, IndexSubset *parameterIndices,
-    IndexSubset *resultIndices, LookupConformanceFn lookupConformance,
+    SILFunctionType *original, IndexSubset *parameterIndices, IndexSubset *resultIndices,
+    LookupConformanceFn lookupConformance,
     CanGenericSignature constrainedInvocationGenSig) {
   auto originalInvocationGenSig = original->getInvocationGenericSignature();
   if (!originalInvocationGenSig) {

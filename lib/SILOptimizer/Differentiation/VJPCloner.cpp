@@ -754,7 +754,7 @@ public:
   // TODO: additional tests for cases when `partial_apply` result is wrapped in
   // `convert_escape_to_noescape`
   void visitPartialApplyInst(PartialApplyInst *pai) {
-    if (!pai->isSupportedAsDifferentiableClosure()) {
+    if (!isSupportedAsDifferentiableClosure(pai)) {
       for (Operand &op : pai->getArgumentOperands()) {
         if (activityInfo.isActive(op.get(), getConfig())) {
           context.emitNondifferentiabilityError(
@@ -812,7 +812,7 @@ public:
   void visitConvertFunctionInst(ConvertFunctionInst *cfi) {
     if (auto *pai = llvm::dyn_cast_or_null<PartialApplyInst>(
             cfi->getOperand().getDefiningInstruction())) {
-      if (pai->isSupportedAsDifferentiableClosure()) {
+      if (isSupportedAsDifferentiableClosure(pai)) {
         auto loc = cfi->getLoc();
         auto *newCfi = getBuilder().createConvertFunction(
             loc, getOpValue(pai),

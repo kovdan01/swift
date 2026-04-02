@@ -328,6 +328,40 @@ inline bool isApplySiteOfDifferentiableClosure(FullApplySite applySite) {
   return silFunctionType->isSupportedAsDifferentiableClosure();
 }
 
+inline bool isSupportedAsDifferentiableClosure(PartialApplyInst *pai) {
+  // Right now, we only support closures capturing exactly one argument with the
+  // type equal to the result type. No other arguments except the captured one
+  // are supported.
+  // TODO: support arbitrary captured and non-captured arguments types.
+
+  auto origCalleeType = pai->getOrigCalleeType();
+  auto closureType = pai->getType().getAs<SILFunctionType>();
+
+  if (!closureType->isSupportedAsDifferentiableClosure())
+    return false;
+
+  if (origCalleeType->getNumParameters() != 1)
+    return false;
+
+  if (!origCalleeType->getIndirectMutatingParameters().empty())
+    return false;
+
+  CanType paramType = origCalleeType->getParameters()[0].getInterfaceType();
+  CanType resultType = closureType->getSingleResult().getInterfaceType();
+  if (SubstitutionMap subst = pai->getSubstitutionMap()) {
+    if (paramType->hasTypeParameter()) {
+      paramType = subst.getReplacementTypes().front()->getCanonicalType();
+    } else {
+      assert(resultType->hasTypeParameter());
+      resultType = subst.getReplacementTypes().front()->getCanonicalType();
+    }
+  }
+
+  assert(pai->getArgumentOperands().size() == 1);
+
+  return true;
+}
+
 } // end namespace swift
 
 #endif // SWIFT_SILOPTIMIZER_MANDATORY_DIFFERENTIATION_COMMON_H

@@ -4326,21 +4326,21 @@ Type AnyFunctionType::getGlobalActor() const {
   }
 }
 
-bool AnyFunctionType::isSupportedAsDifferentiableClosure() const {
+static bool isSupportedAsDifferentiableClosure(AnyFunctionType *aft) {
   // Right now, we only support closures capturing exactly one argument with the
   // type equal to the result type. No other arguments except the captured one
   // are supported.
   // TODO: support arbitrary captured and non-captured arguments types.
-  if (getNumParams() != 0)
+  if (aft->getNumParams() != 0)
     return false;
 
-  if (isThrowing())
+  if (aft->isThrowing())
     return false;
 
-  CanType resultType = getResult()->getCanonicalType();
+  CanType resultType = aft->getResult()->getCanonicalType();
 
   auto *differentiableProtocol =
-      getASTContext().getProtocol(KnownProtocolKind::Differentiable);
+      aft->getASTContext().getProtocol(KnownProtocolKind::Differentiable);
   if (differentiableProtocol == nullptr)
     return false;
 
@@ -4893,7 +4893,7 @@ static CanType getResultTypeForSupportedDifferentiableClosure(TypeBase *type) {
 
   // MYTODO: use a separate function for this
   if (auto *anyFunctionType = type->getAs<AnyFunctionType>()) {
-    if (anyFunctionType->isSupportedAsDifferentiableClosure()) {
+    if (isSupportedAsDifferentiableClosure(anyFunctionType)) {
       CanType resultType = anyFunctionType->getResult()->getCanonicalType();
 
       // if (resultType->hasTypeParameter()) {
@@ -4967,16 +4967,16 @@ TypeBase::getAutoDiffTangentSpace(LookupConformanceFn lookupConformance) {
   if (!assocTy->hasError())
     return cache(TangentSpace::getTangentVector(assocTy));
 
-  // Tangent of closure is tangent of captured arguments.
-  // As for now, assume that exactly 1 argument is captured and its type is
-  // equal to the result type.
-  // TODO: handle arbitrary captured arg types and result types.
-  if (auto resultType = getResultTypeForSupportedDifferentiableClosure(this)) {
-    auto capturedArgsType = resultType;
-    auto tangentOfCapturedArgs =
-        capturedArgsType->getAutoDiffTangentSpace(lookupConformance)->getType();
-    return cache(TangentSpace::getTangentVector(tangentOfCapturedArgs));
-  }
+  // // Tangent of closure is tangent of captured arguments.
+  // // As for now, assume that exactly 1 argument is captured and its type is
+  // // equal to the result type.
+  // // TODO: handle arbitrary captured arg types and result types.
+  // if (auto resultType = getResultTypeForSupportedDifferentiableClosure(this)) {
+  //   auto capturedArgsType = resultType;
+  //   auto tangentOfCapturedArgs =
+  //       capturedArgsType->getAutoDiffTangentSpace(lookupConformance)->getType();
+  //   return cache(TangentSpace::getTangentVector(tangentOfCapturedArgs));
+  // }
 
   // Otherwise, there is no associated tangent space. Return `None`.
   return cache(std::nullopt);

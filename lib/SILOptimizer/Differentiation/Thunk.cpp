@@ -370,6 +370,7 @@ SILValue reabstractFunction(
   auto fromType = fn->getType().getAs<SILFunctionType>();
   auto unsubstFromType = fromType->getUnsubstitutedType(module);
   auto unsubstToType = toType->getUnsubstitutedType(module);
+
   auto *thunk = getOrCreateReabstractionThunk(fb, module, loc,
                                               /*caller*/ fn->getFunction(),
                                               unsubstFromType, unsubstToType);

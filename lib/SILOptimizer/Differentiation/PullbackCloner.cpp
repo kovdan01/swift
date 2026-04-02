@@ -992,7 +992,7 @@ public:
   }
 
   void visitPartialApplyInst(PartialApplyInst *pai) {
-    if (!pai->isSupportedAsDifferentiableClosure()) {
+    if (!isSupportedAsDifferentiableClosure(pai)) {
       SILInstructionVisitor::visitPartialApplyInst(pai);
       return;
     }
