@@ -474,12 +474,12 @@ bool isProfitableToInlineAutodiffVJP(SILFunction *vjp, SILFunction *caller,
     return true;
   }
 
-  // If callee has control-flow it will definitely not be handled by the
-  // Autodiff closure-spec optimization. Therefore, we should consider it for
-  // inlining.
-  if (calleeHasControlFlow) {
-    return true;
-  }
+  // // If callee has control-flow it will definitely not be handled by the
+  // // Autodiff closure-spec optimization. Therefore, we should consider it for
+  // // inlining.
+  // if (calleeHasControlFlow) {
+  //   return true;
+  // }
 
   // If this is the EarlyPerfInline pass we want to have the Autodiff
   // closure-spec optimization pass optimize VJPs in isolation before they are
@@ -488,11 +488,11 @@ bool isProfitableToInlineAutodiffVJP(SILFunction *vjp, SILFunction *caller,
     return false;
   }
 
-  // If this is not the EarlyPerfInline pass, VJPs should only be inlined into
-  // other VJPs that do not contain any control-flow.
-  if (!isCallerVJP || (isCallerVJP && callerHasControlFlow)) {
-    return false;
-  }
+  // // If this is not the EarlyPerfInline pass, VJPs should only be inlined into
+  // // other VJPs that do not contain any control-flow.
+  // if (!isCallerVJP || (isCallerVJP && callerHasControlFlow)) {
+  //   return false;
+  // }
 
   return true;
 }
@@ -540,11 +540,12 @@ bool SILPerformanceInliner::isProfitableToInline(
   assert(Callee);
   bool IsGeneric = AI.hasSubstitutions();
 
-  if (isFunctionAutodiffVJP(Callee) &&
-      !isProfitableToInlineAutodiffVJP(Callee, AI.getFunction(), WhatToInline,
-                                       this->pm->getStageName())) {
-    return false;
-  }
+  // MYTODO delete the below
+  // if (isFunctionAutodiffVJP(Callee) &&
+  //     !isProfitableToInlineAutodiffVJP(Callee, AI.getFunction(), WhatToInline,
+  //                                      this->pm->getStageName())) {
+  //   return false;
+  // }
 
   // Start with a base benefit.
   int BaseBenefit = isa<BeginApplyInst>(AI) ? RemovedCoroutineCallBenefit
