@@ -13,7 +13,7 @@
 import AST
 import SIL
 
-private let verbose = true
+private let verbose = false
 
 private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
   if verbose {
@@ -198,7 +198,7 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     var changed = false
     for inst in function.instructions {
       if let partialApply = inst as? PartialApplyInst,
-         partialApply.isPullbackInResultOfAutodiffVJP
+         partialApply.isPotentiallyPullback
       {
         log("SINGLE BB: PAI PULLBACK BEGIN")
         log("\(partialApply)")
@@ -926,16 +926,7 @@ private func getSpecializedParametersCFG(
   var foundBranchTracingEnumParam = false
   // Start by adding all original parameters except for the closure parameters.
   for paramInfo in applySiteCallee.convention.parameters {
-    log("getSpecializedParametersCFG 00")
-    log("\(paramInfo.type)")
-    log("getSpecializedParametersCFG 01")
-    log("\(enumType)")
-    log("getSpecializedParametersCFG 02")
-    log("\(enumType.canonicalType)")
-    log("getSpecializedParametersCFG 03")
-    //log("\(enumType.mapOutOfEnvironment(in: autodiffSpecializationInfo.pullback))")
-    log("getSpecializedParametersCFG 04")
-    if paramInfo.type != enumType.mapOutOfEnvironment(in: pb).canonicalType {
+    if paramInfo.type != enumType.rawType.mapOutOfEnvironment().canonical {//(in: pb).canonicalType {
       specializedParamInfoList.append(paramInfo)
       continue
     }
@@ -943,7 +934,7 @@ private func getSpecializedParametersCFG(
     assert(!foundBranchTracingEnumParam)
     foundBranchTracingEnumParam = true
     let newParamInfo = ParameterInfo(
-      type: enumDict[enumType]!.mapOutOfEnvironment(in: pb).canonicalType,
+      type: enumDict[enumType]!.rawType.mapOutOfEnvironment().canonical,//(in: pb).canonicalType,
       convention: paramInfo.convention,
       options: paramInfo.options, hasLoweredAddresses: paramInfo.hasLoweredAddresses)
     log("getSpecializedParametersCFG 06")
@@ -1597,6 +1588,11 @@ private struct SpecializationInfo {
     cloner.cloneFunctionBody(from: callee)
 
     addMissingDestroysAtFunctionExits(for: clonedClosureArguments, cloner.context)
+
+    for rootClosure in rootClosures {
+      let clonedRootClosure = cloner.getClonedValue(of: rootClosure) as! PartialApplyInst
+      cloner.context.tryOptimizeApplyOfPartialApply(closure: clonedRootClosure)
+    }
   }
 
   private func addFunctionArgumentsWithoutClosures(using cloner: inout Cloner) {
@@ -1854,12 +1850,10 @@ private func numberOfIsolatedParameters(_ params: [ParameterInfo]) -> Int {
 private extension PartialApplyInst {
   /// True, if the closure obtained from this partial_apply is the
   /// pullback returned from an autodiff VJP
-  var isPullbackInResultOfAutodiffVJP: Bool {
-    if self.parentFunction.isAutodiffVJP,
-      let use = self.uses.singleUse,
-      let tupleInst = use.instruction as? TupleInst,
-      let returnInst = self.parentFunction.returnInstruction,
-      tupleInst == returnInst.returnedValue
+  var isPotentiallyPullback: Bool {
+    assert(self.parentFunction.isAutodiffVJP)
+    if let use = self.uses.singleUse,
+      let tupleInst = use.instruction as? TupleInst
     {
       return true
     }
