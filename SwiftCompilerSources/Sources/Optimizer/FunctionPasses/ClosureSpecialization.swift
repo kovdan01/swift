@@ -198,7 +198,7 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     var changed = false
     for inst in function.instructions {
       if let partialApply = inst as? PartialApplyInst,
-         partialApply.isPotentiallyPullback
+         partialApply.isPullbackInResultOfAutodiffVJP
       {
         log("SINGLE BB: PAI PULLBACK BEGIN")
         log("\(partialApply)")
@@ -1850,10 +1850,12 @@ private func numberOfIsolatedParameters(_ params: [ParameterInfo]) -> Int {
 private extension PartialApplyInst {
   /// True, if the closure obtained from this partial_apply is the
   /// pullback returned from an autodiff VJP
-  var isPotentiallyPullback: Bool {
+  var isPullbackInResultOfAutodiffVJP: Bool {
     assert(self.parentFunction.isAutodiffVJP)
     if let use = self.uses.singleUse,
-      let tupleInst = use.instruction as? TupleInst
+      let tupleInst = use.instruction as? TupleInst,
+      let returnInst = self.parentFunction.returnInstruction,
+      tupleInst == returnInst.returnedValue
     {
       return true
     }
