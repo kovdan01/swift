@@ -457,6 +457,89 @@ bool isAllocator(SILFunction *callee) {
   return false;
 }
 
+bool isPullbackOnlyUsedDirectly(FullApplySite applySite) {
+  auto *ai = dyn_cast<ApplyInst>(applySite.getInstruction());
+  // TODO: in which cases does it happen?
+  if (ai == nullptr)
+    return false;
+
+  if (llvm::any_of(ai->getUsers(),
+                   [](auto *user) { return !isa<TupleExtractInst>(user); })) {
+    return false;
+  }
+
+  auto numTupleElements = ai->getType().getNumTupleElements();
+
+  for (auto user : ai->getUsers()) {
+    auto *tei = cast<TupleExtractInst>(user);
+    if (tei->getFieldIndex() + 1 != numTupleElements)
+      continue;
+
+    auto *teiUse = tei->getSingleUse();
+    if (teiUse == nullptr)
+      return false;
+
+    auto *pai = dyn_cast<PartialApplyInst>(teiUse->getUser());
+    if (pai == nullptr)
+      return false;
+
+    auto *paiUse = pai->getSingleUse();
+    if (paiUse == nullptr)
+      return false;
+
+    auto *ti = dyn_cast<TupleInst>(paiUse->getUser());
+    if (ti == nullptr)
+      return false;
+
+    auto *tiUse = ti->getSingleUse();
+    if (tiUse == nullptr)
+      return false;
+
+    auto *ri = dyn_cast<ReturnInst>(tiUse->getUser());
+    if (ri == nullptr)
+      return false;
+  }
+
+  return true;
+}
+
+bool isProfitableToInlineAutodiffVJP(FullApplySite applySite,
+                                     StringRef stageName) {
+  SILFunction *caller = applySite.getFunction();
+  bool isLowLevelFunctionPassPipeline = stageName == "LowLevel,Function";
+  auto isCallerVJP = isFunctionAutodiffVJP(caller);
+  auto callerHasControlFlow = caller->size() > 1;
+
+  // If the pass is being run as part of the low-level function pass pipeline,
+  // the autodiff closure-spec optimization is done doing its work. Therefore,
+  // all VJPs should be considered for inlining.
+  if (isLowLevelFunctionPassPipeline) {
+    return true;
+  }
+
+  if (!isCallerVJP) {
+    return false;
+  }
+
+  if (isCallerVJP && callerHasControlFlow) {
+    if (isPullbackOnlyUsedDirectly(applySite))
+      return true;
+
+    for (SILBasicBlock &bb : *caller) {
+      for (SILInstruction &inst : bb) {
+        if (auto *builtinInst = dyn_cast<BuiltinInst>(&inst)) {
+          if (builtinInst->getName().str() ==
+              "autoDiffProjectTopLevelSubcontext") {
+            return false;
+          }
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
 static bool isConstantValue(SILValue v, ValueSet &visited) {
   if (!visited.insert(v))
     return true;
@@ -499,6 +582,11 @@ bool SILPerformanceInliner::isProfitableToInline(
   SILFunction *Callee = AI.getReferencedFunctionOrNull();
   assert(Callee);
   bool IsGeneric = AI.hasSubstitutions();
+
+  if (isFunctionAutodiffVJP(Callee) &&
+      !isProfitableToInlineAutodiffVJP(AI, this->pm->getStageName())) {
+    return false;
+  }
 
   // Start with a base benefit.
   int BaseBenefit = isa<BeginApplyInst>(AI) ? RemovedCoroutineCallBenefit
