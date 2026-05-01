@@ -13,7 +13,7 @@
 import AST
 import SIL
 
-private let verbose = false
+private let verbose = true
 
 private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
   if verbose {
@@ -514,6 +514,11 @@ private struct SpecializationInfo {
     cloner.cloneFunctionBody(from: callee)
 
     addMissingDestroysAtFunctionExits(for: clonedClosureArguments, cloner.context)
+
+    for rootClosure in rootClosures {
+      let clonedRootClosure = cloner.getClonedValue(of: rootClosure) as! PartialApplyInst
+      cloner.context.tryOptimizeApplyOfPartialApply(closure: clonedRootClosure)
+    }
   }
 
   private func addFunctionArgumentsWithoutClosures(using cloner: inout Cloner) {
@@ -767,8 +772,9 @@ private extension PartialApplyInst {
   /// True, if the closure obtained from this partial_apply is the
   /// pullback returned from an autodiff VJP
   var isPullbackInResultOfAutodiffVJP: Bool {
-    if self.parentFunction.isAutodiffVJP,
-      let use = self.uses.singleUse,
+    assert(self.parentFunction.isAutodiffVJP)
+
+    if let use = self.uses.singleUse,
       let tupleInst = use.instruction as? TupleInst,
       let returnInst = self.parentFunction.returnInstruction,
       tupleInst == returnInst.returnedValue
@@ -776,7 +782,28 @@ private extension PartialApplyInst {
       return true
     }
 
-    return false
+    log("IS PULLBACK? PAI: \(self)")
+    log("IS PULLBACK? VJP: \(self.parentFunction)")
+    for paiUse in self.uses {
+      log("IS PULLBACK? PAI USE: \(paiUse)")
+      guard let tupleInst = paiUse.instruction as? TupleInst else {
+        return false
+      }
+      log("IS PULLBACK? TUPLE: \(tupleInst)")
+      for tupleUse in tupleInst.uses {
+        log("IS PULLBACK? TUPLE USE: \(tupleUse)")
+        guard let ei = tupleUse.instruction as? EnumInst else {
+          return false
+        } 
+        log("IS PULLBACK? ENUM: \(ei)")
+        if !ei.type.isBranchTracingEnum(in: self.parentFunction) {
+          return false
+        }
+        log("IS PULLBACK? IS BTE: \(ei)")
+      }
+    }
+
+    return true
   }
 
   var isPartialApplyOfThunk: Bool {
