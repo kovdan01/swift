@@ -13,6 +13,7 @@
 
 // RUN: %target-swift-frontend -emit-sil %s -O -o %t/out.sil
 // RUN: cat %t/out.sil | %FileCheck %s --check-prefix=CHECK1
+// RUN: cat %t/out.sil | %FileCheck %s --check-prefix=EXPLICIT
 // RUN: cat %t/out.sil | %FileCheck %s --check-prefix=CHECK2
 // RUN: cat %t/out.sil | %FileCheck %s --check-prefix=CHECK3
 
@@ -33,7 +34,7 @@ import Foundation
 
 var AutoDiffClosureSpecSingleBBTests = TestSuite("AutoDiffClosureSpecSingleBB")
 
-AutoDiffClosureSpecSingleBBTests.testWithLeakChecking("Test1") {
+AutoDiffClosureSpecSingleBBTests.testWithLeakChecking("Test1Implicit") {
   // CHECK1-LABEL: {{^}}// reverse-mode derivative of test1 #1 (_:)
   // CHECK1-NEXT: {{^}}// Isolation: nonisolated
   // CHECK1-NEXT:  sil private @$s3outyycfU_5test1L_yS2fFTJrSpSr : $@convention(thin) (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) {
@@ -58,6 +59,45 @@ AutoDiffClosureSpecSingleBBTests.testWithLeakChecking("Test1") {
 
   for x in -100...100 {
     expectEqual((1000 * gradient(at: Float(x), of: test1)).rounded(), (1000 * test1Derivative(Float(x))).rounded())
+  }
+}
+
+func test1Explicit(_ x: Float) -> Float {
+  return sin(x) * cos(x)
+}
+
+@derivative(of: test1Explicit)
+func test1ExplicitDerivative(_ x: Float) -> (value: Float, pullback: (Float) -> Float) {
+  let vjpSinRes = valueWithPullback(at: x, of: sin)
+  let vjpCosRes = valueWithPullback(at: x, of: cos)
+  let pbSin = vjpSinRes.1
+  let pbCos = vjpCosRes.1
+  func pullback(t: Float) -> Float {
+    return pbSin(t) * cos(x) + sin(x) * pbCos(t)
+  }
+  return (value: test1Explicit(x), pullback)
+}
+
+AutoDiffClosureSpecSingleBBTests.testWithLeakChecking("Test1Explicit") {
+  // CHECK1-LABEL: {{^}}// reverse-mode derivative of test1 #1 (_:)
+  // CHECK1-NEXT: {{^}}// Isolation: nonisolated
+  // CHECK1-NEXT:  sil private @$s3outyycfU_5test1L_yS2fFTJrSpSr : $@convention(thin) (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) {
+  // CHECK1:         %[[#A10:]] = function_ref @$s3outyycfU_5test1L_yS2fFTJpSpSr62$s16_Differentiation7_vjpSinySf5value_S2fc8pullbacktSfFS2fcfU_Sf0c1_d1_e4Cosyg1_hiJ2U_Sf026$sSf16_DifferentiationE12_e16Multiply3lhs3rhsg1_i17_SftSfc8pullbackti1_q5FZSf_Q6SfcfU_S2fTf1nccc_n : $@convention(thin) (Float, Float, Float, Float, Float) -> Float
+  // CHECK1:         %[[#A11:]] = partial_apply [callee_guaranteed] %[[#A10]](%[[#]], %[[#]], %[[#]], %[[#]]) : $@convention(thin) (Float, Float, Float, Float, Float) -> Float
+  // CHECK1:         %[[#A12:]] = tuple (%[[#]], %[[#A11]])
+  // CHECK1:         return %[[#A12]]
+  // CHECK1:       } // end sil function '$s3outyycfU_5test1L_yS2fFTJrSpSr'
+
+  // CHECK1-NONE:  {{^}}// pullback of test1 #1 (_:)
+  // CHECK1:       {{^}}// specialized pullback of test1 #1 (_:)
+  // CHECK1:       sil private @$s3outyycfU_5test1L_yS2fFTJpSpSr62$s16_Differentiation7_vjpSinySf5value_S2fc8pullbacktSfFS2fcfU_Sf0c1_d1_e4Cosyg1_hiJ2U_Sf026$sSf16_DifferentiationE12_e16Multiply3lhs3rhsg1_i17_SftSfc8pullbackti1_q5FZSf_Q6SfcfU_S2fTf1nccc_n : $@convention(thin) (Float, Float, Float, Float, Float) -> Float {
+
+  func test1Derivative(_ x: Float) -> Float {
+    return cos(x) * cos(x) - sin(x) * sin(x)
+  }
+
+  for x in -100...100 {
+    expectEqual((1000 * gradient(at: Float(x), of: test1Explicit)).rounded(), (1000 * test1Derivative(Float(x))).rounded())
   }
 }
 
