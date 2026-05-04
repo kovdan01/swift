@@ -346,6 +346,15 @@ bool BridgedFunction::isAutodiffVJP() const {
   if (isImplicitAutodiffVJP())
     return true;
 
+  if (auto *afd = getFunction()->getDeclRef().getAbstractFunctionDecl()) {
+    for (auto *attr : afd->getAttrs()) {
+      if (auto *derivativeAttr = dyn_cast<DerivativeAttr>(attr)) {
+        return derivativeAttr->getDerivativeKind() ==
+               AutoDiffDerivativeFunctionKind::VJP;
+      }
+    }
+  }
+
   return false;
 }
 
