@@ -857,7 +857,7 @@ runFunctionPasses(unsigned FromTransIdx, unsigned ToTransIdx) {
 
     if (PipelineIdx >= (ToTransIdx - FromTransIdx)) {
       // All passes did already run for the function. Pop it off the worklist.
-      llvm::errs() << "POP FN: " << F->getName() << "\n";
+      // llvm::errs() << "POP FN: " << F->getName() << "\n";
       FunctionWorklist.pop_back();
       continue;
     }

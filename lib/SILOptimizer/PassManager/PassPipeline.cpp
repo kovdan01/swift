@@ -1028,6 +1028,8 @@ SILPassPipelinePlan::getPerformancePassPipeline(const SILOptions &Options) {
   // Perform optimizations that specialize.
   addClosureSpecializePassPipeline(P);
 
+  P.addAutodiffClosureSpecialization();
+
   P.addOwnershipModelEliminator();
 
   // Run another iteration of the SSA optimizations to optimize the
