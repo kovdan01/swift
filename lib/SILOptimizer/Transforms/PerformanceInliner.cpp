@@ -446,6 +446,15 @@ bool isFunctionAutodiffVJP(SILFunction *callee) {
     }
   }
 
+  if (auto *afd = callee->getDeclRef().getAbstractFunctionDecl()) {
+    for (auto *attr : afd->getAttrs()) {
+      if (auto *derivativeAttr = dyn_cast<DerivativeAttr>(attr)) {
+        return derivativeAttr->getDerivativeKind() ==
+               AutoDiffDerivativeFunctionKind::VJP;
+      }
+    }
+  }
+
   return false;
 }
 
@@ -505,9 +514,46 @@ bool hasPullbackOnlyDirectUses(FullApplySite applySiteOfVJP) {
   return true;
 }
 
+bool isTrivialVJP(SILFunction *vjp) {
+  auto getSingleUser = [](SILValue val) -> SILInstruction * {
+    auto *use = val->getSingleUse();
+    return use ? use->getUser() : nullptr;
+  };
+
+  for (auto &bb : *vjp) {
+    for (auto &inst : bb) {
+      if (auto *ai = dyn_cast<ApplyInst>(&inst)) {
+        SILFunction *callee = ai->getCalleeFunction();
+        if (!callee)
+          return false;
+        if (isFunctionAutodiffVJP(callee))
+          return false;
+        continue;
+      }
+
+      auto *pai = dyn_cast<PartialApplyInst>(&inst);
+      if (!pai)
+        continue;
+
+      auto *ti = dyn_cast_or_null<TupleInst>(getSingleUser(pai));
+      if (!ti)
+        return false;
+
+      auto *ri = dyn_cast_or_null<ReturnInst>(getSingleUser(ti));
+      if (!ri)
+        return false;
+    }
+  }
+
+  return true;
+}
+
 bool isProfitableToInlineAutodiffVJP(FullApplySite applySite,
                                      StringRef stageName) {
   SILFunction *caller = applySite.getFunction();
+  SILFunction *callee = applySite.getReferencedFunctionOrNull();
+  assert(callee);
+
   bool isLowLevelFunctionPassPipeline = stageName == "LowLevel,Function";
   auto isCallerVJP = isFunctionAutodiffVJP(caller);
   auto callerHasControlFlow = caller->size() > 1;
@@ -516,6 +562,14 @@ bool isProfitableToInlineAutodiffVJP(FullApplySite applySite,
   // the autodiff closure-spec optimization is done doing its work. Therefore,
   // all VJPs should be considered for inlining.
   if (isLowLevelFunctionPassPipeline) {
+    return true;
+  }
+
+  if (callee->isThunk() == IsThunk_t::IsThunk) {
+    return true;
+  }
+
+  if (isTrivialVJP(callee)) {
     return true;
   }
 
