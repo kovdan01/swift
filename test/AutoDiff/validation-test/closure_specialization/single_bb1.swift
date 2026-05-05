@@ -11,7 +11,7 @@
 // RUN: %target-run %t/none.out
 // RUN: %target-run %t/opt.out
 
-// RUN: %target-swift-frontend -emit-sil %s -O -o %t/out.sil
+// RUN: %target-swift-frontend -sil-verify-all -emit-sil %s -O -o %t/out.sil
 // RUN: cat %t/out.sil | %FileCheck %s --check-prefix=CHECK1
 // RUN: cat %t/out.sil | %FileCheck %s --check-prefix=EXPLICIT
 // RUN: cat %t/out.sil | %FileCheck %s --check-prefix=CHECK2

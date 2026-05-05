@@ -70,6 +70,9 @@ extension DifferentiableFunctionInst : SILCombineSimplifiable {
         assert(use.endsLifetime)
       }
     }
+    // if self.uses.ignoreDebugUses.isEmpty {
+    //   context.erase(instructionIncludingAllUsers: self)
+    // }
   }
 
   private func hasOnlyExtractUsesInBorrowScopes() -> Bool {
@@ -84,15 +87,15 @@ extension DifferentiableFunctionInst : SILCombineSimplifiable {
             break
           case is DifferentiableFunctionExtractInst:
             hasExtract = true
-          case let convert as ConvertFunctionInst:
-            for convertUse in convert.uses.ignoreDebugUses {
-              switch convertUse.instruction {
-                case is DifferentiableFunctionExtractInst:
-                  hasExtract = true
-                default:
-                  return false
-              }
-            }
+          // case let convert as ConvertFunctionInst:
+          //   for convertUse in convert.uses.ignoreDebugUses {
+          //     switch convertUse.instruction {
+          //       case is DifferentiableFunctionExtractInst:
+          //         hasExtract = true
+          //       default:
+          //         return false
+          //     }
+          //   }
           default:
             return false
           }
@@ -154,12 +157,15 @@ extension DifferentiableFunctionInst : SILCombineSimplifiable {
       processExtract(differentiableFunctionExtract: differentiableFunctionExtract, beginBorrow: beginBorrow, context)
     }
 
-    for convertFunction in beginBorrow.uses.users(ofType: ConvertFunctionInst.self) {
-      for differentiableFunctionExtract in convertFunction.uses.users(
-        ofType: DifferentiableFunctionExtractInst.self)
-      {
-        processExtract(differentiableFunctionExtract: differentiableFunctionExtract, beginBorrow: beginBorrow, context)
-      }
-    }
+    // for convertFunction in beginBorrow.uses.users(ofType: ConvertFunctionInst.self) {
+    //   for differentiableFunctionExtract in convertFunction.uses.users(
+    //     ofType: DifferentiableFunctionExtractInst.self)
+    //   {
+    //     processExtract(differentiableFunctionExtract: differentiableFunctionExtract, beginBorrow: beginBorrow, context)
+    //   }
+    //   if convertFunction.uses.ignoreDebugUses.isEmpty {
+    //     context.erase(instructionIncludingAllUsers: convertFunction)
+    //   }
+    // }
   }
 }
