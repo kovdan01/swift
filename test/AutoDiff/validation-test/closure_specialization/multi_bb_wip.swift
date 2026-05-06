@@ -22,7 +22,7 @@
 // CHECK-NONE: {{^}}// pullback of myfoo15
 // CHECK-NONE: {{^}}// pullback of myfoo17
 // CHECK-NONE: {{^}}// pullback of myfoo16
-// HECK-NONE: {{^}}// pullback of myfoo20
+// CHECK-NONE: {{^}}// pullback of myfoo20
 // CHECK-NONE: {{^}}// pullback of myfoo07
 // CHECK-NONE: {{^}}// pullback of myfoo06
 // CHECK-NONE: {{^}}// pullback of myfoo05
@@ -30,8 +30,8 @@
 // CHECK-NONE: {{^}}// pullback of myfoo03
 // CHECK-NONE: {{^}}// pullback of myfoo02
 // CHECK-NONE: {{^}}// pullback of myfoo01
-// HECK-NONE: {{^}}// pullback of myfoo21
-// HECK-NONE: {{^}}// pullback of myfoo19
+// CHECK-NONE: {{^}}// pullback of myfoo21
+// CHECK-NONE: {{^}}// pullback of myfoo19
 // CHECK:      {{^}}// specialized pullback of myfoo08
 // CHECK:      {{^}}// specialized pullback of myfoo09
 // CHECK:      {{^}}// specialized pullback of myfoo10
@@ -42,7 +42,7 @@
 // CHECK:      {{^}}// specialized pullback of myfoo15
 // CHECK:      {{^}}// specialized pullback of myfoo17
 // CHECK:      {{^}}// specialized pullback of myfoo16
-// HECK:      {{^}}// specialized pullback of myfoo20
+// CHECK:      {{^}}// specialized pullback of myfoo20
 // CHECK:      {{^}}// specialized pullback of myfoo07
 // CHECK:      {{^}}// specialized pullback of myfoo06
 // CHECK:      {{^}}// specialized pullback of myfoo05
@@ -50,8 +50,8 @@
 // CHECK:      {{^}}// specialized pullback of myfoo03
 // CHECK:      {{^}}// specialized pullback of myfoo02
 // CHECK:      {{^}}// specialized pullback of myfoo01
-// HECK:      {{^}}// specialized pullback of myfoo21
-// HECK:      {{^}}// specialized pullback of myfoo19
+// CHECK:      {{^}}// specialized pullback of myfoo21
+// CHECK:      {{^}}// specialized pullback of myfoo19
 
 import DifferentiationUnittest
 import StdlibUnittest
@@ -575,58 +575,58 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test") {
 
   expectEqual(pullback(at: ["s1": 1.0], of: testFunctionG)(2), ["s1" : 2.0])
 
-//  @differentiable(reverse)
-//  func myfoo19(_ t0 : Float, _ t1 : Float) -> (Float, Float) {
-//    if t0 < 0 {
-//      var t21 : Float = 0
-//      let t14 : Float = 2
-//      if 0 < t1 {
-//        t21 = pow(t1, t14)
-//      } else {
-//        t21 = Float.nan
-//      }
-//
-//      let t10 : Float = 3
-//      let t26 : Float = t21
-//      let t34 : Float = 1
-//      let t28 : Float = t10 * t26
-//      return (t28, t34)
-//    } else {
-//      let t43 : Float = 4
-//      let t46 : Float = 5
-//      var t54 : Float = 0
-//      if 0 < t1 {
-//        t54 = pow(t1, t46)
-//      } else {
-//        t54 = Float.nan
-//      }
-//
-//      let t59 : Float = t54
-//      let t61 : Float = t43 * t59
-//      let t67 : Float = 6
-//
-//      return (t61, t67)
-//    }
-//  }
+  @differentiable(reverse)
+  func myfoo19(_ t0 : Float, _ t1 : Float) -> (Float, Float) {
+    if t0 < 0 {
+      var t21 : Float = 0
+      let t14 : Float = 2
+      if 0 < t1 {
+        t21 = pow(t1, t14)
+      } else {
+        t21 = Float.nan
+      }
 
-//  // checked_cast_br
-//  func myfoo20<T>(_ x: Float, _ metatype: T.Type) -> Float {
-//    if metatype is Int.Type {
-//      return x + x
-//    }
-//    return x * x
-//  }
-//  expectEqual((6, 2), valueWithGradient(at: 3, of: { myfoo20($0, Int.self) }))
-//  expectEqual((9, 6), valueWithGradient(at: 3, of: { myfoo20($0, Float.self) }))
-//
-//  // checked_cast_addr_br
-//  func myfoo21<T: Differentiable>(_ x: T) -> T {
-//    if let _ = x as? Float {
-//      // Do nothing with `y: Float?` value.
-//    }
-//    return x
-//  }
-//  expectEqual((3, 1), valueWithGradient(at: Float(3), of: myfoo21))
+      let t10 : Float = 3
+      let t26 : Float = t21
+      let t34 : Float = 1
+      let t28 : Float = t10 * t26
+      return (t28, t34)
+    } else {
+      let t43 : Float = 4
+      let t46 : Float = 5
+      var t54 : Float = 0
+      if 0 < t1 {
+        t54 = pow(t1, t46)
+      } else {
+        t54 = Float.nan
+      }
+
+      let t59 : Float = t54
+      let t61 : Float = t43 * t59
+      let t67 : Float = 6
+
+      return (t61, t67)
+    }
+  }
+
+  // checked_cast_br
+  func myfoo20<T>(_ x: Float, _ metatype: T.Type) -> Float {
+    if metatype is Int.Type {
+      return x + x
+    }
+    return x * x
+  }
+  expectEqual((6, 2), valueWithGradient(at: 3, of: { myfoo20($0, Int.self) }))
+  expectEqual((9, 6), valueWithGradient(at: 3, of: { myfoo20($0, Float.self) }))
+
+  // checked_cast_addr_br
+  func myfoo21<T: Differentiable>(_ x: T) -> T {
+    if let _ = x as? Float {
+      // Do nothing with `y: Float?` value.
+    }
+    return x
+  }
+  expectEqual((3, 1), valueWithGradient(at: Float(3), of: myfoo21))
 }
 
 runAllTests()
