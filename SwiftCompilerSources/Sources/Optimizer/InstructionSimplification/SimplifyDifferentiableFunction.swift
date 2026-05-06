@@ -103,36 +103,22 @@ extension DifferentiableFunctionInst : SILCombineSimplifiable {
         continue
       }
 
-      // If the extractee has non-trivial ownership, it is consumed by the differentiable_function instruction.
-      // We must copy it before the consumption point so the copy remains live afterward.
-      let effectiveExtractee: Value
-      let needsDestroy: Bool
-      if extractee.ownership != .none {
-        let copyBuilder = Builder(before: self, context)
-        effectiveExtractee = copyBuilder.createCopyValue(operand: extractee)
-        needsDestroy = true
-      } else {
-        effectiveExtractee = extractee
-        needsDestroy = false
-      }
-
       switch differentiableFunctionExtract.ownership {
       case .none:
-        if differentiableFunctionExtract.type != effectiveExtractee.type {
+        if differentiableFunctionExtract.type != extractee.type {
           let convertBuilder = Builder(before: differentiableFunctionExtract, context)
-          let newField = convertBuilder.createConvertFunction(originalFunction: effectiveExtractee, resultType: differentiableFunctionExtract.type, withoutActuallyEscaping: false)
+          let newField = convertBuilder.createConvertFunction(originalFunction: extractee, resultType: differentiableFunctionExtract.type, withoutActuallyEscaping: false)
           differentiableFunctionExtract.replace(with: newField, context)
         } else {
-          differentiableFunctionExtract.replace(with: effectiveExtractee, context)
+          differentiableFunctionExtract.replace(with: extractee, context)
         }
 
       case .guaranteed:
         let beginBuilder = Builder(before: beginBorrow, context)
-        let borrowedField = beginBuilder.createBeginBorrow(of: effectiveExtractee,
+        let borrowedField = beginBuilder.createBeginBorrow(of: extractee,
                                                            isLexical: beginBorrow.isLexical,
                                                            hasPointerEscape: beginBorrow.hasPointerEscape)
-
-        if differentiableFunctionExtract.type != effectiveExtractee.type {
+        if differentiableFunctionExtract.type != extractee.type {
           let convertBuilder = Builder(before: differentiableFunctionExtract, context)
           let newField = convertBuilder.createConvertFunction(originalFunction: borrowedField, resultType: differentiableFunctionExtract.type, withoutActuallyEscaping: false)
           differentiableFunctionExtract.replace(with: newField, context)
@@ -142,9 +128,6 @@ extension DifferentiableFunctionInst : SILCombineSimplifiable {
         for endBorrow in beginBorrow.endInstructions {
           let endBuilder = Builder(before: endBorrow, context)
           endBuilder.createEndBorrow(of: borrowedField)
-          if needsDestroy {
-            endBuilder.createDestroyValue(operand: effectiveExtractee)
-          }
         }
 
       case .owned, .unowned:
