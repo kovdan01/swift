@@ -446,6 +446,15 @@ bool isFunctionAutodiffVJP(SILFunction *callee) {
     }
   }
 
+  if (auto *afd = callee->getDeclRef().getAbstractFunctionDecl()) {
+    for (auto *attr : afd->getAttrs()) {
+      if (auto *derivativeAttr = dyn_cast<DerivativeAttr>(attr)) {
+        return derivativeAttr->getDerivativeKind() ==
+               AutoDiffDerivativeFunctionKind::VJP;
+      }
+    }
+  }
+
   return false;
 }
 
@@ -457,13 +466,95 @@ bool isAllocator(SILFunction *callee) {
   return false;
 }
 
-bool isProfitableToInlineAutodiffVJP(SILFunction *vjp, SILFunction *caller,
-                                     InlineSelection whatToInline,
+bool hasPullbackOnlyDirectUses(FullApplySite applySiteOfVJP) {
+  auto *applyOfVJP = dyn_cast<ApplyInst>(applySiteOfVJP.getInstruction());
+  if (applyOfVJP == nullptr)
+    return false;
+
+  SILValue calleePullback = nullptr;
+  if (applyOfVJP->getType().isTuple()) {
+    auto numTupleElements = applyOfVJP->getType().getNumTupleElements();
+    assert(numTupleElements > 0);
+    for (auto user : applyOfVJP->getUsers()) {
+      if (auto *tei = dyn_cast<TupleExtractInst>(user)) {
+        if (tei->getFieldIndex() + 1 == numTupleElements) {
+          calleePullback = tei;
+          break;
+        }
+      } else if (auto *dti = dyn_cast<DestructureTupleInst>(user)) {
+        calleePullback = dti->getResult(numTupleElements - 1);
+        break;
+      } else {
+        return false;
+      }
+    }
+  } else {
+    calleePullback = applyOfVJP;
+  }
+  assert(calleePullback != nullptr);
+  assert(calleePullback->getType().isFunction());
+
+  auto getSingleUser = [](SILValue val) -> SILInstruction * {
+    auto *use = val->getSingleUse();
+    return use ? use->getUser() : nullptr;
+  };
+
+  auto *pai = dyn_cast_or_null<PartialApplyInst>(getSingleUser(calleePullback));
+  if (!pai)
+    return false;
+
+  auto *ti = dyn_cast_or_null<TupleInst>(getSingleUser(pai));
+  if (!ti)
+    return false;
+
+  auto *ri = dyn_cast_or_null<ReturnInst>(getSingleUser(ti));
+  if (!ri)
+    return false;
+
+  return true;
+}
+
+bool isTrivialVJP(SILFunction *vjp) {
+  auto getSingleUser = [](SILValue val) -> SILInstruction * {
+    auto *use = val->getSingleUse();
+    return use ? use->getUser() : nullptr;
+  };
+
+  for (auto &bb : *vjp) {
+    for (auto &inst : bb) {
+      if (auto *ai = dyn_cast<ApplyInst>(&inst)) {
+        SILFunction *callee = ai->getCalleeFunction();
+        if (!callee)
+          return false;
+        if (isFunctionAutodiffVJP(callee))
+          return false;
+        continue;
+      }
+
+      auto *pai = dyn_cast<PartialApplyInst>(&inst);
+      if (!pai)
+        continue;
+
+      auto *ti = dyn_cast_or_null<TupleInst>(getSingleUser(pai));
+      if (!ti)
+        return false;
+
+      auto *ri = dyn_cast_or_null<ReturnInst>(getSingleUser(ti));
+      if (!ri)
+        return false;
+    }
+  }
+
+  return true;
+}
+
+bool isProfitableToInlineAutodiffVJP(FullApplySite applySite,
                                      StringRef stageName) {
+  SILFunction *caller = applySite.getFunction();
+  SILFunction *callee = applySite.getReferencedFunctionOrNull();
+  assert(callee);
+
   bool isLowLevelFunctionPassPipeline = stageName == "LowLevel,Function";
-  auto isHighLevelFunctionPassPipeline =
-      stageName == "HighLevel,Function+EarlyLoopOpt";
-  auto calleeHasControlFlow = vjp->size() > 1;
   auto isCallerVJP = isFunctionAutodiffVJP(caller);
   auto callerHasControlFlow = caller->size() > 1;
 
@@ -474,24 +565,32 @@ bool isProfitableToInlineAutodiffVJP(SILFunction *vjp, SILFunction *caller,
     return true;
   }
 
-  // If callee has control-flow it will definitely not be handled by the
-  // Autodiff closure-spec optimization. Therefore, we should consider it for
-  // inlining.
-  if (calleeHasControlFlow) {
+  if (callee->isThunk() == IsThunk_t::IsThunk) {
     return true;
   }
 
-  // If this is the EarlyPerfInline pass we want to have the Autodiff
-  // closure-spec optimization pass optimize VJPs in isolation before they are
-  // inlined into other VJPs.
-  if (isHighLevelFunctionPassPipeline) {
+  if (isTrivialVJP(callee)) {
+    return true;
+  }
+
+  if (!isCallerVJP) {
     return false;
   }
 
-  // If this is not the EarlyPerfInline pass, VJPs should only be inlined into
-  // other VJPs that do not contain any control-flow.
-  if (!isCallerVJP || (isCallerVJP && callerHasControlFlow)) {
-    return false;
+  if (isCallerVJP && callerHasControlFlow) {
+    if (hasPullbackOnlyDirectUses(applySite))
+      return true;
+
+    for (SILBasicBlock &bb : *caller) {
+      for (SILInstruction &inst : bb) {
+        if (auto *builtinInst = dyn_cast<BuiltinInst>(&inst)) {
+          if (builtinInst->getName().str() ==
+              "autoDiffProjectTopLevelSubcontext") {
+            return false;
+          }
+        }
+      }
+    }
   }
 
   return true;
@@ -541,10 +640,11 @@ bool SILPerformanceInliner::isProfitableToInline(
   bool IsGeneric = AI.hasSubstitutions();
 
   if (isFunctionAutodiffVJP(Callee) &&
-      !isProfitableToInlineAutodiffVJP(Callee, AI.getFunction(), WhatToInline,
-                                       this->pm->getStageName())) {
+      !isProfitableToInlineAutodiffVJP(AI, this->pm->getStageName())) {
     return false;
   }
+
+  //Callee->isThunk()
 
   // Start with a base benefit.
   int BaseBenefit = isa<BeginApplyInst>(AI) ? RemovedCoroutineCallBenefit
