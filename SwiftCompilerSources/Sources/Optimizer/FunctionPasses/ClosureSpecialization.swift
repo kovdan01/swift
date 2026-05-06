@@ -172,15 +172,20 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 
   repeat {
     var changed = false
-    for inst in function.instructions {
-      if let partialApply = inst as? PartialApplyInst,
-         partialApply.isPullbackInResultOfAutodiffVJP
-      {
-        if trySpecialize(apply: partialApply, context) {
-          changed = true
-        }
-      }
+
+    guard let returnInst = function.returnInstruction,
+      let tupleInst = returnInst.returnedValue.definingInstruction as? TupleInst,
+      let lastTupleOp = tupleInst.operands.last,
+      let partialApplyInst = lastTupleOp.value.definingInstruction as? PartialApplyInst,
+      partialApplyInst.uses.singleUse?.instruction == tupleInst
+    else {
+      break
     }
+
+    if trySpecialize(apply: partialApplyInst, context) {
+      changed = true
+    }
+
     if context.needFixStackNesting {
       context.fixStackNesting(in: function)
     }
@@ -769,43 +774,6 @@ private func numberOfIsolatedParameters(_ params: [ParameterInfo]) -> Int {
 }
 
 private extension PartialApplyInst {
-  /// True, if the closure obtained from this partial_apply is the
-  /// pullback returned from an autodiff VJP
-  var isPullbackInResultOfAutodiffVJP: Bool {
-    assert(self.parentFunction.isAutodiffVJP)
-
-    if let use = self.uses.singleUse,
-      let tupleInst = use.instruction as? TupleInst,
-      let returnInst = self.parentFunction.returnInstruction,
-      tupleInst == returnInst.returnedValue
-    {
-      return true
-    }
-
-    log("IS PULLBACK? PAI: \(self)")
-    log("IS PULLBACK? VJP: \(self.parentFunction)")
-    for paiUse in self.uses {
-      log("IS PULLBACK? PAI USE: \(paiUse)")
-      guard let tupleInst = paiUse.instruction as? TupleInst else {
-        return false
-      }
-      log("IS PULLBACK? TUPLE: \(tupleInst)")
-      for tupleUse in tupleInst.uses {
-        log("IS PULLBACK? TUPLE USE: \(tupleUse)")
-        guard let ei = tupleUse.instruction as? EnumInst else {
-          return false
-        } 
-        log("IS PULLBACK? ENUM: \(ei)")
-        if !ei.type.isBranchTracingEnum(in: self.parentFunction) {
-          return false
-        }
-        log("IS PULLBACK? IS BTE: \(ei)")
-      }
-    }
-
-    return true
-  }
-
   var isPartialApplyOfThunk: Bool {
     if self.numArguments == 1,
       let fun = self.referencedFunction,
