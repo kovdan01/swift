@@ -164,6 +164,7 @@ void PartialApplyCombiner::processSingleApply(FullApplySite paiAI) {
   // First, add the arguments of ther original ApplyInst args.
   for (auto Op : paiAI.getArguments())
     argList.push_back(Op);
+  SILValue calleeOfPaiAI = paiAI.getCallee();
 
   SILBuilderWithScope builder(paiAI.getInstruction(), builderCtxt);
 
@@ -221,7 +222,7 @@ void PartialApplyCombiner::processSingleApply(FullApplySite paiAI) {
   // consumed by the apply_instruction.
   if (!pai->hasCalleeGuaranteedContext()) {
     paiAI.insertAfterApplication([&](SILBuilder &builder) {
-      builder.emitDestroyValueOperation(destroyloc, pai);
+      builder.emitDestroyValueOperation(destroyloc, calleeOfPaiAI);
     });
   }
   callbacks.deleteInst(paiAI.getInstruction());
