@@ -323,7 +323,7 @@ SwiftInt BridgedFunction::specializationLevel() const {
   return getSpecializationLevelRecursive(getFunction()->getName(), demangler);
 }
 
-bool BridgedFunction::isAutodiffVJP() const {
+bool BridgedFunction::isImplicitAutodiffVJP() const {
   enum class AutoDiffFunctionComponent : char { JVP = 'f', VJP = 'r' };
 
   Demangle::Context Ctx;
@@ -338,6 +338,13 @@ bool BridgedFunction::isAutodiffVJP() const {
       }
     }
   }
+
+  return false;
+}
+
+bool BridgedFunction::isAutodiffVJP() const {
+  if (isImplicitAutodiffVJP())
+    return true;
 
   return false;
 }
