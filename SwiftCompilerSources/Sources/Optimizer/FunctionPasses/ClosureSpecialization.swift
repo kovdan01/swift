@@ -158,29 +158,53 @@ let closureSpecialization = FunctionPass(name: "closure-specialization") {
 let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-specialization") {
   (function: Function, context: FunctionPassContext) in
 
+  log("autodiffClosureSpecialization 00 \(function.name)")
+
   guard function.hasOwnership else {
+    log("autodiffClosureSpecialization 01 \(function.name)")
     return
   }
 
-  guard !function.isDefinedExternally,
-    function.isAutodiffVJP
+  log("autodiffClosureSpecialization 02 \(function.name)")
+
+  guard !function.isDefinedExternally else {
+    log("autodiffClosureSpecialization 03 \(function.name)")
+    return
+  }
+
+  log("autodiffClosureSpecialization 04 \(function.name)")
+
+  guard function.isAutodiffVJP
   else {
+    log("autodiffClosureSpecialization 05 \(function.name)")
     return
   }
 
+  log("RUN FOR BEGIN")
+  log("\(function)")
+  log("RUN FOR END")
+  
   var remainingSpecializationRounds = 5
 
   repeat {
     var changed = false
-    for inst in function.instructions {
-      if let partialApply = inst as? PartialApplyInst,
-         partialApply.isPullbackInResultOfAutodiffVJP
-      {
-        if trySpecialize(apply: partialApply, context) {
-          changed = true
-        }
-      }
+
+    guard let returnInst = function.returnInstruction,
+      let tupleInst = returnInst.returnedValue.definingInstruction as? TupleInst,
+      let lastTupleOp = tupleInst.operands.last,
+      let partialApplyInst = lastTupleOp.value.definingInstruction as? PartialApplyInst,
+      partialApplyInst.uses.singleUse?.instruction == tupleInst
+    else {
+      log("GUARD FAILED FOR \(function.name)")
+      break
     }
+
+    log("GUARD PASSED FOR \(function.name)")
+
+    if trySpecialize(apply: partialApplyInst, context) {
+      changed = true
+    }
+
     if context.needFixStackNesting {
       context.fixStackNesting(in: function)
     }
@@ -769,43 +793,6 @@ private func numberOfIsolatedParameters(_ params: [ParameterInfo]) -> Int {
 }
 
 private extension PartialApplyInst {
-  /// True, if the closure obtained from this partial_apply is the
-  /// pullback returned from an autodiff VJP
-  var isPullbackInResultOfAutodiffVJP: Bool {
-    assert(self.parentFunction.isAutodiffVJP)
-
-    if let use = self.uses.singleUse,
-      let tupleInst = use.instruction as? TupleInst,
-      let returnInst = self.parentFunction.returnInstruction,
-      tupleInst == returnInst.returnedValue
-    {
-      return true
-    }
-
-    log("IS PULLBACK? PAI: \(self)")
-    log("IS PULLBACK? VJP: \(self.parentFunction)")
-    for paiUse in self.uses {
-      log("IS PULLBACK? PAI USE: \(paiUse)")
-      guard let tupleInst = paiUse.instruction as? TupleInst else {
-        return false
-      }
-      log("IS PULLBACK? TUPLE: \(tupleInst)")
-      for tupleUse in tupleInst.uses {
-        log("IS PULLBACK? TUPLE USE: \(tupleUse)")
-        guard let ei = tupleUse.instruction as? EnumInst else {
-          return false
-        } 
-        log("IS PULLBACK? ENUM: \(ei)")
-        if !ei.type.isBranchTracingEnum(in: self.parentFunction) {
-          return false
-        }
-        log("IS PULLBACK? IS BTE: \(ei)")
-      }
-    }
-
-    return true
-  }
-
   var isPartialApplyOfThunk: Bool {
     if self.numArguments == 1,
       let fun = self.referencedFunction,
