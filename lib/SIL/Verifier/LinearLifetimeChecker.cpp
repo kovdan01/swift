@@ -408,10 +408,6 @@ void State::checkForSameBlockUseAfterFree(Operand *consumingUse,
       llvm::errs() << "Consuming User: " << *consumingUse->getUser()
                    << "Non Consuming User: " << *nonConsumingUse->getUser()
                    << "Block: bb" << userBlock->getDebugID() << "\n\n";
-      llvm::errs() << "PARENT FN BEGIN\n";
-      userBlock->getParent()->print(llvm::errs());
-      llvm::errs() << "\nPARENT FN END\n";
-
     });
   }
 
