@@ -541,7 +541,7 @@ private struct SpecializationInfo {
 
     for rootClosure in rootClosures {
       let clonedRootClosure = cloner.getClonedValue(of: rootClosure) as! PartialApplyInst
-      cloner.context.tryOptimizeApplyOfPartialApply(closure: clonedRootClosure)
+      let _ = cloner.context.tryOptimizeApplyOfPartialApply(closure: clonedRootClosure)
     }
   }
 
