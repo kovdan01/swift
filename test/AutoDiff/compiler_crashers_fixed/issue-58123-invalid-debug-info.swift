@@ -89,11 +89,13 @@ struct TestType: TestInterface {
 	}
 
 	@differentiable(reverse)
+	@inline(never)
 	mutating func differentiableDoFlow() {
         state.property1 = 1.2
         state.property0 = 2.3
         state.needUpdate = false
 	}
+	@inline(never)
 	mutating func doInit() {
 		state.initialConditionsAreStale = false
 	}
