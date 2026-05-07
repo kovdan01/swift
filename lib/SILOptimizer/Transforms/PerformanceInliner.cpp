@@ -466,53 +466,53 @@ bool isAllocator(SILFunction *callee) {
   return false;
 }
 
-// static bool hasPullbackOnlyDirectUses(FullApplySite applySiteOfVJP) {
-//   auto *applyOfVJP = dyn_cast<ApplyInst>(applySiteOfVJP.getInstruction());
-//   if (applyOfVJP == nullptr)
-//     return false;
+static bool hasPullbackOnlyDirectUses(FullApplySite applySiteOfVJP) {
+  auto *applyOfVJP = dyn_cast<ApplyInst>(applySiteOfVJP.getInstruction());
+  if (applyOfVJP == nullptr)
+    return false;
 
-//   SILValue calleePullback = nullptr;
-//   if (applyOfVJP->getType().isTuple()) {
-//     auto numTupleElements = applyOfVJP->getType().getNumTupleElements();
-//     assert(numTupleElements > 0);
-//     for (auto user : applyOfVJP->getUsers()) {
-//       if (auto *tei = dyn_cast<TupleExtractInst>(user)) {
-//         if (tei->getFieldIndex() + 1 == numTupleElements) {
-//           calleePullback = tei;
-//           break;
-//         }
-//       } else if (auto *dti = dyn_cast<DestructureTupleInst>(user)) {
-//         calleePullback = dti->getResult(numTupleElements - 1);
-//         break;
-//       } else {
-//         return false;
-//       }
-//     }
-//   } else {
-//     calleePullback = applyOfVJP;
-//   }
-//   assert(calleePullback != nullptr);
-//   assert(calleePullback->getType().isFunction());
+  SILValue calleePullback = nullptr;
+  if (applyOfVJP->getType().isTuple()) {
+    auto numTupleElements = applyOfVJP->getType().getNumTupleElements();
+    assert(numTupleElements > 0);
+    for (auto user : applyOfVJP->getUsers()) {
+      if (auto *tei = dyn_cast<TupleExtractInst>(user)) {
+        if (tei->getFieldIndex() + 1 == numTupleElements) {
+          calleePullback = tei;
+          break;
+        }
+      } else if (auto *dti = dyn_cast<DestructureTupleInst>(user)) {
+        calleePullback = dti->getResult(numTupleElements - 1);
+        break;
+      } else {
+        return false;
+      }
+    }
+  } else {
+    calleePullback = applyOfVJP;
+  }
+  assert(calleePullback != nullptr);
+  assert(calleePullback->getType().isFunction());
 
-//   auto getSingleUser = [](SILValue val) -> SILInstruction * {
-//     auto *use = val->getSingleUse();
-//     return use ? use->getUser() : nullptr;
-//   };
+  auto getSingleUser = [](SILValue val) -> SILInstruction * {
+    auto *use = val->getSingleUse();
+    return use ? use->getUser() : nullptr;
+  };
 
-//   auto *pai = dyn_cast_or_null<PartialApplyInst>(getSingleUser(calleePullback));
-//   if (!pai)
-//     return false;
+  auto *pai = dyn_cast_or_null<PartialApplyInst>(getSingleUser(calleePullback));
+  if (!pai)
+    return false;
 
-//   auto *ti = dyn_cast_or_null<TupleInst>(getSingleUser(pai));
-//   if (!ti)
-//     return false;
+  auto *ti = dyn_cast_or_null<TupleInst>(getSingleUser(pai));
+  if (!ti)
+    return false;
 
-//   auto *ri = dyn_cast_or_null<ReturnInst>(getSingleUser(ti));
-//   if (!ri)
-//     return false;
+  auto *ri = dyn_cast_or_null<ReturnInst>(getSingleUser(ti));
+  if (!ri)
+    return false;
 
-//   return true;
-// }
+  return true;
+}
 
 static bool isTrivialVJP(SILFunction *vjp) {
   auto getSingleUser = [](SILValue val) -> SILInstruction * {
@@ -556,7 +556,7 @@ static bool isProfitableToInlineAutodiffVJP(FullApplySite applySiteOfVJP,
 
   bool isLowLevelFunctionPassPipeline = stageName == "LowLevel,Function";
   auto isCallerVJP = isFunctionAutodiffVJP(caller);
-  //auto callerHasControlFlow = caller->size() > 1;
+  auto callerHasControlFlow = caller->size() > 1;
 
   // If the pass is being run as part of the low-level function pass pipeline,
   // the autodiff closure-spec optimization is done doing its work. Therefore,
@@ -578,26 +578,29 @@ static bool isProfitableToInlineAutodiffVJP(FullApplySite applySiteOfVJP,
     return false;
   }
 
-  // // Inlining of explicit VJP to corresponding derivative thunk does not harm ADCS effectiveness. Always consider for inlining.
-  // if (caller->isThunk() == IsThunk_t::IsThunk) {
-  //   return true;
-  // }
+  // Inlining of explicit VJP to corresponding derivative thunk does not harm ADCS effectiveness. Always consider for inlining.
+  if (caller->isThunk() == IsThunk_t::IsThunk) {
+    return true;
+  }
 
-  // if (isCallerVJP && callerHasControlFlow) {
-  //   // if (hasPullbackOnlyDirectUses(applySiteOfVJP))
-  //   //   return true;
+  if (isCallerVJP && callerHasControlFlow) {
+    if (hasPullbackOnlyDirectUses(applySiteOfVJP))
+      return true;
 
-  //   for (SILBasicBlock &bb : *caller) {
-  //     for (SILInstruction &inst : bb) {
-  //       if (auto *builtinInst = dyn_cast<BuiltinInst>(&inst)) {
-  //         if (builtinInst->getName().str() ==
-  //             "autoDiffProjectTopLevelSubcontext") {
-  //           return false;
-  //         }
-  //       }
-  //     }
-  //   }
-  // }
+    // TODO: allow inlining into VJP callers with control flow when ADCS handles this properly.
+    return false;
+
+    // for (SILBasicBlock &bb : *caller) {
+    //   for (SILInstruction &inst : bb) {
+    //     if (auto *builtinInst = dyn_cast<BuiltinInst>(&inst)) {
+    //       if (builtinInst->getName().str() ==
+    //           "autoDiffProjectTopLevelSubcontext") {
+    //         return false;
+    //       }
+    //     }
+    //   }
+    // }
+  }
 
   return true;
 }
