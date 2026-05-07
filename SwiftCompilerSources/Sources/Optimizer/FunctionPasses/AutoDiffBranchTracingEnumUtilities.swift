@@ -21,15 +21,7 @@ struct ClosureInBTE : Equatable {
   let useInPayload: Operand
   let enumCase: EnumCase
 
-  var payloadTuple: TupleInst { 
-    // debugLog("AAAAAAAAAAA \(closure)\n")
-    // debugLog("BBBBBBBBBBB \(useInPayload)\n")
-    // debugLog("CCCCCCCCCCC \(useInPayload.instruction)\n")
-    if let ti = useInPayload.instruction as? TupleInst {
-      return ti
-    }
-    return useInPayload.instruction as! TupleInst
-  }
+  var payloadTuple: TupleInst { useInPayload.instruction as! TupleInst }
   var indexInPayload: Int { useInPayload.index }
 }
 
