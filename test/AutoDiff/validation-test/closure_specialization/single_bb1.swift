@@ -122,12 +122,12 @@ AutoDiffClosureSpecSingleBBTests.testWithLeakChecking("Test3") {
   }
 }
 
-func test1Explicit(_ x: Float) -> Float {
+public func test1Explicit(_ x: Float) -> Float {
   return sin(x) * cos(x)
 }
 
 @derivative(of: test1Explicit)
-func test1ExplicitDerivative(_ x: Float) -> (value: Float, pullback: (Float) -> Float) {
+public func test1ExplicitDerivative(_ x: Float) -> (value: Float, pullback: (Float) -> Float) {
   let vjpSinRes = valueWithPullback(at: x, of: sin)
   let vjpCosRes = valueWithPullback(at: x, of: cos)
   let pbSin = vjpSinRes.1
@@ -139,12 +139,21 @@ func test1ExplicitDerivative(_ x: Float) -> (value: Float, pullback: (Float) -> 
 }
 
 AutoDiffClosureSpecSingleBBTests.testWithLeakChecking("Test1Explicit") {
+  // EXPLICIT-LABEL: {{^}}// test1ExplicitDerivative(_:)
+  // EXPLICIT-NEXT:  // Isolation: unspecified
+  // EXPLICIT-NEXT:  sil @$s3out23test1ExplicitDerivativeySf5value_S2fc8pullbacktSfF : $@convention(thin) (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) {
+  // EXPLICIT:         %[[#D10:]] = function_ref @$s3out23test1ExplicitDerivativeySf5value_S2fc8pullbacktSfFADL_1tS2f_tF62$s16_Differentiation7_vjpSinySf5value_S2fc8pullbacktSfFS2fcfU_Sf0g1_h1_i4Cosyk1_lmN2U_SfTf1ncnc_n : $@convention(thin) (Float, Float, Float, Float) -> Float
+  // EXPLICIT:         %[[#D11:]] = partial_apply [callee_guaranteed] %[[#D10]](%0, %0, %0) : $@convention(thin) (Float, Float, Float, Float) -> Float
+  // EXPLICIT:         %[[#D12:]] = tuple (%[[#]], %[[#D11]])
+  // EXPLICIT:         return %[[#D12]]
+  // EXPLICIT:       } // end sil function '$s3out23test1ExplicitDerivativeySf5value_S2fc8pullbacktSfF'
+
   // EXPLICIT-LABEL: {{^}}// reverse-mode derivative of test1Explicit
-  // EXPLICIT-NEXT:  sil hidden [thunk] [heuristic_always_inline] @$s3out13test1ExplicityS2fFTJrSpSr : $@convention(thin) (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) {
-  // EXPLICIT:         %[[#A10:]] = function_ref @$s3out23test1ExplicitDerivativeySf5value_S2fc8pullbacktSfFADL_1tS2f_tF62$s16_Differentiation7_vjpSinySf5value_S2fc8pullbacktSfFS2fcfU_Sf0g1_h1_i4Cosyk1_lmN2U_SfTf1ncnc_n : $@convention(thin) (Float, Float, Float, Float) -> Float
-  // EXPLICIT:         %[[#A11:]] = partial_apply [callee_guaranteed] %[[#A10]](%0, %0, %0) : $@convention(thin) (Float, Float, Float, Float) -> Float
-  // EXPLICIT:         %[[#A12:]] = tuple (%[[#]], %[[#A11]])
-  // EXPLICIT:         return %[[#A12]]
+  // EXPLICIT-NEXT:  sil [thunk] [heuristic_always_inline] @$s3out13test1ExplicityS2fFTJrSpSr : $@convention(thin) (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) {
+  // EXPLICIT:         %[[#E10:]] = function_ref @$s3out23test1ExplicitDerivativeySf5value_S2fc8pullbacktSfFADL_1tS2f_tF62$s16_Differentiation7_vjpSinySf5value_S2fc8pullbacktSfFS2fcfU_Sf0g1_h1_i4Cosyk1_lmN2U_SfTf1ncnc_n : $@convention(thin) (Float, Float, Float, Float) -> Float
+  // EXPLICIT:         %[[#E11:]] = partial_apply [callee_guaranteed] %[[#E10]](%0, %0, %0) : $@convention(thin) (Float, Float, Float, Float) -> Float
+  // EXPLICIT:         %[[#E12:]] = tuple (%[[#]], %[[#E11]])
+  // EXPLICIT:         return %[[#E12]]
   // EXPLICIT:       } // end sil function '$s3out13test1ExplicityS2fFTJrSpSr'
 
   // EXPLICIT-NONE:  {{^}}// pullback #1 (t:) in test1ExplicitDerivative(_:)
