@@ -1033,6 +1033,8 @@ static SILFunction *createEmptyVJP(ADContext &context,
   if (original->getInlineStrategy() == AlwaysInline ||
       original->getInlineStrategy() == HeuristicAlwaysInline)
     vjp->setInlineStrategy(HeuristicAlwaysInline);
+  else if (original->getInlineStrategy() == NoInline)
+    vjp->setInlineStrategy(NoInline);
 
   LLVM_DEBUG(llvm::dbgs() << "VJP type: " << vjp->getLoweredFunctionType()
                           << "\n");
@@ -1081,6 +1083,8 @@ static SILFunction *createEmptyJVP(ADContext &context,
   if (original->getInlineStrategy() == AlwaysInline ||
       original->getInlineStrategy() == HeuristicAlwaysInline)
     jvp->setInlineStrategy(HeuristicAlwaysInline);
+  else if (original->getInlineStrategy() == NoInline)
+    jvp->setInlineStrategy(NoInline);
 
   LLVM_DEBUG(llvm::dbgs() << "JVP type: " << jvp->getLoweredFunctionType()
                           << "\n");
