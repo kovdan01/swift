@@ -992,6 +992,22 @@ private func insertLifetimeEndIfNeeded(
   }
 }
 
+private func extractTupleElements(
+  from tuple: Value, useTupleExtract: Bool, builder: Builder
+) -> [Value] {
+  var elements = [Value]()
+  if useTupleExtract {
+    for (tupleIdx, _) in tuple.type.tupleElements.enumerated() {
+      elements.append(builder.createTupleExtract(tuple: tuple, elementIndex: tupleIdx))
+    }
+  } else {
+    for result in builder.createDestructureTuple(tuple: tuple).results {
+      elements.append(result)
+    }
+  }
+  return elements
+}
+
 private func rewriteUsesOfPayloadItem(
   use: Operand, resultIdx: Int, closureInfoArray: [ClosureInBTE],
   result: Value, useTei: Bool, throwingSuccessor: BasicBlock?, context: FunctionPassContext
@@ -1049,29 +1065,13 @@ private func rewriteUsesOfPayloadItem(
     let builder = Builder(before: ai, context)
     let closureInfoOpt = findMatchingClosureInfo(in: closureInfoArray, forPayloadIndex: resultIdx)
     if closureInfoOpt != nil {
-      var teiArray = [TupleExtractInst]()
-      var dtiOfCapturedArgsTuple = DestructureTupleInst?(nil)
-      if useTei {
-        for (tupleIdx, _) in result.type.tupleElements.enumerated() {
-          teiArray.append(builder.createTupleExtract(tuple: result, elementIndex: tupleIdx))
-        }
-      } else {
-        dtiOfCapturedArgsTuple = builder.createDestructureTuple(tuple: result)
-      }
+      let extractedElements = extractTupleElements(from: result, useTupleExtract: useTei, builder: builder)
       if closureInfoOpt!.subsetThunk == nil {
         var newArgs = [Value]()
         for op in ai.argumentOperands {
           newArgs.append(op.value)
         }
-        if useTei {
-          for res in teiArray {
-            newArgs.append(res)
-          }
-        } else {
-          for res in dtiOfCapturedArgsTuple!.results {
-            newArgs.append(res)
-          }
-        }
+        newArgs.append(contentsOf: extractedElements)
         let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
         let newFri = builder.createFunctionRef(vjpFn)
         let newAi = builder.createApply(
@@ -1079,33 +1079,14 @@ private func rewriteUsesOfPayloadItem(
         ai.replace(with: newAi, context)
 
         // TODO: maybe we can set insertion point earlier
-        var resArray = [Value]()
-        if useTei {
-          resArray = teiArray
-        } else {
-          for dtiRes in dtiOfCapturedArgsTuple!.results {
-            resArray.append(dtiRes)
-          }
-        }
-        for res in resArray {
+        for res in extractedElements {
           insertLifetimeEndIfNeeded(for: res, before: newAi.parentBlock.terminator, context)
         }
       } else {
         var newClosure = SingleValueInstruction?(nil)
         let maybePai = closureInfoOpt!.closure as? PartialApplyInst
         if maybePai != nil {
-          var newArgs = [Value]()
-          var resArray = [Value]()
-          if useTei {
-            resArray = teiArray
-          } else {
-            for dtiRes in dtiOfCapturedArgsTuple!.results {
-              resArray.append(dtiRes)
-            }
-          }
-          for res in resArray {
-            newArgs.append(res)
-          }
+          let newArgs = extractedElements
           let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
           let newFri = builder.createFunctionRef(vjpFn)
           let newPai = builder.createPartialApply(
@@ -1116,7 +1097,7 @@ private func rewriteUsesOfPayloadItem(
           newClosure = newPai
 
           // TODO: maybe we can set insertion point earlier
-          for res in resArray {
+          for res in extractedElements {
             insertLifetimeEndIfNeeded(for: res, before: newPai.parentBlock.terminator, context)
           }
         } else {
