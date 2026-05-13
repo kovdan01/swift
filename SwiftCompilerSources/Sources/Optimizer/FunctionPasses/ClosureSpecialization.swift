@@ -2474,23 +2474,21 @@ private func findCorrespondingVJPPayloadTuple(
   forBB bb: BasicBlock, argIndex: Int, enumToPayload: [EnumInst: TupleInst], enumDict: SpecBTEDict
 ) -> TupleInst? {
   let predBB = bb.predecessors.first!
+  let enumType: Type
+  let caseIdx: Int
   if let brInst = predBB.terminator as? BranchInst {
     let uedi = brInst.operands[argIndex].value.definingInstruction as! UncheckedEnumDataInst
-    let enumType = uedi.`enum`.type
-    let caseIdx = uedi.caseIndex
-    for (enumInst, payload) in enumToPayload {
-      if enumDict[enumInst.type] == enumType && enumInst.caseIndex == caseIdx {
-        return payload
-      }
-    }
+    enumType = uedi.`enum`.type
+    caseIdx = uedi.caseIndex
+  } else if let sei = predBB.terminator as? SwitchEnumInst {
+    enumType = sei.enumOp.type
+    caseIdx = sei.getUniqueCase(forSuccessor: bb)!
   } else {
-    let sei = predBB.terminator as! SwitchEnumInst
-    let enumType = sei.enumOp.type
-    let caseIdx = sei.getUniqueCase(forSuccessor: bb)!
-    for (enumInst, payload) in enumToPayload {
-      if enumDict[enumInst.type] == enumType && enumInst.caseIndex == caseIdx {
-        return payload
-      }
+    return nil
+  }
+  for (enumInst, payload) in enumToPayload {
+    if enumDict[enumInst.type] == enumType && enumInst.caseIndex == caseIdx {
+      return payload
     }
   }
   return nil
