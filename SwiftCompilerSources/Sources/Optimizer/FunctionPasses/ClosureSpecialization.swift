@@ -785,21 +785,14 @@ private func multiBBHelper(
   log(msg)
 }
 
-private func rewriteApplyInstructionCFG(
-  using specializedCallee: Function, autodiffSpecializationInfo: AutoDiffSpecializationInfo,
-  enumDict: SpecBTEDict,
-  context: FunctionPassContext
+private func replaceEnumInstructionsWithSpecializedTypes(
+  in vjp: Function, enumDict: SpecBTEDict, context: FunctionPassContext
 ) {
-  let vjp = autodiffSpecializationInfo.paiOfPullback.parentFunction
-  var closureInfos = autodiffSpecializationInfo.closuresInBTE
-
   for inst in vjp.instructions {
     guard let ei = inst as? EnumInst else {
       continue
     }
-    guard
-      let newEnumType = enumDict[ei.results[0].type]
-    else {
+    guard let newEnumType = enumDict[ei.results[0].type] else {
       continue
     }
 
@@ -808,7 +801,11 @@ private func rewriteApplyInstructionCFG(
       caseIndex: ei.caseIndex, payload: ei.payload, enumType: newEnumType)
     ei.replace(with: newEI, context)
   }
+}
 
+private func specializeBTEBlockArgsInVJP(
+  vjp: Function, enumDict: SpecBTEDict, context: FunctionPassContext
+) {
   for bb in vjp.blocks {
     guard let arg = bb.getBranchTracingEnumArg(vjp: vjp) else {
       continue
@@ -821,13 +818,14 @@ private func rewriteApplyInstructionCFG(
     arg.uses.replaceAll(with: newArg, context)
     bb.eraseArgument(at: arg.index, context)
   }
-  let pai = autodiffSpecializationInfo.paiOfPullback
+}
 
+private func replacePullbackPartialApply(
+  pai: PartialApplyInst, specializedCallee: Function, context: FunctionPassContext
+) -> PartialApplyInst {
   let builderSucc = Builder(
     before: pai,
-    location: autodiffSpecializationInfo.paiOfPullback.parentBlock.instructions.last!.location, context)
-
-  // MYTODO assert that PAI is on index 1 in tuple
+    location: pai.parentBlock.instructions.last!.location, context)
 
   let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
   var newCapturedArgs = [Value]()
@@ -840,7 +838,12 @@ private func rewriteApplyInstructionCFG(
     hasUnknownResultIsolation: pai.hasUnknownResultIsolation, isOnStack: pai.isOnStack, isNested: pai.isNested)
 
   pai.replace(with: newPai, context)
+  return newPai
+}
 
+private func rewritePayloadTuplesInVJP(
+  vjp: Function, closureInfos: inout [ClosureInBTE], context: FunctionPassContext
+) {
   let enumToPayload = findEnumsAndPayloadsInVjp(vjp: vjp)
   let payloads = Set<TupleInst>(enumToPayload.values)
 
@@ -921,23 +924,42 @@ private func rewriteApplyInstructionCFG(
       elements: newPayloadValues, tupleWithLabels: ti.type)
     ti.replace(with: newPayload, context)
   }
+}
 
+private func cleanupDeadOptionalEnums(in vjp: Function, context: FunctionPassContext) {
   var wasUpdated = false
   repeat {
     wasUpdated = false
     for inst in vjp.instructions {
-      guard let svi = inst as? SingleValueInstruction else {
+      guard let enumOpt = inst as? EnumInst else {
         continue
       }
-      let closureOpt = svi.asSupportedClosure
-      let enumOpt = svi as? EnumInst
-      if enumOpt != nil && enumOpt!.type.isOptional && enumOpt!.uses.count == 0 {
-        context.erase(instruction: enumOpt!)
+      if enumOpt.type.isOptional && enumOpt.uses.count == 0 {
+        context.erase(instruction: enumOpt)
         wasUpdated = true
-        continue
       }
     }
   } while wasUpdated
+}
+
+private func rewriteApplyInstructionCFG(
+  using specializedCallee: Function, autodiffSpecializationInfo: AutoDiffSpecializationInfo,
+  enumDict: SpecBTEDict,
+  context: FunctionPassContext
+) {
+  let vjp = autodiffSpecializationInfo.paiOfPullback.parentFunction
+  var closureInfos = autodiffSpecializationInfo.closuresInBTE
+
+  replaceEnumInstructionsWithSpecializedTypes(in: vjp, enumDict: enumDict, context: context)
+
+  specializeBTEBlockArgsInVJP(vjp: vjp, enumDict: enumDict, context: context)
+
+  let _ = replacePullbackPartialApply(
+    pai: autodiffSpecializationInfo.paiOfPullback, specializedCallee: specializedCallee, context: context)
+
+  rewritePayloadTuplesInVJP(vjp: vjp, closureInfos: &closureInfos, context: context)
+
+  cleanupDeadOptionalEnums(in: vjp, context: context)
 }
 
 private func findEnumsAndPayloadsInVjp(vjp: Function) -> [EnumInst: TupleInst] {
