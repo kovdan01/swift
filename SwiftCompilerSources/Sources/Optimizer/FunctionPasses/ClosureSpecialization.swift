@@ -546,6 +546,136 @@ func getPayloadValues(payload: Argument, vjp: Function) -> PayloadValues {
   return PayloadValues.TupleExtract(results)
 }
 
+private func validateUncheckedEnumDataPayloadUse(uedi: UncheckedEnumDataInst, prefixFail: String) -> Bool {
+  if uedi.uses.count > 1 {
+    log(
+      prefixFail
+        + "unchecked_enum_data instr has \(uedi.uses.count) uses, but no more than 1 is allowed"
+    )
+    log("  uedi: \(uedi)")
+    log("  uedi uses begin")
+    for uediUse in uedi.uses {
+      log("  uediUse.instruction: \(uediUse.instruction)")
+    }
+    log("  uedi uses end")
+    return false
+  }
+  if let singleUse = uedi.uses.singleUse {
+    if singleUse.instruction as? BranchInst == nil {
+      log(
+        prefixFail + "unchecked_enum_data instr has unexpected single use")
+      log("  uedi: \(uedi)")
+      log("  uedi use: \(singleUse.instruction)")
+      for (idx, uediUseResult) in singleUse.instruction.results.enumerated() {
+        log("  uedi use result \(idx) uses begin")
+        for useOfResult in uediUseResult.uses {
+          log("    uedi use use: \(useOfResult.instruction)")
+        }
+        log("  uedi use result \(idx) uses end")
+      }
+      return false
+    }
+  }
+  return true
+}
+
+private func validateConvertFunctionPayloadUse(cfi: ConvertFunctionInst, prefixFail: String) -> Bool {
+  if cfi.uses.count != 2 {
+    log(
+      prefixFail
+        + "expected exactly 2 uses of convert_function use of payload tuple element, found \(cfi.uses.count)"
+    )
+    for (idx, cfiUse) in cfi.uses.enumerated() {
+      log("use \(idx): \(cfiUse)")
+    }
+    return false
+  }
+  var bbiUse = Operand?(nil)
+  var dviUse = Operand?(nil)
+  var sriUse = Operand?(nil)
+  for cfiUse in cfi.uses {
+    switch cfiUse.instruction {
+    case _ as BeginBorrowInst:
+      if bbiUse != nil {
+        log(
+          prefixFail
+            + "multiple begin_borrow uses of convert_function result found, but exactly 1 expected"
+        )
+        return false
+      }
+      bbiUse = cfiUse
+    case _ as DestroyValueInst:
+      if dviUse != nil {
+        log(
+          prefixFail
+            + "multiple destroy_value uses of convert_function result found, but exactly 1 expected"
+        )
+        return false
+      }
+      dviUse = cfiUse
+    case _ as StrongReleaseInst:
+      if sriUse != nil {
+        log(
+          prefixFail
+            + "multiple strong_release uses of convert_function result found, but exactly 1 expected"
+        )
+        return false
+      }
+      sriUse = cfiUse
+    default:
+      log(
+        prefixFail + "unexpected use of convert_function result found: \(cfiUse)")
+      return false
+    }
+  }
+  assert((dviUse != nil) != (sriUse != nil))
+  assert(bbiUse != nil)
+  return true
+}
+
+private func validateBeginBorrowPayloadUse(bbi: BeginBorrowInst, prefixFail: String) -> Bool {
+  if bbi.uses.count != 2 {
+    log(
+      prefixFail
+        + "expected exactly 2 uses of begin_borrow use of payload tuple element, found \(bbi.uses.count)"
+    )
+    for (idx, bbiUse) in bbi.uses.enumerated() {
+      log("use \(idx): \(bbiUse)")
+    }
+    return false
+  }
+  var aiUse = Operand?(nil)
+  var ebUse = Operand?(nil)
+  for bbiUse in bbi.uses {
+    switch bbiUse.instruction {
+    case _ as EndBorrowInst:
+      if ebUse != nil {
+        log(
+          prefixFail
+            + "multiple end_borrow uses of begin_borrow result found, but exactly 1 expected"
+        )
+        return false
+      }
+      ebUse = bbiUse
+    case _ as ApplyInst:
+      if aiUse != nil {
+        log(
+          prefixFail
+            + "multiple apply uses of begin_borrow result found, but exactly 1 expected")
+        return false
+      }
+      aiUse = bbiUse
+    default:
+      log(
+        prefixFail + "unexpected use of begin_borrow result found: \(bbiUse)")
+      return false
+    }
+  }
+  assert(ebUse != nil)
+  assert(aiUse != nil)
+  return true
+}
+
 func checkIfCanRunForPayloadValues(
   results: [Value], prefixFail: String, pb: Function, pbBB: BasicBlock
 ) -> Bool {
@@ -559,130 +689,17 @@ func checkIfCanRunForPayloadValues(
       case _ as StrongReleaseInst:
         ()
       case let uedi as UncheckedEnumDataInst:
-        if uedi.uses.count > 1 {
-          log(
-            prefixFail
-              + "unchecked_enum_data instr has \(uedi.uses.count) uses, but no more than 1 is allowed"
-          )
-          log("  uedi: \(uedi)")
-          log("  uedi uses begin")
-          for uediUse in uedi.uses {
-            log("  uediUse.instruction: \(uediUse.instruction)")
-          }
-          log("  uedi uses end")
+        if !validateUncheckedEnumDataPayloadUse(uedi: uedi, prefixFail: prefixFail) {
           return false
-        }
-        if uedi.uses.singleUse != nil {
-          if let _ = uedi.uses.singleUse!.instruction as? BranchInst {
-            // All OK
-          } else {
-            log(
-              prefixFail + "unchecked_enum_data instr has unexpected single use")
-            log("  uedi: \(uedi)")
-            log("  uedi use: \(uedi.uses.singleUse!.instruction)")
-            for (idx, uediUseResult) in uedi.uses.singleUse!.instruction.results.enumerated() {
-              log("  uedi use result \(idx) uses begin")
-              for useOfResult in uediUseResult.uses {
-                log("    uedi use use: \(useOfResult.instruction)")
-              }
-              log("  uedi use result \(idx) uses end")
-            }
-            return false
-          }
         }
       case let cfi as ConvertFunctionInst:
-        if cfi.uses.count != 2 {
-          log(
-            prefixFail
-              + "expected exactly 2 uses of convert_function use of payload tuple element, found \(cfi.uses.count)"
-          )
-          for (idx, cfiUse) in cfi.uses.enumerated() {
-            log("use \(idx): \(cfiUse)")
-          }
+        if !validateConvertFunctionPayloadUse(cfi: cfi, prefixFail: prefixFail) {
           return false
         }
-        var bbiUse = Operand?(nil)
-        var dviUse = Operand?(nil)
-        var sriUse = Operand?(nil)
-        for cfiUse in cfi.uses {
-          switch cfiUse.instruction {
-          case _ as BeginBorrowInst:
-            if bbiUse != nil {
-              log(
-                prefixFail
-                  + "multiple begin_borrow uses of convert_function result found, but exactly 1 expected"
-              )
-              return false
-            }
-            bbiUse = cfiUse
-          case _ as DestroyValueInst:
-            if dviUse != nil {
-              log(
-                prefixFail
-                  + "multiple destroy_value uses of convert_function result found, but exactly 1 expected"
-              )
-              return false
-            }
-            dviUse = cfiUse
-          case _ as StrongReleaseInst:
-            if sriUse != nil {
-              log(
-                prefixFail
-                  + "multiple strong_release uses of convert_function result found, but exactly 1 expected"
-              )
-              return false
-            }
-            sriUse = cfiUse
-          default:
-            log(
-              prefixFail + "unexpected use of convert_function result found: \(cfiUse)")
-            return false
-          }
-        }
-        assert((dviUse != nil) != (sriUse != nil))
-        assert(bbiUse != nil)
-
       case let bbi as BeginBorrowInst:
-        if bbi.uses.count != 2 {
-          log(
-            prefixFail
-              + "expected exactly 2 uses of begin_borrow use of payload tuple element, found \(bbi.uses.count)"
-          )
-          for (idx, bbiUse) in bbi.uses.enumerated() {
-            log("use \(idx): \(bbiUse)")
-          }
+        if !validateBeginBorrowPayloadUse(bbi: bbi, prefixFail: prefixFail) {
           return false
         }
-        var aiUse = Operand?(nil)
-        var ebUse = Operand?(nil)
-        for bbiUse in bbi.uses {
-          switch bbiUse.instruction {
-          case _ as EndBorrowInst:
-            if ebUse != nil {
-              log(
-                prefixFail
-                  + "multiple end_borrow uses of begin_borrow result found, but exactly 1 expected"
-              )
-              return false
-            }
-            ebUse = bbiUse
-          case _ as ApplyInst:
-            if aiUse != nil {
-              log(
-                prefixFail
-                  + "multiple apply uses of begin_borrow result found, but exactly 1 expected")
-              return false
-            }
-            aiUse = bbiUse
-          default:
-            log(
-              prefixFail + "unexpected use of begin_borrow result found: \(bbiUse)")
-            return false
-          }
-        }
-        assert(ebUse != nil)
-        assert(aiUse != nil)
-
       case _ as SwitchEnumInst:
         ()
       case _ as TupleExtractInst:
