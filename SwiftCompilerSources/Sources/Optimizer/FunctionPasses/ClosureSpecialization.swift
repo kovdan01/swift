@@ -169,14 +169,13 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
   }
 
   let isSingleBB = function.blocks.singleElement != nil
-  isMultiBBWithoutBranchTracingEnumPullbackArg = false
-  var canRunMultiBB = false
+  var multiBBEligibility = MultiBBEligibility.ineligible
 
   if !isSingleBB {
     log(
       "\n\nTrying to run AutoDiff Closure Specialization pass on " + function.name.string)
-    canRunMultiBB = checkIfCanRun(vjp: function, context: context)
-    if canRunMultiBB {
+    multiBBEligibility = checkIfCanRun(vjp: function, context: context)
+    if multiBBEligibility != .ineligible {
       log(
         "The VJP " + function.name.string
           + " has passed the preliminary check. Proceeding to running the pass")
@@ -215,7 +214,7 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     remainingSpecializationRounds -= 1
   } while remainingSpecializationRounds > 0
 
-  if !isSingleBB && canRunMultiBB && !isMultiBBWithoutBranchTracingEnumPullbackArg {
+  if !isSingleBB && multiBBEligibility == .fullMultiBB {
     remainingSpecializationRounds = 5
     repeat {
       log("Remaining specialization rounds: " + String(remainingSpecializationRounds))
@@ -245,7 +244,11 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
   }
 }
 
-private var isMultiBBWithoutBranchTracingEnumPullbackArg: Bool = false
+private enum MultiBBEligibility {
+  case fullMultiBB
+  case handleAsSingleBB   // multi-BB without BTE pullback arg
+  case ineligible
+}
 
 private func validatePullbackBTEUsage(pb: Function, bteArg: Argument, vjp: Function, prefixFail: String) -> Bool {
   if pb.blocks.singleElement != nil {
@@ -371,14 +374,14 @@ private func validatePullbackPayloadBlocks(pb: Function, vjp: Function, prefixFa
   return true
 }
 
-private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
+private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> MultiBBEligibility {
   assert(vjp.blocks.singleElement == nil)
 
   let prefixFail = "Cannot run AutoDiff Closure Specialization on " + vjp.name.string + ": "
   guard let paiOfPb = getPartialApplyOfPullbackInExitVJPBB(vjp: vjp) else {
     log(
       prefixFail + "partial_apply of pullback not found in exit basic block of VJP")
-    return false
+    return .ineligible
   }
   var branchTracingEnumArgCounter = 0
   for arg in paiOfPb.arguments {
@@ -397,20 +400,19 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
           prefixFail
             + "VJP seems to contain a loop (builtin autoDiffProjectTopLevelSubcontext detected), this is not supported"
         )
-        return false
+        return .ineligible
       }
     }
     if branchTracingEnumArgCounter == 0 {
-      isMultiBBWithoutBranchTracingEnumPullbackArg = true
       log("This is multi-BB case which would be handled as single-BB case")
-      return true
+      return .handleAsSingleBB
     }
     log(
       prefixFail + "partial_apply of pullback in exit basic block of VJP has "
         + String(branchTracingEnumArgCounter)
         + " branch tracing enum arguments, but exactly 1 is expected")
     dumpVJPAndPB(vjp: vjp, pb: pb)
-    return false
+    return .ineligible
   }
 
   guard let pb = paiOfPb.referencedFunction else {
@@ -418,37 +420,37 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
       prefixFail
         + "cannot obtain pullback function reference from the partial_apply of pullback in exit basic block of VJP"
     )
-    return false
+    return .ineligible
   }
   guard let bteArgOfPb = pb.entryBlock.getBranchTracingEnumArg(vjp: vjp) else {
     log(
       prefixFail + "cannot get branch tracing enum argument of the pullback function "
         + pb.name.string)
-    return false
+    return .ineligible
   }
 
   guard validatePullbackBTEUsage(pb: pb, bteArg: bteArgOfPb, vjp: vjp, prefixFail: prefixFail) else {
-    return false
+    return .ineligible
   }
 
   guard ensureEnumPayloadsAreTupleInst(vjp: vjp) else {
     log(prefixFail + "branch tracing enum payload is not defined by a TupleInst")
-    return false
+    return .ineligible
   }
 
   guard validatePullbackSwitchEnumTerminators(pb: pb, prefixFail: prefixFail) else {
-    return false
+    return .ineligible
   }
 
   guard validateVJPBlockBTEArgs(vjp: vjp, prefixFail: prefixFail) else {
-    return false
+    return .ineligible
   }
 
   guard validatePullbackPayloadBlocks(pb: pb, vjp: vjp, prefixFail: prefixFail) else {
-    return false
+    return .ineligible
   }
 
-  return true
+  return .fullMultiBB
 }
 
 extension UseList {
