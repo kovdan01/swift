@@ -1008,160 +1008,207 @@ private func extractTupleElements(
   return elements
 }
 
+private func rewriteConvertFunctionUse(
+  cfi: ConvertFunctionInst, resultIdx: Int, closureInfoArray: [ClosureInBTE],
+  result: Value, useTei: Bool, throwingSuccessor: BasicBlock?, context: FunctionPassContext
+) {
+  if findMatchingClosureInfo(in: closureInfoArray, forPayloadIndex: resultIdx) != nil {
+    assert(cfi.uses.count == 2)
+    let bbiUse = cfi.uses.filter { $0.instruction as? BeginBorrowInst   != nil }.singleElement!
+    let dviUse = cfi.uses.filter { $0.instruction as? DestroyValueInst  != nil }.getExactlyOneOrNil()
+    let sriUse = cfi.uses.filter { $0.instruction as? StrongReleaseInst != nil }.getExactlyOneOrNil()
+    assert((dviUse != nil) != (sriUse != nil))
+    if dviUse != nil {
+      context.erase(instruction: dviUse!.instruction)
+    } else {
+      context.erase(instruction: sriUse!.instruction)
+    }
+    rewriteUsesOfPayloadItem(
+      use: bbiUse, resultIdx: resultIdx, closureInfoArray: closureInfoArray, result: result,
+      useTei: useTei, throwingSuccessor: throwingSuccessor, context: context)
+    context.erase(instruction: cfi)
+  } else {
+    let builder = Builder(before: cfi, context)
+    let newCFI = builder.createConvertFunction(
+      originalFunction: result,
+      resultType: cfi.type,
+      withoutActuallyEscaping: cfi.withoutActuallyEscaping)
+    cfi.replace(with: newCFI, context)
+  }
+}
+
+private func rewriteBeginBorrowUse(
+  bbi: BeginBorrowInst, resultIdx: Int, closureInfoArray: [ClosureInBTE],
+  result: Value, useTei: Bool, throwingSuccessor: BasicBlock?, context: FunctionPassContext
+) {
+  if findMatchingClosureInfo(in: closureInfoArray, forPayloadIndex: resultIdx) != nil {
+    assert(bbi.uses.count == 2)
+    let aiUse = bbi.uses.filter { $0.instruction as? ApplyInst     != nil }.singleElement!
+    let ebUse = bbi.uses.filter { $0.instruction as? EndBorrowInst != nil }.singleElement!
+    context.erase(instruction: ebUse.instruction)
+    rewriteUsesOfPayloadItem(
+      use: aiUse, resultIdx: resultIdx, closureInfoArray: closureInfoArray, result: result,
+      useTei: useTei, throwingSuccessor: throwingSuccessor, context: context)
+    context.erase(instruction: bbi)
+  } else {
+    let builder = Builder(before: bbi, context)
+    let newBBI = builder.createBeginBorrow(
+      of: result,
+      isLexical: bbi.isLexical,
+      hasPointerEscape: bbi.hasPointerEscape,
+      isFromVarDecl: bbi.isFromVarDecl)
+    bbi.replace(with: newBBI, context)
+  }
+}
+
+private func rewriteApplyDirectClosure(
+  ai: ApplyInst, closureInfo: ClosureInBTE, extractedElements: [Value],
+  builder: Builder, context: FunctionPassContext
+) {
+  var newArgs = [Value]()
+  for op in ai.argumentOperands {
+    newArgs.append(op.value)
+  }
+  newArgs.append(contentsOf: extractedElements)
+  let vjpFn = closureInfo.closure.asSupportedClosureFn!
+  let newFri = builder.createFunctionRef(vjpFn)
+  let newAi = builder.createApply(
+    function: newFri, ai.substitutionMap, arguments: newArgs)
+  ai.replace(with: newAi, context)
+
+  // TODO: maybe we can set insertion point earlier
+  for res in extractedElements {
+    insertLifetimeEndIfNeeded(for: res, before: newAi.parentBlock.terminator, context)
+  }
+}
+
+private func rewriteApplyViaSubsetThunk(
+  ai: ApplyInst, closureInfo: ClosureInBTE, extractedElements: [Value],
+  builder: Builder, context: FunctionPassContext
+) {
+  var newClosure = SingleValueInstruction?(nil)
+  if let pai = closureInfo.closure as? PartialApplyInst {
+    let vjpFn = closureInfo.closure.asSupportedClosureFn!
+    let newFri = builder.createFunctionRef(vjpFn)
+    let newPai = builder.createPartialApply(
+      function: newFri, substitutionMap: pai.substitutionMap,
+      capturedArguments: extractedElements, calleeConvention: pai.calleeConvention,
+      hasUnknownResultIsolation: pai.hasUnknownResultIsolation,
+      isOnStack: pai.isOnStack, isNested: pai.isNested)
+    newClosure = newPai
+
+    // TODO: maybe we can set insertion point earlier
+    for res in extractedElements {
+      insertLifetimeEndIfNeeded(for: res, before: newPai.parentBlock.terminator, context)
+    }
+  } else {
+    let tttfi = closureInfo.closure as! ThinToThickFunctionInst
+    let vjpFn = closureInfo.closure.asSupportedClosureFn!
+    let newFri = builder.createFunctionRef(vjpFn)
+    let newTttfi = builder.createThinToThickFunction(
+      thinFunction: newFri, resultType: tttfi.type)
+    newClosure = newTttfi
+  }
+  assert(newClosure != nil)
+  let subsetThunkFn = closureInfo.subsetThunk!.referencedFunction!
+  let newFri = builder.createFunctionRef(subsetThunkFn)
+
+  var newArgs = [Value]()
+  for op in ai.argumentOperands {
+    newArgs.append(op.value)
+  }
+  newArgs.append(newClosure!)
+  let newAi = builder.createApply(
+    function: newFri, ai.substitutionMap, arguments: newArgs)
+  ai.replace(with: newAi, context)
+  assert(newClosure!.uses.singleUse != nil)
+  insertLifetimeEndIfNeeded(for: newClosure!, before: newAi.parentBlock.terminator, context)
+}
+
+private func rewriteApplyUse(
+  ai: ApplyInst, resultIdx: Int, closureInfoArray: [ClosureInBTE],
+  result: Value, useTei: Bool, context: FunctionPassContext
+) {
+  let builder = Builder(before: ai, context)
+  if let closureInfo = findMatchingClosureInfo(in: closureInfoArray, forPayloadIndex: resultIdx) {
+    let extractedElements = extractTupleElements(from: result, useTupleExtract: useTei, builder: builder)
+    if closureInfo.subsetThunk == nil {
+      rewriteApplyDirectClosure(
+        ai: ai, closureInfo: closureInfo, extractedElements: extractedElements,
+        builder: builder, context: context)
+    } else {
+      rewriteApplyViaSubsetThunk(
+        ai: ai, closureInfo: closureInfo, extractedElements: extractedElements,
+        builder: builder, context: context)
+    }
+  } else {
+    var newArgs = [Value]()
+    for op in ai.argumentOperands {
+      newArgs.append(op.value)
+    }
+    let newAi = builder.createApply(
+      function: result, ai.substitutionMap, arguments: newArgs)
+    ai.replace(with: newAi, context)
+  }
+}
+
+private func rewriteDestroyValueUse(
+  dvi: DestroyValueInst, resultIdx: Int, closureInfoArray: [ClosureInBTE],
+  result: Value, context: FunctionPassContext
+) {
+  let isClosurePayload = closureInfoArray.contains { $0.indexInPayload == resultIdx }
+  if !isClosurePayload {
+    let builder = Builder(before: dvi, context)
+    if dvi.parentFunction.hasOwnership {
+      builder.createDestroyValue(operand: result)
+    } else {
+      builder.createReleaseValue(operand: result)
+    }
+  }
+  context.erase(instruction: dvi)
+}
+
+private func rewriteStrongReleaseUse(
+  sri: StrongReleaseInst, resultIdx: Int, closureInfoArray: [ClosureInBTE],
+  result: Value, context: FunctionPassContext
+) {
+  let isClosurePayload = closureInfoArray.contains { $0.indexInPayload == resultIdx }
+  if !isClosurePayload {
+    let builder = Builder(before: sri, context)
+    builder.createStrongRelease(operand: result)
+  }
+  context.erase(instruction: sri)
+}
+
 private func rewriteUsesOfPayloadItem(
   use: Operand, resultIdx: Int, closureInfoArray: [ClosureInBTE],
   result: Value, useTei: Bool, throwingSuccessor: BasicBlock?, context: FunctionPassContext
 ) {
-  let parentFunction = use.instruction.parentFunction
   switch use.instruction {
   case let cfi as ConvertFunctionInst:
-    let builder = Builder(before: cfi, context)
-    let closureInfoOpt = findMatchingClosureInfo(in: closureInfoArray, forPayloadIndex: resultIdx)
-    if closureInfoOpt != nil {
-      assert(cfi.uses.count == 2)
-      let bbiUse = cfi.uses.filter { $0.instruction as? BeginBorrowInst   != nil }.singleElement!
-      let dviUse = cfi.uses.filter { $0.instruction as? DestroyValueInst  != nil }.getExactlyOneOrNil()
-      let sriUse = cfi.uses.filter { $0.instruction as? StrongReleaseInst != nil }.getExactlyOneOrNil()
-      assert((dviUse != nil) != (sriUse != nil))
-      if dviUse != nil {
-        context.erase(instruction: dviUse!.instruction)
-      } else {
-        context.erase(instruction: sriUse!.instruction)
-      }
-      rewriteUsesOfPayloadItem(
-        use: bbiUse, resultIdx: resultIdx, closureInfoArray: closureInfoArray, result: result,
-        useTei: useTei, throwingSuccessor: throwingSuccessor, context: context)
-      context.erase(instruction: cfi)
-    } else {
-      let newCFI = builder.createConvertFunction(
-        originalFunction: result,
-        resultType: cfi.type,
-        withoutActuallyEscaping: cfi.withoutActuallyEscaping)
-      cfi.replace(with: newCFI, context)
-    }
+    rewriteConvertFunctionUse(
+      cfi: cfi, resultIdx: resultIdx, closureInfoArray: closureInfoArray,
+      result: result, useTei: useTei, throwingSuccessor: throwingSuccessor, context: context)
 
   case let bbi as BeginBorrowInst:
-    let builder = Builder(before: bbi, context)
-    let closureInfoOpt = findMatchingClosureInfo(in: closureInfoArray, forPayloadIndex: resultIdx)
-    if closureInfoOpt != nil {
-      assert(bbi.uses.count == 2)
-      let aiUse = bbi.uses.filter { $0.instruction as? ApplyInst     != nil }.singleElement!
-      let ebUse = bbi.uses.filter { $0.instruction as? EndBorrowInst != nil }.singleElement!
-      context.erase(instruction: ebUse.instruction)
-      rewriteUsesOfPayloadItem(
-        use: aiUse, resultIdx: resultIdx, closureInfoArray: closureInfoArray, result: result,
-        useTei: useTei, throwingSuccessor: throwingSuccessor, context: context)
-      context.erase(instruction: bbi)
-    } else {
-      let newBBI = builder.createBeginBorrow(
-        of: result,
-        isLexical: bbi.isLexical,
-        hasPointerEscape: bbi.hasPointerEscape,
-        isFromVarDecl: bbi.isFromVarDecl)
-      bbi.replace(with: newBBI, context)
-    }
+    rewriteBeginBorrowUse(
+      bbi: bbi, resultIdx: resultIdx, closureInfoArray: closureInfoArray,
+      result: result, useTei: useTei, throwingSuccessor: throwingSuccessor, context: context)
 
   case let ai as ApplyInst:
-    let builder = Builder(before: ai, context)
-    let closureInfoOpt = findMatchingClosureInfo(in: closureInfoArray, forPayloadIndex: resultIdx)
-    if closureInfoOpt != nil {
-      let extractedElements = extractTupleElements(from: result, useTupleExtract: useTei, builder: builder)
-      if closureInfoOpt!.subsetThunk == nil {
-        var newArgs = [Value]()
-        for op in ai.argumentOperands {
-          newArgs.append(op.value)
-        }
-        newArgs.append(contentsOf: extractedElements)
-        let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
-        let newFri = builder.createFunctionRef(vjpFn)
-        let newAi = builder.createApply(
-          function: newFri, ai.substitutionMap, arguments: newArgs)
-        ai.replace(with: newAi, context)
-
-        // TODO: maybe we can set insertion point earlier
-        for res in extractedElements {
-          insertLifetimeEndIfNeeded(for: res, before: newAi.parentBlock.terminator, context)
-        }
-      } else {
-        var newClosure = SingleValueInstruction?(nil)
-        let maybePai = closureInfoOpt!.closure as? PartialApplyInst
-        if maybePai != nil {
-          let newArgs = extractedElements
-          let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
-          let newFri = builder.createFunctionRef(vjpFn)
-          let newPai = builder.createPartialApply(
-            function: newFri, substitutionMap: maybePai!.substitutionMap,
-            capturedArguments: newArgs, calleeConvention: maybePai!.calleeConvention,
-            hasUnknownResultIsolation: maybePai!.hasUnknownResultIsolation,
-            isOnStack: maybePai!.isOnStack, isNested: maybePai!.isNested)
-          newClosure = newPai
-
-          // TODO: maybe we can set insertion point earlier
-          for res in extractedElements {
-            insertLifetimeEndIfNeeded(for: res, before: newPai.parentBlock.terminator, context)
-          }
-        } else {
-          let tttfi = closureInfoOpt!.closure as! ThinToThickFunctionInst
-          let vjpFn = closureInfoOpt!.closure.asSupportedClosureFn!
-          let newFri = builder.createFunctionRef(vjpFn)
-          let newTttfi = builder.createThinToThickFunction(
-            thinFunction: newFri, resultType: tttfi.type)
-          newClosure = newTttfi
-        }
-        assert(newClosure != nil)
-        let subsetThunkFn = closureInfoOpt!.subsetThunk!.referencedFunction!
-        let newFri = builder.createFunctionRef(subsetThunkFn)
-
-        var newArgs = [Value]()
-        for op in ai.argumentOperands {
-          newArgs.append(op.value)
-        }
-        newArgs.append(newClosure!)
-        let newAi = builder.createApply(
-          function: newFri, ai.substitutionMap, arguments: newArgs)
-        ai.replace(with: newAi, context)
-        assert(newClosure!.uses.singleUse != nil)
-        insertLifetimeEndIfNeeded(for: newClosure!, before: newAi.parentBlock.terminator, context)
-      }
-    } else {
-      var newArgs = [Value]()
-      for op in ai.argumentOperands {
-        newArgs.append(op.value)
-      }
-      let newAi = builder.createApply(
-        function: result, ai.substitutionMap, arguments: newArgs)
-      ai.replace(with: newAi, context)
-    }
+    rewriteApplyUse(
+      ai: ai, resultIdx: resultIdx, closureInfoArray: closureInfoArray,
+      result: result, useTei: useTei, context: context)
 
   case let dvi as DestroyValueInst:
-    var needDestroyValue = true
-    for closureInfo in closureInfoArray {
-      if closureInfo.indexInPayload == resultIdx {
-        needDestroyValue = false
-      }
-    }
-    if needDestroyValue {
-      let builder = Builder(before: dvi, context)
-      if dvi.parentFunction.hasOwnership {
-        builder.createDestroyValue(operand: result)
-      } else {
-        builder.createReleaseValue(operand: result)
-      }
-    }
-    context.erase(instruction: dvi)
+    rewriteDestroyValueUse(
+      dvi: dvi, resultIdx: resultIdx, closureInfoArray: closureInfoArray,
+      result: result, context: context)
 
   case let sri as StrongReleaseInst:
-    var needDestroyValue = true
-    for closureInfo in closureInfoArray {
-      if closureInfo.indexInPayload == resultIdx {
-        needDestroyValue = false
-      }
-    }
-    if needDestroyValue {
-      let builder = Builder(before: sri, context)
-      builder.createStrongRelease(operand: result)
-    }
-    context.erase(instruction: sri)
+    rewriteStrongReleaseUse(
+      sri: sri, resultIdx: resultIdx, closureInfoArray: closureInfoArray,
+      result: result, context: context)
 
   case let tei as TupleExtractInst:
     let builder = Builder(before: tei, context)
