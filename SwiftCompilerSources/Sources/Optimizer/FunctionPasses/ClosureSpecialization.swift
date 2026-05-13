@@ -247,6 +247,130 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 
 private var isMultiBBWithoutBranchTracingEnumPullbackArg: Bool = false
 
+private func validatePullbackBTEUsage(pb: Function, bteArg: Argument, vjp: Function, prefixFail: String) -> Bool {
+  if pb.blocks.singleElement != nil {
+    guard let _ = pb.entryBlock.terminator as? ReturnInst else {
+      log(
+        prefixFail + "unexpected terminator instruction in the entry block of the pullback "
+          + pb.name.string
+          + " (expected return inst for single-bb pullback)")
+      log("  terminator: " + pb.entryBlock.terminator.description)
+      log("  parent block begin")
+      log("  " + pb.entryBlock.description)
+      log("  parent block end")
+      return false
+    }
+    log(
+      "Pullback: single-bb; TODO bteArgOfPb.uses.count() uses of branch tracing enum pullback argument found."
+    )
+    if !bteArg.uses.isEmpty {
+      log(
+        prefixFail + "single-bb pullback has uses of BTE arg")
+      var needBreak = true
+      if bteArg.uses.singleElement != nil {
+        let useInst = bteArg.uses.singleUse!.instruction
+        if useInst as? ApplyInst != nil {
+          log("Single use of BTE arg is apply inst")
+        }
+        if useInst as? DestroyValueInst != nil {
+          log("Single use of BTE arg is destroy_value inst")
+          needBreak = false
+        }
+      }
+      dumpVJPAndPB(vjp: vjp, pb: pb)
+      if needBreak {
+        return false
+      }
+    }
+  } else {
+    if bteArg.uses.isEmpty {
+      log(prefixFail + "no uses of pullback bte arg found")
+      return false
+    }
+    if bteArg.uses.singleElement == nil {
+      log(prefixFail + "multiple uses of pullback bte arg found")
+      for (idx, use) in bteArg.uses.enumerated() {
+        log("use \(idx): \(use)")
+      }
+      return false
+    }
+
+    guard bteArg.uses.singleUse!.instruction as? SwitchEnumInst != nil else {
+      log(
+        prefixFail + "unexpected use of BTE argument of pullback " + pb.name.string
+          + " (only switch_enum_inst is supported)")
+      log("  use: \(bteArg.uses.singleUse!.instruction)")
+      log("  parent block begin")
+      log("  \(bteArg.uses.singleUse!.instruction.parentBlock)")
+      log("  parent block end")
+      return false
+    }
+  }
+  return true
+}
+
+private func validatePullbackSwitchEnumTerminators(pb: Function, prefixFail: String) -> Bool {
+  for pbBB in pb.blocks {
+    guard let sei = pbBB.terminator as? SwitchEnumInst else {
+      continue
+    }
+    if sei.getSuccessorForDefault() != nil {
+      log(
+        prefixFail + "switch_enum_inst from the \(pbBB.shortDescription) of the pullback "
+          + pb.name.string
+          + " has default destination set, which is not supported")
+      return false
+    }
+  }
+  return true
+}
+
+private func validateVJPBlockBTEArgs(vjp: Function, prefixFail: String) -> Bool {
+  for vjpBB in vjp.blocks {
+    if vjpBB.getBranchTracingEnumArg(vjp: vjp) != nil {
+      break
+    }
+    for arg in vjpBB.arguments {
+      if arg.type.isBranchTracingEnum(in: vjp) {
+        log(
+          prefixFail + "several arguments of VJP " + vjp.name.string + " basic block "
+            + vjpBB.shortDescription + " are branch tracing enums, but not more than 1 is supported"
+        )
+        return false
+      }
+    }
+  }
+  return true
+}
+
+private func validatePullbackPayloadBlocks(pb: Function, vjp: Function, prefixFail: String) -> Bool {
+  for pbBB in pb.blocks {
+    guard let (argOfPbBB, _, _) = getBTEPayloadArgOfPbBBInfo(pbBB, vjp: vjp) else {
+      continue
+    }
+    let payloadValues = getPayloadValues(payload: argOfPbBB, vjp: vjp)
+    switch payloadValues {
+    case .ZeroUses:
+      ()
+    case .Unsupported:
+      return false
+    case .DestructureTuple(let results):
+      if !checkIfCanRunForPayloadValues(
+        results: results, prefixFail: prefixFail, pb: pb, pbBB: pbBB)
+      {
+        return false
+      }
+    case .TupleExtract(let results):
+      if !checkIfCanRunForPayloadValues(
+        results: results, prefixFail: prefixFail, pb: pb, pbBB: pbBB)
+      {
+        return false
+      }
+    }
+  }
+  return true
+}
+
 private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool {
   assert(vjp.blocks.singleElement == nil)
 
@@ -303,65 +427,8 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     return false
   }
 
-  if pb.blocks.singleElement != nil {
-    guard let _ = pb.entryBlock.terminator as? ReturnInst else {
-      log(
-        prefixFail + "unexpected terminator instruction in the entry block of the pullback "
-          + pb.name.string
-          + " (expected return inst for single-bb pullback)")
-      log("  terminator: " + pb.entryBlock.terminator.description)
-      log("  parent block begin")
-      log("  " + pb.entryBlock.description)
-      log("  parent block end")
-      return false
-    }
-    log(
-      "Pullback: single-bb; TODO bteArgOfPb.uses.count() uses of branch tracing enum pullback argument found."
-    )
-    if !bteArgOfPb.uses.isEmpty {
-      log(
-        prefixFail + "single-bb pullback has uses of BTE arg")
-      var needBreak = true
-      if bteArgOfPb.uses.singleElement != nil {
-        let useInst = bteArgOfPb.uses.singleUse!.instruction
-        let aiOpt = useInst as? ApplyInst
-        let dviOpt = useInst as? DestroyValueInst
-        if aiOpt != nil {
-          log("Single use of BTE arg is apply inst")
-        }
-        if dviOpt != nil {
-          log("Single use of BTE arg is destroy_value inst")
-          needBreak = false
-        }
-      }
-      dumpVJPAndPB(vjp: vjp, pb: pb)
-      if needBreak {
-        return false
-      }
-    }
-  } else {
-    if bteArgOfPb.uses.isEmpty {
-      log(prefixFail + "no uses of pullback bte arg found")
-      return false
-    }
-    if bteArgOfPb.uses.singleElement == nil {
-      log(prefixFail + "multiple uses of pullback bte arg found")
-      for (idx, use) in bteArgOfPb.uses.enumerated() {
-        log("use \(idx): \(use)")
-      }
-      return false
-    }
-
-    guard bteArgOfPb.uses.singleUse!.instruction as? SwitchEnumInst != nil else {
-      log(
-        prefixFail + "unexpected use of BTE argument of pullback " + pb.name.string
-          + " (only switch_enum_inst is supported)")
-      log("  use: \(bteArgOfPb.uses.singleUse!.instruction)")
-      log("  parent block begin")
-      log("  \(bteArgOfPb.uses.singleUse!.instruction.parentBlock)")
-      log("  parent block end")
-      return false
-    }
+  guard validatePullbackBTEUsage(pb: pb, bteArg: bteArgOfPb, vjp: vjp, prefixFail: prefixFail) else {
+    return false
   }
 
   guard ensureEnumPayloadsAreTupleInst(vjp: vjp) else {
@@ -369,57 +436,16 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Bool 
     return false
   }
 
-  for pbBB in pb.blocks {
-    guard let sei = pbBB.terminator as? SwitchEnumInst else {
-      continue
-    }
-    if sei.getSuccessorForDefault() != nil {
-      log(
-        prefixFail + "switch_enum_inst from the \(pbBB.shortDescription) of the pullback "
-          + pb.name.string
-          + " has default destination set, which is not supported")
-      return false
-    }
+  guard validatePullbackSwitchEnumTerminators(pb: pb, prefixFail: prefixFail) else {
+    return false
   }
 
-  for vjpBB in vjp.blocks {
-    if vjpBB.getBranchTracingEnumArg(vjp: vjp) != nil {
-      break
-    }
-    for arg in vjpBB.arguments {
-      if arg.type.isBranchTracingEnum(in: vjp) {
-        log(
-          prefixFail + "several arguments of VJP " + vjp.name.string + " basic block "
-            + vjpBB.shortDescription + " are branch tracing enums, but not more than 1 is supported"
-        )
-        return false
-      }
-    }
+  guard validateVJPBlockBTEArgs(vjp: vjp, prefixFail: prefixFail) else {
+    return false
   }
 
-  for pbBB in pb.blocks {
-    guard let (argOfPbBB, _, _) = getBTEPayloadArgOfPbBBInfo(pbBB, vjp: vjp) else {
-      continue
-    }
-    let payloadValues = getPayloadValues(payload: argOfPbBB, vjp: vjp)
-    switch payloadValues {
-    case .ZeroUses:
-      ()
-    case .Unsupported:
-      return false
-    case .DestructureTuple(let results):
-      if !checkIfCanRunForPayloadValues(
-        results: results, prefixFail: prefixFail, pb: pb, pbBB: pbBB)
-      {
-        return false
-      }
-    case .TupleExtract(let results):
-      if !checkIfCanRunForPayloadValues(
-        results: results, prefixFail: prefixFail, pb: pb, pbBB: pbBB)
-      {
-        return false
-      }
-    }
+  guard validatePullbackPayloadBlocks(pb: pb, vjp: vjp, prefixFail: prefixFail) else {
+    return false
   }
 
   return true
