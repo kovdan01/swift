@@ -2437,6 +2437,78 @@ private struct AutoDiffSpecializationInfo {
   }
 }
 
+private func computeTopologicalBlockOrder(of function: Function) -> [BasicBlock] {
+  var bbVisited = [BasicBlock: Bool]()
+  bbVisited[function.entryBlock] = true
+  var bbQueue = [BasicBlock]()
+  bbQueue.append(function.entryBlock)
+  while bbVisited.count != function.blocks.count {
+    for bb in function.blocks {
+      if bbVisited[bb] == true {
+        continue
+      }
+      var allPredsVisited = true
+      for predBB in bb.predecessors {
+        if bbVisited[predBB] != true {
+          allPredsVisited = false
+          break
+        }
+      }
+      if allPredsVisited {
+        bbQueue.append(bb)
+        bbVisited[bb] = true
+      }
+    }
+  }
+  return bbQueue
+}
+
+private func findCorrespondingVJPPayloadTuple(
+  forBB bb: BasicBlock, argIndex: Int, enumToPayload: [EnumInst: TupleInst], enumDict: SpecBTEDict
+) -> TupleInst? {
+  let predBB = bb.predecessors.first!
+  if let brInst = predBB.terminator as? BranchInst {
+    let uedi = brInst.operands[argIndex].value.definingInstruction as! UncheckedEnumDataInst
+    let enumType = uedi.`enum`.type
+    let caseIdx = uedi.caseIndex
+    for (enumInst, payload) in enumToPayload {
+      if enumDict[enumInst.type] == enumType && enumInst.caseIndex == caseIdx {
+        return payload
+      }
+    }
+  } else {
+    let sei = predBB.terminator as! SwitchEnumInst
+    let enumType = sei.enumOp.type
+    let caseIdx = sei.getUniqueCase(forSuccessor: bb)!
+    for (enumInst, payload) in enumToPayload {
+      if enumDict[enumInst.type] == enumType && enumInst.caseIndex == caseIdx {
+        return payload
+      }
+    }
+  }
+  return nil
+}
+
+private func collectMatchingClosureInfos(
+  forPayload tiInVjp: TupleInst, allClosureInfos: [ClosureInBTE]
+) -> [ClosureInBTE] {
+  var closureInfoArray = [ClosureInBTE]()
+  for (opIdx, op) in tiInVjp.operands.enumerated() {
+    let val = op.value
+    for closureInfo in allClosureInfos {
+      if ((closureInfo.subsetThunk == nil && closureInfo.closure == val)
+        || (closureInfo.subsetThunk != nil && closureInfo.subsetThunk! == val)
+        || (closureInfo.optionalWrapper != nil && (closureInfo.closure.uses.singleUse!.instruction as! EnumInst) == val))
+        && closureInfo.payloadTuple == tiInVjp
+      {
+        assert(closureInfo.indexInPayload == opIdx)
+        closureInfoArray.append(closureInfo)
+      }
+    }
+  }
+  return closureInfoArray
+}
+
 private struct SpecializationInfoCFG {
   typealias Cloner = SIL.Cloner<FunctionPassContext>
 
@@ -2506,28 +2578,7 @@ func getOrCreateSpecializedFunctionCFG(
     cloner.cloneFunctionBody(from: autodiffSpecializationInfo.pullback, entryBlockArguments: args)
 
     log("cloneAndSpecializeFunctionBodyCFG 02")
-    var bbVisited = [BasicBlock: Bool]()
-    bbVisited[cloner.targetFunction.entryBlock] = true
-    var bbQueue = [BasicBlock]()
-    bbQueue.append(cloner.targetFunction.entryBlock)
-    while bbVisited.count != cloner.targetFunction.blocks.count {
-      for bb in cloner.targetFunction.blocks {
-        if bbVisited[bb] == true {
-          continue
-        }
-        var allPredsVisited = true
-        for predBB in bb.predecessors {
-          if bbVisited[predBB] != true {
-            allPredsVisited = false
-            break
-          }
-        }
-        if allPredsVisited {
-          bbQueue.append(bb)
-          bbVisited[bb] = true
-        }
-      }
-    }
+    let bbQueue = computeTopologicalBlockOrder(of: cloner.targetFunction)
 
     log("bbQueue.count = \(bbQueue.count) BEGIN")
     for (idx, bb) in bbQueue.enumerated() {
@@ -2561,53 +2612,18 @@ func getOrCreateSpecializedFunctionCFG(
       }
       log("cloneAndSpecializeFunctionBodyCFG 30")
 
-      // MYTODO: can we assume that at least one pred is present?
-      let predBB = bb.predecessors.first!
       let enumToPayload = findEnumsAndPayloadsInVjp(
         vjp: autodiffSpecializationInfo.paiOfPullback.parentFunction)
-      let brInstOpt = predBB.terminator as? BranchInst
-      var tiInVjp = TupleInst?(nil)
-      if brInstOpt != nil {
-        let brInst = brInstOpt!
-        let possibleUEDI = brInst.operands[arg.index].value.definingInstruction
-        let uedi = possibleUEDI as! UncheckedEnumDataInst
-        let enumType = uedi.`enum`.type
-        let caseIdx = uedi.caseIndex
-        for (enumInst, payload) in enumToPayload {
-          if enumDict[enumInst.type] == enumType && enumInst.caseIndex == caseIdx {
-            tiInVjp = payload
-            break
-          }
-        }
-      } else {
-        let sei = predBB.terminator as! SwitchEnumInst
-        let enumType = sei.enumOp.type
-        let caseIdx = sei.getUniqueCase(forSuccessor: bb)!
-        for (enumInst, payload) in enumToPayload {
-          if enumDict[enumInst.type] == enumType && enumInst.caseIndex == caseIdx {
-            tiInVjp = payload
-            break
-          }
-        }
-      }
+      let tiInVjp = findCorrespondingVJPPayloadTuple(
+        forBB: bb, argIndex: arg.index, enumToPayload: enumToPayload, enumDict: enumDict)
       log("cloneAndSpecializeFunctionBodyCFG 40")
 
-      var closureInfoArray = [ClosureInBTE]()
-      if tiInVjp != nil {
-        for (opIdx, op) in tiInVjp!.operands.enumerated() {
-          let val = op.value
-          for closureInfo in closureInfos {
-            if ((closureInfo.subsetThunk == nil && closureInfo.closure == val)
-              || (closureInfo.subsetThunk != nil && closureInfo.subsetThunk! == val)
-              || (closureInfo.optionalWrapper != nil && (closureInfo.closure.uses.singleUse!.instruction as! EnumInst) == val))
-              && closureInfo.payloadTuple == tiInVjp!  // MYTODO: is this correct?
-            {
-              assert(closureInfo.indexInPayload == opIdx)
-              closureInfoArray.append(closureInfo)
-            }
-          }
+      let closureInfoArray: [ClosureInBTE] = {
+        if let tiInVjp = tiInVjp {
+          return collectMatchingClosureInfos(forPayload: tiInVjp, allClosureInfos: closureInfos)
         }
-      }
+        return []
+      }()
       log("recreateTupleBlockArgument: \(bb.shortDescription)")
       let newArg = specializePayloadTupleBBArgInPullback(
         arg: arg, enumCase: enumCase, context: cloner.context)
