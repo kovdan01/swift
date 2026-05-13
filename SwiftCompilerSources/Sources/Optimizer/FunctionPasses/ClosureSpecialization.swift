@@ -516,10 +516,9 @@ func getPayloadValues(payload: Argument, vjp: Function) -> PayloadValues {
 
   var results = [Value]()
 
-  if payload.uses.singleUse != nil
-    && payload.uses.singleUse!.instruction as? DestructureTupleInst != nil
+  if let singleUse = payload.uses.singleUse,
+     let dti = singleUse.instruction as? DestructureTupleInst
   {
-    let dti = payload.uses.singleUse!.instruction as! DestructureTupleInst
     // TODO: do we need to check that results is not empty?
     if dti.operands[0].value.type.tupleElements.count != 0
       && dti.results[0].type.isBranchTracingEnum(in: vjp) && dti.results[0].uses.count > 1
