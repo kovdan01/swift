@@ -958,6 +958,21 @@ extension Collection {
   }
 }
 
+private func findMatchingClosureInfo(in closureInfoArray: [ClosureInBTE], forPayloadIndex index: Int) -> ClosureInBTE? {
+  var result = ClosureInBTE?(nil)
+  for closureInfo in closureInfoArray {
+    if closureInfo.indexInPayload == index {
+      if result != nil {
+        assert(result!.closure == closureInfo.closure)
+        assert(result!.payloadTuple == closureInfo.payloadTuple)
+      } else {
+        result = closureInfo
+      }
+    }
+  }
+  return result
+}
+
 private func rewriteUsesOfPayloadItem(
   use: Operand, resultIdx: Int, closureInfoArray: [ClosureInBTE],
   result: Value, useTei: Bool, throwingSuccessor: BasicBlock?, context: FunctionPassContext
@@ -966,17 +981,7 @@ private func rewriteUsesOfPayloadItem(
   switch use.instruction {
   case let cfi as ConvertFunctionInst:
     let builder = Builder(before: cfi, context)
-    var closureInfoOpt = ClosureInBTE?(nil)
-    for closureInfo in closureInfoArray {
-      if closureInfo.indexInPayload == resultIdx {
-        if closureInfoOpt != nil {
-          assert(closureInfoOpt!.closure == closureInfo.closure)
-          assert(closureInfoOpt!.payloadTuple == closureInfo.payloadTuple)
-        } else {
-          closureInfoOpt = closureInfo
-        }
-      }
-    }
+    let closureInfoOpt = findMatchingClosureInfo(in: closureInfoArray, forPayloadIndex: resultIdx)
     if closureInfoOpt != nil {
       assert(cfi.uses.count == 2)
       let bbiUse = cfi.uses.filter { $0.instruction as? BeginBorrowInst   != nil }.singleElement!
@@ -1002,17 +1007,7 @@ private func rewriteUsesOfPayloadItem(
 
   case let bbi as BeginBorrowInst:
     let builder = Builder(before: bbi, context)
-    var closureInfoOpt = ClosureInBTE?(nil)
-    for closureInfo in closureInfoArray {
-      if closureInfo.indexInPayload == resultIdx {
-        if closureInfoOpt != nil {
-          assert(closureInfoOpt!.closure == closureInfo.closure)
-          assert(closureInfoOpt!.payloadTuple == closureInfo.payloadTuple)
-        } else {
-          closureInfoOpt = closureInfo
-        }
-      }
-    }
+    let closureInfoOpt = findMatchingClosureInfo(in: closureInfoArray, forPayloadIndex: resultIdx)
     if closureInfoOpt != nil {
       assert(bbi.uses.count == 2)
       let aiUse = bbi.uses.filter { $0.instruction as? ApplyInst     != nil }.singleElement!
@@ -1033,17 +1028,7 @@ private func rewriteUsesOfPayloadItem(
 
   case let ai as ApplyInst:
     let builder = Builder(before: ai, context)
-    var closureInfoOpt = ClosureInBTE?(nil)
-    for closureInfo in closureInfoArray {
-      if closureInfo.indexInPayload == resultIdx {
-        if closureInfoOpt != nil {
-          assert(closureInfoOpt!.closure == closureInfo.closure)
-          assert(closureInfoOpt!.payloadTuple == closureInfo.payloadTuple)
-        } else {
-          closureInfoOpt = closureInfo
-        }
-      }
-    }
+    let closureInfoOpt = findMatchingClosureInfo(in: closureInfoArray, forPayloadIndex: resultIdx)
     if closureInfoOpt != nil {
       var teiArray = [TupleExtractInst]()
       var dtiOfCapturedArgsTuple = DestructureTupleInst?(nil)
