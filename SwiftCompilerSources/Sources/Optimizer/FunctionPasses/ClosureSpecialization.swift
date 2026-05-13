@@ -845,6 +845,23 @@ private func replacePullbackPartialApply(
   return newPai
 }
 
+private func buildReplacementElement(
+  capturedArgs: [Value], isOptionalSome: Bool?,
+  tupleType: Type, vjp: Function, builder: Builder
+) -> Value {
+  if let isOptionalSome = isOptionalSome {
+    let optionalTupleType = tupleType.rawType.optionalType.loweredType(in: vjp)
+    if isOptionalSome {
+      let tuple = builder.createTuple(type: tupleType, elements: capturedArgs)
+      return builder.createOptionalSome(operand: tuple, type: optionalTupleType)
+    } else {
+      return builder.createOptionalNone(type: optionalTupleType)
+    }
+  } else {
+    return builder.createTuple(type: tupleType, elements: capturedArgs)
+  }
+}
+
 private func rewritePayloadTuplesInVJP(
   vjp: Function, closureInfos: inout [ClosureInBTE], context: FunctionPassContext
 ) {
@@ -898,30 +915,18 @@ private func rewritePayloadTuplesInVJP(
         continue
       }
 
-      let builderPred = Builder(before: ti, context)
-
-      let tupleType = context.getTupleType(
-        elements: tupleIdxToCapturedArgs[opIdx]!.values.map { $0.type }
-      ).loweredType(in: vjp)
       if tupleIdxToCapturedArgs[opIdx]!.isOptionalSome != nil {
         assert(opIdx + 1 == ti.operands.count)
-        let optionalTupleType = tupleType.rawType.optionalType.loweredType(
-          in: vjp)
-        let optOfTuple = {
-          if tupleIdxToCapturedArgs[opIdx]!.isOptionalSome! {
-            let tuple = builderPred.createTuple(
-              type: tupleType, elements: tupleIdxToCapturedArgs[opIdx]!.values)
-            return builderPred.createOptionalSome(operand: tuple, type: optionalTupleType)
-          } else {
-            return builderPred.createOptionalNone(type: optionalTupleType)
-          }
-        }()
-        newPayloadValues.append(optOfTuple)
-      } else {
-        let tuple = builderPred.createTuple(
-          type: tupleType, elements: tupleIdxToCapturedArgs[opIdx]!.values)
-        newPayloadValues.append(tuple)
       }
+      let builderPred = Builder(before: ti, context)
+      let entry = tupleIdxToCapturedArgs[opIdx]!
+      let tupleType = context.getTupleType(
+        elements: entry.values.map { $0.type }
+      ).loweredType(in: vjp)
+      let replacement = buildReplacementElement(
+        capturedArgs: entry.values, isOptionalSome: entry.isOptionalSome,
+        tupleType: tupleType, vjp: vjp, builder: builderPred)
+      newPayloadValues.append(replacement)
     }
     let builderPred = Builder(before: ti, context)
     let newPayload = builderPred.createPayloadTupleForBranchTracingEnum(
