@@ -2227,17 +2227,15 @@ private func getBTEPayloadArgOfPbBBInfo(_ bb: BasicBlock, vjp: Function)
 
 extension ClosureInBTE {
   var capturedArgs : [Value] {
-    switch self.closure {
-    case let tttf as ThinToThickFunctionInst:
-      return []
-    case let pai as PartialApplyInst:
+    if let pai = self.closure as? PartialApplyInst {
       var newCapturedArgs = [Value]()
       for paiArg in pai.arguments {
         newCapturedArgs.append(paiArg)
       }
       return newCapturedArgs
-    default:
-      assert(false)
+    }
+    guard let _ = self.closure as? ThinToThickFunctionInst else {
+      fatalError("unexpected closure type")
     }
     return []
   }
