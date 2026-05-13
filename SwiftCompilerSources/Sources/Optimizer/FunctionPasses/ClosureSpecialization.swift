@@ -389,29 +389,32 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> Multi
       branchTracingEnumArgCounter += 1
     }
   }
-  if branchTracingEnumArgCounter != 1 {
-    let pb = paiOfPb.referencedFunction!
-    for inst in vjp.instructions {
-      guard let builtinInst = inst as? BuiltinInst else {
-        continue
-      }
-      if builtinInst.name.string == "autoDiffProjectTopLevelSubcontext" {
-        log(
-          prefixFail
-            + "VJP seems to contain a loop (builtin autoDiffProjectTopLevelSubcontext detected), this is not supported"
-        )
-        return .ineligible
-      }
+
+  // Check for loops before evaluating the BTE arg count.
+  for inst in vjp.instructions {
+    guard let builtinInst = inst as? BuiltinInst else {
+      continue
     }
-    if branchTracingEnumArgCounter == 0 {
-      log("This is multi-BB case which would be handled as single-BB case")
-      return .handleAsSingleBB
+    if builtinInst.name.string == "autoDiffProjectTopLevelSubcontext" {
+      log(
+        prefixFail
+          + "VJP seems to contain a loop (builtin autoDiffProjectTopLevelSubcontext detected), this is not supported"
+      )
+      return .ineligible
     }
+  }
+
+  if branchTracingEnumArgCounter == 0 {
+    log("This is multi-BB case which would be handled as single-BB case")
+    return .handleAsSingleBB
+  }
+
+  guard branchTracingEnumArgCounter == 1 else {
     log(
       prefixFail + "partial_apply of pullback in exit basic block of VJP has "
         + String(branchTracingEnumArgCounter)
         + " branch tracing enum arguments, but exactly 1 is expected")
-    dumpVJPAndPB(vjp: vjp, pb: pb)
+    dumpVJPAndPB(vjp: vjp, pb: paiOfPb.referencedFunction!)
     return .ineligible
   }
 
