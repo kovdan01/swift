@@ -1025,6 +1025,13 @@ extension Collection {
   }
 }
 
+private struct PayloadRewriteContext {
+  let closureInfoArray: [ClosureInBTE]
+  let useTei: Bool
+  let throwingSuccessor: BasicBlock?
+  let context: FunctionPassContext
+}
+
 private func findMatchingClosureInfo(in closureInfoArray: [ClosureInBTE], forPayloadIndex index: Int) -> ClosureInBTE? {
   var result = ClosureInBTE?(nil)
   for closureInfo in closureInfoArray {
@@ -1076,61 +1083,61 @@ private func extractTupleElements(
 }
 
 private func rewriteConvertFunctionUse(
-  cfi: ConvertFunctionInst, resultIdx: Int, closureInfoArray: [ClosureInBTE],
-  result: Value, useTei: Bool, throwingSuccessor: BasicBlock?, context: FunctionPassContext
+  cfi: ConvertFunctionInst, resultIdx: Int,
+  result: Value, rewriteCtx: PayloadRewriteContext
 ) {
-  if findMatchingClosureInfo(in: closureInfoArray, forPayloadIndex: resultIdx) != nil {
+  if findMatchingClosureInfo(in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx) != nil {
     assert(cfi.uses.count == 2)
     let bbiUse = cfi.uses.filter { $0.instruction as? BeginBorrowInst   != nil }.singleElement!
     let dviUse = cfi.uses.filter { $0.instruction as? DestroyValueInst  != nil }.getExactlyOneOrNil()
     let sriUse = cfi.uses.filter { $0.instruction as? StrongReleaseInst != nil }.getExactlyOneOrNil()
     assert((dviUse != nil) != (sriUse != nil))
     if dviUse != nil {
-      context.erase(instruction: dviUse!.instruction)
+      rewriteCtx.context.erase(instruction: dviUse!.instruction)
     } else {
-      context.erase(instruction: sriUse!.instruction)
+      rewriteCtx.context.erase(instruction: sriUse!.instruction)
     }
     rewriteUsesOfPayloadItem(
-      use: bbiUse, resultIdx: resultIdx, closureInfoArray: closureInfoArray, result: result,
-      useTei: useTei, throwingSuccessor: throwingSuccessor, context: context)
-    context.erase(instruction: cfi)
+      use: bbiUse, resultIdx: resultIdx,
+      result: result, rewriteCtx: rewriteCtx)
+    rewriteCtx.context.erase(instruction: cfi)
   } else {
-    let builder = Builder(before: cfi, context)
+    let builder = Builder(before: cfi, rewriteCtx.context)
     let newCFI = builder.createConvertFunction(
       originalFunction: result,
       resultType: cfi.type,
       withoutActuallyEscaping: cfi.withoutActuallyEscaping)
-    cfi.replace(with: newCFI, context)
+    cfi.replace(with: newCFI, rewriteCtx.context)
   }
 }
 
 private func rewriteBeginBorrowUse(
-  bbi: BeginBorrowInst, resultIdx: Int, closureInfoArray: [ClosureInBTE],
-  result: Value, useTei: Bool, throwingSuccessor: BasicBlock?, context: FunctionPassContext
+  bbi: BeginBorrowInst, resultIdx: Int,
+  result: Value, rewriteCtx: PayloadRewriteContext
 ) {
-  if findMatchingClosureInfo(in: closureInfoArray, forPayloadIndex: resultIdx) != nil {
+  if findMatchingClosureInfo(in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx) != nil {
     assert(bbi.uses.count == 2)
     let aiUse = bbi.uses.filter { $0.instruction as? ApplyInst     != nil }.singleElement!
     let ebUse = bbi.uses.filter { $0.instruction as? EndBorrowInst != nil }.singleElement!
-    context.erase(instruction: ebUse.instruction)
+    rewriteCtx.context.erase(instruction: ebUse.instruction)
     rewriteUsesOfPayloadItem(
-      use: aiUse, resultIdx: resultIdx, closureInfoArray: closureInfoArray, result: result,
-      useTei: useTei, throwingSuccessor: throwingSuccessor, context: context)
-    context.erase(instruction: bbi)
+      use: aiUse, resultIdx: resultIdx,
+      result: result, rewriteCtx: rewriteCtx)
+    rewriteCtx.context.erase(instruction: bbi)
   } else {
-    let builder = Builder(before: bbi, context)
+    let builder = Builder(before: bbi, rewriteCtx.context)
     let newBBI = builder.createBeginBorrow(
       of: result,
       isLexical: bbi.isLexical,
       hasPointerEscape: bbi.hasPointerEscape,
       isFromVarDecl: bbi.isFromVarDecl)
-    bbi.replace(with: newBBI, context)
+    bbi.replace(with: newBBI, rewriteCtx.context)
   }
 }
 
 private func rewriteApplyDirectClosure(
   ai: ApplyInst, closureInfo: ClosureInBTE, extractedElements: [Value],
-  builder: Builder, context: FunctionPassContext
+  builder: Builder, _ context: FunctionPassContext
 ) {
   var newArgs = [Value]()
   for op in ai.argumentOperands {
@@ -1151,7 +1158,7 @@ private func rewriteApplyDirectClosure(
 
 private func rewriteApplyViaSubsetThunk(
   ai: ApplyInst, closureInfo: ClosureInBTE, extractedElements: [Value],
-  builder: Builder, context: FunctionPassContext
+  builder: Builder, _ context: FunctionPassContext
 ) {
   var newClosure = SingleValueInstruction?(nil)
   if let pai = closureInfo.closure as? PartialApplyInst {
@@ -1193,20 +1200,20 @@ private func rewriteApplyViaSubsetThunk(
 }
 
 private func rewriteApplyUse(
-  ai: ApplyInst, resultIdx: Int, closureInfoArray: [ClosureInBTE],
-  result: Value, useTei: Bool, context: FunctionPassContext
+  ai: ApplyInst, resultIdx: Int,
+  result: Value, rewriteCtx: PayloadRewriteContext
 ) {
-  let builder = Builder(before: ai, context)
-  if let closureInfo = findMatchingClosureInfo(in: closureInfoArray, forPayloadIndex: resultIdx) {
-    let extractedElements = extractTupleElements(from: result, useTupleExtract: useTei, builder: builder)
+  let builder = Builder(before: ai, rewriteCtx.context)
+  if let closureInfo = findMatchingClosureInfo(in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx) {
+    let extractedElements = extractTupleElements(from: result, useTupleExtract: rewriteCtx.useTei, builder: builder)
     if closureInfo.subsetThunk == nil {
       rewriteApplyDirectClosure(
         ai: ai, closureInfo: closureInfo, extractedElements: extractedElements,
-        builder: builder, context: context)
+        builder: builder, rewriteCtx.context)
     } else {
       rewriteApplyViaSubsetThunk(
         ai: ai, closureInfo: closureInfo, extractedElements: extractedElements,
-        builder: builder, context: context)
+        builder: builder, rewriteCtx.context)
     }
   } else {
     var newArgs = [Value]()
@@ -1215,90 +1222,90 @@ private func rewriteApplyUse(
     }
     let newAi = builder.createApply(
       function: result, ai.substitutionMap, arguments: newArgs)
-    ai.replace(with: newAi, context)
+    ai.replace(with: newAi, rewriteCtx.context)
   }
 }
 
 private func rewriteDestroyValueUse(
-  dvi: DestroyValueInst, resultIdx: Int, closureInfoArray: [ClosureInBTE],
-  result: Value, context: FunctionPassContext
+  dvi: DestroyValueInst, resultIdx: Int,
+  result: Value, rewriteCtx: PayloadRewriteContext
 ) {
-  let isClosurePayload = closureInfoArray.contains { $0.indexInPayload == resultIdx }
+  let isClosurePayload = rewriteCtx.closureInfoArray.contains { $0.indexInPayload == resultIdx }
   if !isClosurePayload {
-    let builder = Builder(before: dvi, context)
+    let builder = Builder(before: dvi, rewriteCtx.context)
     if dvi.parentFunction.hasOwnership {
       builder.createDestroyValue(operand: result)
     } else {
       builder.createReleaseValue(operand: result)
     }
   }
-  context.erase(instruction: dvi)
+  rewriteCtx.context.erase(instruction: dvi)
 }
 
 private func rewriteStrongReleaseUse(
-  sri: StrongReleaseInst, resultIdx: Int, closureInfoArray: [ClosureInBTE],
-  result: Value, context: FunctionPassContext
+  sri: StrongReleaseInst, resultIdx: Int,
+  result: Value, rewriteCtx: PayloadRewriteContext
 ) {
-  let isClosurePayload = closureInfoArray.contains { $0.indexInPayload == resultIdx }
+  let isClosurePayload = rewriteCtx.closureInfoArray.contains { $0.indexInPayload == resultIdx }
   if !isClosurePayload {
-    let builder = Builder(before: sri, context)
+    let builder = Builder(before: sri, rewriteCtx.context)
     builder.createStrongRelease(operand: result)
   }
-  context.erase(instruction: sri)
+  rewriteCtx.context.erase(instruction: sri)
 }
 
 private func rewriteUsesOfPayloadItem(
-  use: Operand, resultIdx: Int, closureInfoArray: [ClosureInBTE],
-  result: Value, useTei: Bool, throwingSuccessor: BasicBlock?, context: FunctionPassContext
+  use: Operand, resultIdx: Int,
+  result: Value, rewriteCtx: PayloadRewriteContext
 ) {
   switch use.instruction {
   case let cfi as ConvertFunctionInst:
     rewriteConvertFunctionUse(
-      cfi: cfi, resultIdx: resultIdx, closureInfoArray: closureInfoArray,
-      result: result, useTei: useTei, throwingSuccessor: throwingSuccessor, context: context)
+      cfi: cfi, resultIdx: resultIdx,
+      result: result, rewriteCtx: rewriteCtx)
 
   case let bbi as BeginBorrowInst:
     rewriteBeginBorrowUse(
-      bbi: bbi, resultIdx: resultIdx, closureInfoArray: closureInfoArray,
-      result: result, useTei: useTei, throwingSuccessor: throwingSuccessor, context: context)
+      bbi: bbi, resultIdx: resultIdx,
+      result: result, rewriteCtx: rewriteCtx)
 
   case let ai as ApplyInst:
     rewriteApplyUse(
-      ai: ai, resultIdx: resultIdx, closureInfoArray: closureInfoArray,
-      result: result, useTei: useTei, context: context)
+      ai: ai, resultIdx: resultIdx,
+      result: result, rewriteCtx: rewriteCtx)
 
   case let dvi as DestroyValueInst:
     rewriteDestroyValueUse(
-      dvi: dvi, resultIdx: resultIdx, closureInfoArray: closureInfoArray,
-      result: result, context: context)
+      dvi: dvi, resultIdx: resultIdx,
+      result: result, rewriteCtx: rewriteCtx)
 
   case let sri as StrongReleaseInst:
     rewriteStrongReleaseUse(
-      sri: sri, resultIdx: resultIdx, closureInfoArray: closureInfoArray,
-      result: result, context: context)
+      sri: sri, resultIdx: resultIdx,
+      result: result, rewriteCtx: rewriteCtx)
 
   case let tei as TupleExtractInst:
-    let builder = Builder(before: tei, context)
+    let builder = Builder(before: tei, rewriteCtx.context)
     let newTei = builder.createTupleExtract(tuple: tei.tuple, elementIndex: tei.fieldIndex)
-    tei.replace(with: newTei, context)
+    tei.replace(with: newTei, rewriteCtx.context)
 
   case let uedi as UncheckedEnumDataInst:
-    let builder = Builder(before: uedi, context)
+    let builder = Builder(before: uedi, rewriteCtx.context)
     let newUedi = builder.createUncheckedEnumData(
       enum: result, caseIndex: uedi.caseIndex,
       resultType: result.type.getEnumCases(in: uedi.parentFunction)![uedi.caseIndex]!.payload!)
-    uedi.replace(with: newUedi, context)
+    uedi.replace(with: newUedi, rewriteCtx.context)
 
   case let sei as SwitchEnumInst:
-    let builder = Builder(before: sei, context)
+    let builder = Builder(before: sei, rewriteCtx.context)
     let newSEI = builder.createSwitchEnum(
       enum: result, cases: getEnumCasesForSwitchEnumInst(sei))
-    context.erase(instruction: sei)
+    rewriteCtx.context.erase(instruction: sei)
 
-    if let successor = throwingSuccessor {
+    if let successor = rewriteCtx.throwingSuccessor {
       let arg = successor.arguments.singleElement!
       for argUse in arg.uses {
-        rewriteUsesOfPayloadItem(use: argUse, resultIdx: resultIdx, closureInfoArray: closureInfoArray, result: arg, useTei: useTei, throwingSuccessor: throwingSuccessor, context: context)
+        rewriteUsesOfPayloadItem(use: argUse, resultIdx: resultIdx, result: arg, rewriteCtx: rewriteCtx)
       }
     }
 
@@ -2653,12 +2660,15 @@ func getOrCreateSpecializedFunctionCFG(
         let builderBeforeOldDti = Builder(before: oldDti, cloner.context)
         let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
 
+        let rewriteCtx = PayloadRewriteContext(
+          closureInfoArray: closureInfoArray, useTei: false,
+          throwingSuccessor: throwingSuccessor, context: cloner.context)
         for (resultIdx, result) in oldDti.results.enumerated() {
           for use in result.uses {
             rewriteUsesOfPayloadItem(
-              use: use, resultIdx: resultIdx, closureInfoArray: closureInfoArray,
+              use: use, resultIdx: resultIdx,
               result: newDti.results[resultIdx],
-              useTei: false, throwingSuccessor: throwingSuccessor, context: cloner.context)
+              rewriteCtx: rewriteCtx)
           }
         }
 
@@ -2667,6 +2677,9 @@ func getOrCreateSpecializedFunctionCFG(
       }
       log("cloneAndSpecializeFunctionBodyCFG 70")
 
+      let rewriteCtx = PayloadRewriteContext(
+        closureInfoArray: closureInfoArray, useTei: true,
+        throwingSuccessor: throwingSuccessor, context: cloner.context)
       for newArgUse in newArg.uses {
         let oldTei = newArgUse.instruction as! TupleExtractInst
         let builderBeforeOldTei = Builder(before: oldTei, cloner.context)
@@ -2675,9 +2688,9 @@ func getOrCreateSpecializedFunctionCFG(
 
         for use in oldTei.results[0].uses {
           rewriteUsesOfPayloadItem(
-            use: use, resultIdx: oldTei.fieldIndex, closureInfoArray: closureInfoArray,
+            use: use, resultIdx: oldTei.fieldIndex,
             result: newTei.results[0],
-            useTei: true, throwingSuccessor: throwingSuccessor, context: cloner.context)
+            rewriteCtx: rewriteCtx)
         }
 
         oldTei.replace(with: newTei, cloner.context)
