@@ -973,6 +973,25 @@ private func findMatchingClosureInfo(in closureInfoArray: [ClosureInBTE], forPay
   return result
 }
 
+private func insertLifetimeEndIfNeeded(
+  for value: Value, before insertionPoint: Instruction, _ context: FunctionPassContext
+) {
+  if value.type.isTrivial(in: value.parentFunction) {
+    return
+  }
+  for use in value.uses {
+    if use.endsLifetime {
+      return
+    }
+  }
+  let builder = Builder(before: insertionPoint, context)
+  if value.parentFunction.hasOwnership {
+    builder.createDestroyValue(operand: value)
+  } else {
+    builder.createReleaseValue(operand: value)
+  }
+}
+
 private func rewriteUsesOfPayloadItem(
   use: Operand, resultIdx: Int, closureInfoArray: [ClosureInBTE],
   result: Value, useTei: Bool, throwingSuccessor: BasicBlock?, context: FunctionPassContext
@@ -1059,8 +1078,7 @@ private func rewriteUsesOfPayloadItem(
           function: newFri, ai.substitutionMap, arguments: newArgs)
         ai.replace(with: newAi, context)
 
-        // MYTODO: maybe we can set insertion point earlier
-        let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
+        // TODO: maybe we can set insertion point earlier
         var resArray = [Value]()
         if useTei {
           resArray = teiArray
@@ -1070,23 +1088,7 @@ private func rewriteUsesOfPayloadItem(
           }
         }
         for res in resArray {
-          if res.type.isTrivial(in: res.parentFunction) {
-            continue
-          }
-          var needDestroy = true
-          for resUse in res.uses {
-            if resUse.endsLifetime {
-              needDestroy = false
-              break
-            }
-          }
-          if needDestroy {
-            if ai.parentFunction.hasOwnership {
-              newBuilder.createDestroyValue(operand: res)
-            } else {
-              newBuilder.createReleaseValue(operand: res)
-            }
-          }
+          insertLifetimeEndIfNeeded(for: res, before: newAi.parentBlock.terminator, context)
         }
       } else {
         var newClosure = SingleValueInstruction?(nil)
@@ -1113,26 +1115,9 @@ private func rewriteUsesOfPayloadItem(
             isOnStack: maybePai!.isOnStack, isNested: maybePai!.isNested)
           newClosure = newPai
 
-          // MYTODO: maybe we can set insertion point earlier
-          let newBuilder = Builder(before: newPai.parentBlock.terminator, context)
+          // TODO: maybe we can set insertion point earlier
           for res in resArray {
-            if res.type.isTrivial(in: res.parentFunction) {
-              continue
-            }
-            var needDestroy = true
-            for resUse in res.uses {
-              if resUse.endsLifetime {
-                needDestroy = false
-                break
-              }
-            }
-            if needDestroy {
-              if ai.parentFunction.hasOwnership {
-                newBuilder.createDestroyValue(operand: res)
-              } else {
-                newBuilder.createReleaseValue(operand: res)
-              }
-            }
+            insertLifetimeEndIfNeeded(for: res, before: newPai.parentBlock.terminator, context)
           }
         } else {
           let tttfi = closureInfoOpt!.closure as! ThinToThickFunctionInst
@@ -1154,17 +1139,8 @@ private func rewriteUsesOfPayloadItem(
         let newAi = builder.createApply(
           function: newFri, ai.substitutionMap, arguments: newArgs)
         ai.replace(with: newAi, context)
-        let newBuilder = Builder(before: newAi.parentBlock.terminator, context)
         assert(newClosure!.uses.singleUse != nil)
-        if !newClosure!.type.isTrivial(in: newAi.parentFunction)
-          && !newClosure!.uses.singleUse!.endsLifetime
-        {
-          if ai.parentFunction.hasOwnership {
-            newBuilder.createDestroyValue(operand: newClosure!)
-          } else {
-            newBuilder.createReleaseValue(operand: newClosure!)
-          }
-        }
+        insertLifetimeEndIfNeeded(for: newClosure!, before: newAi.parentBlock.terminator, context)
       }
     } else {
       var newArgs = [Value]()
