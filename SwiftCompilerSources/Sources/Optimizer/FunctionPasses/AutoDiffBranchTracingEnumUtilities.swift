@@ -5,6 +5,14 @@ extension Type {
   func isBranchTracingEnum(in vjp: Function) -> Bool {
     return self.bridged.isAutodiffBranchTracingEnumInVJP(vjp.bridged)
   }
+
+  var isAnyBranchTracingEnum: Bool {
+    self.bridged.isAutodiffBranchTracingEnum()
+  }
+
+  var vjpNameOfBranchTracingEnum: StringRef {
+    StringRef(bridged: self.bridged.getVJPNameOfAutodiffBranchTracingEnum())
+  }
 }
 
 extension EnumCase {
@@ -217,16 +225,8 @@ private func getSpecializedParamDeclForEnumCase(
   for (elementIndex, oldElementType) in oldPayloadTupleElementTypes.enumerated() {
     var newElementType: AST.`Type`
     let closuresInBTEForCaseAndPayloadIndex = closuresInBTEForCase.filter({ $0.indexInPayload == elementIndex })
-    assert(closuresInBTEForCaseAndPayloadIndex.count <= 1)
-    if let closureInBTE = closuresInBTEForCaseAndPayloadIndex.singleElement {
-      nameSuffix += "_\(elementIndex)"
-      newElementType = getCapturedArgTypesTupleForClosure(
-        closure: closureInBTE.closure, context: context)
-      if oldElementType.isOptional {
-        assert(elementIndex + 1 == oldPayloadTupleElementTypes.count)
-        newElementType = newElementType.optionalType
-      }
-    } else {
+    
+    if closuresInBTEForCaseAndPayloadIndex.isEmpty {
       newElementType = oldElementType.rawType
       if elementIndex == 0 && oldElementType.isBranchTracingEnum(in: topVJP) {
         let predED = newElementType.nominal as! EnumDecl
@@ -235,7 +235,43 @@ private func getSpecializedParamDeclForEnumCase(
           function: topVJP)
         newElementType = specializedBTEDict[predBTEType]!.rawType
       }
+    } else {
+      let closureInBTE = closuresInBTEForCaseAndPayloadIndex.first!
+      newElementType = getCapturedArgTypesTupleForClosure(
+        closure: closureInBTE.closure, context: context)
+      
+      for closureInBTECurrent in closuresInBTEForCaseAndPayloadIndex {
+        let newElementTypeCurrent = getCapturedArgTypesTupleForClosure(
+          closure: closureInBTE.closure, context: context)
+        assert(newElementTypeCurrent == newElementType)
+      }
+
+      nameSuffix += "_\(elementIndex)"
+      if oldElementType.isOptional {
+        assert(elementIndex + 1 == oldPayloadTupleElementTypes.count)
+        newElementType = newElementType.optionalType
+      }
     }
+    
+    // assert(closuresInBTEForCaseAndPayloadIndex.count <= 1)
+    // if let closureInBTE = closuresInBTEForCaseAndPayloadIndex.singleElement {
+    //   nameSuffix += "_\(elementIndex)"
+    //   newElementType = getCapturedArgTypesTupleForClosure(
+    //     closure: closureInBTE.closure, context: context)
+    //   if oldElementType.isOptional {
+    //     assert(elementIndex + 1 == oldPayloadTupleElementTypes.count)
+    //     newElementType = newElementType.optionalType
+    //   }
+    // } else {
+    //   newElementType = oldElementType.rawType
+    //   if elementIndex == 0 && oldElementType.isBranchTracingEnum(in: topVJP) {
+    //     let predED = newElementType.nominal as! EnumDecl
+    //     let predBTEType = remapType(
+    //       type: getBranchTracingEnumLoweredType(ed: predED, vjp: topVJP),
+    //       function: topVJP)
+    //     newElementType = specializedBTEDict[predBTEType]!.rawType
+    //   }
+    // }
     newPayloadTupleElementTypes.append((label: oldPayloadTupleElementTypes.label(at: elementIndex), type: newElementType))
   }
 
@@ -273,6 +309,7 @@ private func autodiffSpecializeBranchTracingEnum(
   let declContext = oldED.parentDeclContext!
   let astContext = declContext.astContext
 
+  // TODO: embed topVJP name?
   var newEDName: String = oldED.name.string + "_spec"
 
   let newPLs = bteType.getEnumCases(in: topVJP)!.map{
