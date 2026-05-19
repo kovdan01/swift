@@ -13,7 +13,7 @@
 import AST
 import SIL
 
-private let verbose = false
+private let verbose = true
 
 private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
   if verbose {
@@ -335,11 +335,13 @@ private func validatePullbackSwitchEnumTerminators(pb: Function, prefixFail: Str
 
 private func validateVJPBlockBTEArgs(vjp: Function, prefixFail: String) -> Bool {
   for vjpBB in vjp.blocks {
-    if vjpBB.getBranchTracingEnumArg(vjp: vjp) != nil {
+    //if vjpBB.getBranchTracingEnumArg(vjp: vjp) != nil {
+    if vjpBB.getBranchTracingEnumArg() != nil {
       break
     }
     for arg in vjpBB.arguments {
-      if arg.type.isBranchTracingEnum(in: vjp) {
+      //if arg.type.isBranchTracingEnum(in: vjp) {
+      if arg.type.isAnyBranchTracingEnum {
         log(
           prefixFail + "several arguments of VJP " + vjp.name.string + " basic block "
             + vjpBB.shortDescription + " are branch tracing enums, but not more than 1 is supported"
@@ -816,7 +818,7 @@ private func specializeBTEBlockArgsInVJP(
   vjp: Function, enumDict: SpecBTEDict, context: FunctionPassContext
 ) {
   for bb in vjp.blocks {
-    guard let arg = bb.getBranchTracingEnumArg(vjp: vjp) else {
+    guard let arg = bb.getBranchTracingEnumArg() else {//vjp: vjp) else {
       continue
     }
     if enumDict[arg.type] == nil {
@@ -982,7 +984,8 @@ private func findEnumsAndPayloadsInVjp(vjp: Function) -> [EnumInst: TupleInst] {
     guard let ei = inst as? EnumInst else {
       continue
     }
-    if !ei.type.isBranchTracingEnum(in: vjp) {
+    //if !ei.type.isBranchTracingEnum(in: vjp) {
+    if !ei.type.isAnyBranchTracingEnum {
       continue
     }
     let ti = ei.operands[0].value.definingInstruction as! TupleInst
@@ -1126,24 +1129,34 @@ private func rewriteBeginBorrowUse(
   bbi: BeginBorrowInst, resultIdx: Int,
   result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
 ) {
+  log("rewriteBeginBorrowUse BEGIN")
   if findMatchingClosureInfo(in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx) != nil {
+    log("rewriteBeginBorrowUse MIDDLE 00")
     assert(bbi.uses.count == 2)
     let aiUse = bbi.uses.filter { $0.instruction as? ApplyInst     != nil }.singleElement!
     let ebUse = bbi.uses.filter { $0.instruction as? EndBorrowInst != nil }.singleElement!
     context.erase(instruction: ebUse.instruction)
+    log("rewriteBeginBorrowUse MIDDLE 07")
     rewriteUsesOfPayloadItem(
       use: aiUse, resultIdx: resultIdx,
       result: result, rewriteCtx: rewriteCtx, context)
+    log("rewriteBeginBorrowUse MIDDLE 08")
     context.erase(instruction: bbi)
+    log("rewriteBeginBorrowUse MIDDLE 09")
   } else {
+    log("rewriteBeginBorrowUse MIDDLE 10")
     let builder = Builder(before: bbi, context)
+    log("rewriteBeginBorrowUse MIDDLE 18")
     let newBBI = builder.createBeginBorrow(
       of: result,
       isLexical: bbi.isLexical,
       hasPointerEscape: bbi.hasPointerEscape,
       isFromVarDecl: bbi.isFromVarDecl)
+    log("rewriteBeginBorrowUse MIDDLE 18")
     bbi.replace(with: newBBI, context)
+    log("rewriteBeginBorrowUse MIDDLE 19")
   }
+  log("rewriteBeginBorrowUse END")
 }
 
 private func rewriteApplyDirectClosure(
@@ -1215,6 +1228,15 @@ private func rewriteApplyUse(
   result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
 ) {
   let builder = Builder(before: ai, context)
+
+  log("rewriteApplyUse BEGIN")
+  log("AI: \(ai)")
+  log("rewriteApplyUse MIDDLE 00")
+  log("resultIdx: \(resultIdx)")
+  log("rewriteApplyUse MIDDLE 01")
+  log("\(rewriteCtx.closureInfoArray)")
+  log("rewriteApplyUse MIDDLE 02")
+
   if let closureInfo = findMatchingClosureInfo(in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx) {
     let extractedElements = extractTupleElements(from: result, useTupleExtract: rewriteCtx.useTei, builder: builder)
     if closureInfo.subsetThunk == nil {
@@ -1235,6 +1257,7 @@ private func rewriteApplyUse(
       function: result, ai.substitutionMap, arguments: newArgs)
     ai.replace(with: newAi, context)
   }
+  log("rewriteApplyUse END")
 }
 
 private func rewriteDestroyValueUse(
@@ -1298,6 +1321,15 @@ private func rewriteUsesOfPayloadItem(
   case let tei as TupleExtractInst:
     let builder = Builder(before: tei, context)
     let newTei = builder.createTupleExtract(tuple: tei.tuple, elementIndex: tei.fieldIndex)
+    // let newRewriteCtx = PayloadRewriteContext(
+    //   closureInfoArray: rewriteCtx.closureInfoArray, useTei: true,
+    //   throwingSuccessor: rewriteCtx.throwingSuccessor)
+    // for use in tei.results[0].uses {
+    //   rewriteUsesOfPayloadItem(
+    //     use: use, resultIdx: tei.fieldIndex,
+    //     result: newTei.results[0],
+    //     rewriteCtx: newRewriteCtx, context)
+    // }
     tei.replace(with: newTei, context)
 
   case let uedi as UncheckedEnumDataInst:
@@ -1320,7 +1352,30 @@ private func rewriteUsesOfPayloadItem(
       }
     }
 
+
+  // TODO: also tuple_extract?
+  case let dti as DestructureTupleInst:
+    let builder = Builder(before: dti, context)
+    let newDti = builder.createDestructureTuple(tuple: result)
+
+    for (dtiResultIdx, dtiResult) in dti.results.enumerated() {
+      for dtiResultUse in dtiResult.uses {
+        rewriteUsesOfPayloadItem(
+          use: dtiResultUse, resultIdx: dtiResultIdx,
+          result: newDti.results[dtiResultIdx],
+          rewriteCtx: rewriteCtx, context)
+      }
+    } 
+
+    context.erase(instruction: dti)
+
+
   default:
+    log("rewriteUsesOfPayloadItem UNKNOWN USE BEGIN")
+    log("\(use.instruction)")
+    log("rewriteUsesOfPayloadItem UNKNOWN USE MIDDLE 00")
+    log("\(use.value)")
+    log("rewriteUsesOfPayloadItem UNKNOWN USE END")
     assert(false)
   }
 }
@@ -1976,7 +2031,17 @@ private extension Collection {
 }
 
 private extension BasicBlock {
+  //func getBranchTracingEnumArg(vjp: Function) -> Argument? {
+  func getBranchTracingEnumArg() -> Argument? {
+    // TODO: can we have more than 1 BTE? if nested inlining
+    return self.arguments.filter { $0.type.isAnyBranchTracingEnum }
+      .singleElementAssumingAtMostOne
+    //return self.arguments.filter { $0.type.isBranchTracingEnum(in: vjp) }.singleElementAssumingAtMostOne
+  }
+
+  // TODO: any place where we need this?
   func getBranchTracingEnumArg(vjp: Function) -> Argument? {
+    // TODO: can we have more than 1 BTE? if nested inlining
     return self.arguments.filter { $0.type.isBranchTracingEnum(in: vjp) }.singleElementAssumingAtMostOne
   }
 }
@@ -2348,7 +2413,8 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
         log("findBTEUses: unexpected use of payload tuple, aborting: \(tiUse)")
         return []
       }
-      guard ei.type.isBranchTracingEnum(in: vjp) else {
+      guard ei.type.isAnyBranchTracingEnum else {
+      //guard ei.type.isBranchTracingEnum(in: vjp) else {
         log("findBTEUses: enum type \(ei.type) is not a " +
             "branch tracing enum in VJP \(vjp.name), aborting")
         return []
@@ -2406,9 +2472,45 @@ private func getSpecializedBTEDict(closuresInBTE: [ClosureInBTE], paiOfPullback:
   let pullback = paiOfPullback.referencedFunction!
   let enumTypeOfEntryBBArg = pullback.entryBlock.getBranchTracingEnumArg(vjp: vjp)!.type
 
-  return autodiffSpecializeBranchTracingEnums(
+  var dict = autodiffSpecializeBranchTracingEnums(
     topVJP: vjp, topBTE: enumTypeOfEntryBBArg,
     closuresInBTE: closuresInBTE, context: context)
+
+  for inst in vjp.instructions {
+    guard let pai = inst as? PartialApplyInst,
+      let _ = pai.callee as? FunctionRefInst,
+      pai != paiOfPullback else {
+      continue
+    }
+    log("GET SPEC DICT FOR FOREIGN VJP BEGIN")
+    log("\(pai)")
+    log("GET SPEC DICT FOR FOREIGN VJP MIDDLE 00")
+    for arg in pai.arguments {
+      if arg.type.isAnyBranchTracingEnum {
+        log("GET SPEC DICT FOR FOREIGN VJP MIDDLE 01")
+        log("\(arg)")
+        log("GET SPEC DICT FOR FOREIGN VJP MIDDLE 02")
+        let newDict = autodiffSpecializeBranchTracingEnums(
+          topVJP: vjp, topBTE: arg.type,
+          closuresInBTE: closuresInBTE, context: context)
+        for (key, value) in newDict {
+          log("SPEC DICT KEY: \(key.rawType.nominal as! EnumDecl)")
+          log("SPEC DICT VALUE: \(value.rawType.nominal as! EnumDecl)")
+          if dict[key] == nil {
+            log("SPEC DICT CURRENT: NIL")
+          } else {
+            log("SPEC DICT CURRENT: \(dict[key]!.rawType.nominal as! EnumDecl)")
+          }
+          // TODO: must pass
+          //assert(dict[key] == nil || value == dict[key]!)
+          dict[key] = value
+        }
+      }
+    }
+    log("GET SPEC DICT FOR FOREIGN VJP END")
+  }
+
+  return dict
 }
 
 private typealias SpecBTEDict = [Type: Type]
@@ -2773,7 +2875,7 @@ let specializeBTEArgInVjpBB = FunctionTest("autodiff_specialize_bte_arg_in_vjp_b
 
   print("Specialized BTE arguments of basic blocks in VJP \(function.name):")
   for bb in function.blocks {
-    guard let arg = bb.getBranchTracingEnumArg(vjp: function) else {
+    guard let arg = bb.getBranchTracingEnumArg() else {//vjp: function) else {
       continue
     }
     let newArg = specializeBranchTracingEnumBBArgInVJP(

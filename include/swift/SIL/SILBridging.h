@@ -294,6 +294,8 @@ struct BridgedType {
   BRIDGED_INLINE bool isMarkedAsImmortal() const;
   BRIDGED_INLINE bool isHeapObjectReferenceType() const;
   BRIDGED_INLINE bool isAddressableForDeps(BridgedFunction f) const;
+  bool isAutodiffBranchTracingEnum() const;
+  BridgedStringRef getVJPNameOfAutodiffBranchTracingEnum() const;
   bool isAutodiffBranchTracingEnumInVJP(BridgedFunction vjp) const;
   BRIDGED_INLINE SWIFT_IMPORT_UNSAFE BridgedASTType getRawLayoutSubstitutedLikeType() const;
   BRIDGED_INLINE SWIFT_IMPORT_UNSAFE BridgedASTType getRawLayoutSubstitutedCountType() const;
