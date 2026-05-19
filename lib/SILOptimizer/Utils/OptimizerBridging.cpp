@@ -587,7 +587,9 @@ bool BridgedFunction::isAutodiffSubsetParametersThunk() const {
   return false;
 }
 
-bool BridgedType::isAutodiffBranchTracingEnum() const {
+// See also ASTMangler::mangleAutoDiffGeneratedDeclaration.
+bool BridgedType::isAutodiffBranchTracingEnumInVJP(BridgedFunction vjp) const {
+  assert(vjp.isAutodiffVJP());
   EnumDecl *ed = unbridged().getEnumOrBoundGenericEnum();
   if (ed == nullptr)
     return false;
@@ -595,16 +597,9 @@ bool BridgedType::isAutodiffBranchTracingEnum() const {
   llvm::StringRef edName = ed->getNameStr();
   if (!edName.starts_with("_AD__"))
     return false;
-
   if (!llvm::StringRef(edName.data() + 5, edName.size() - 5)
            .starts_with(MANGLING_PREFIX_STR))
     return false;
-
-  return true;
-}
-
-BridgedStringRef BridgedType::getVJPNameOfAutodiffBranchTracingEnum() const {
-  llvm::StringRef edName = unbridged().getEnumOrBoundGenericEnum()->getNameStr();
 
   // At this point, we know that the type is indeed a branch tracing enum.
   // Now we need to ensure that it is the enum related to the given VJP.
@@ -612,23 +607,23 @@ BridgedStringRef BridgedType::getVJPNameOfAutodiffBranchTracingEnum() const {
   std::size_t idx = edName.rfind("__Pred__");
   assert(idx != std::string::npos);
 
-         // Before "__Pred__", we have "_bbX", where X is a number.
-         // The loop calculates the start position of X.
+  // Before "__Pred__", we have "_bbX", where X is a number.
+  // The loop calculates the start position of X.
   for (; idx != 0 && std::isdigit(edName[idx - 1]); --idx)
     ;
 
   assert(std::isdigit(edName[idx]));
   assert(!std::isdigit(edName[idx - 1]));
 
-         // The branch tracing enum decl name has the following components:
-         // 1) "_AD__";
-         // 2) MANGLING_PREFIX;
-         // 3) original function name;
-         // 4) "_bb";
-         // 5) X at position idx (see above);
-         // 6) the rest of the enum decl name.
-         // Thus, "_AD__", MANGLING_PREFIX and "_bb" must have total length less than
-         // idx.
+  // The branch tracing enum decl name has the following components:
+  // 1) "_AD__";
+  // 2) MANGLING_PREFIX;
+  // 3) original function name;
+  // 4) "_bb";
+  // 5) X at position idx (see above);
+  // 6) the rest of the enum decl name.
+  // Thus, "_AD__", MANGLING_PREFIX and "_bb" must have total length less than
+  // idx.
   std::size_t manglingPrefixSize = std::strlen(MANGLING_PREFIX_STR);
   assert(idx > 5 + manglingPrefixSize + 3);
   assert(std::string_view(edName.data() + idx - 3, 3) == "_bb");
@@ -637,17 +632,6 @@ BridgedStringRef BridgedType::getVJPNameOfAutodiffBranchTracingEnum() const {
   llvm::StringRef enumOrigFuncName =
       std::string_view(edName.data() + 5 + manglingPrefixSize,
                        idx - (5 + manglingPrefixSize + 3));
-
-  return enumOrigFuncName;
-}
-
-// See also ASTMangler::mangleAutoDiffGeneratedDeclaration.
-bool BridgedType::isAutodiffBranchTracingEnumInVJP(BridgedFunction vjp) const {
-  assert(vjp.isAutodiffVJP());
-  if (!isAutodiffBranchTracingEnum())
-    return false;
-
-  llvm::StringRef enumOrigFuncName = getVJPNameOfAutodiffBranchTracingEnum().unbridged();
 
   Demangle::Context Ctx;
   if (auto *root = Ctx.demangleSymbolAsNode(vjp.getFunction()->getName()))
