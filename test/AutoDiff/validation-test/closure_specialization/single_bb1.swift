@@ -149,6 +149,7 @@ AutoDiffClosureSpecSingleBBTests.testWithLeakChecking("Test1Explicit") {
   // CHECK4:       } // end sil function '$s3out8test4VjpySf5value_S2fc8pullbacktSfF'
 
   // CHECK4-LABEL: {{^}}// reverse-mode derivative of test4
+  // CHECK4-NEXT:  // Isolation: unspecified
   // CHECK4-NEXT:  sil [thunk] [heuristic_always_inline] @$s3out5test4yS2fFTJrSpSr : $@convention(thin) (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) {
   // CHECK4:         %[[#E10:]] = function_ref @$s3out8test4VjpySf5value_S2fc8pullbacktSfFADL_1tS2f_tF62$s16_Differentiation7_vjpSinySf5value_S2fc8pullbacktSfFS2fcfU_Sf0f1_g1_h4Cosyj1_klM2U_SfTf1ncnc_n : $@convention(thin) (Float, Float, Float, Float) -> Float
   // CHECK4:         %[[#E11:]] = partial_apply [callee_guaranteed] %[[#E10]](%0, %0, %0) : $@convention(thin) (Float, Float, Float, Float) -> Float

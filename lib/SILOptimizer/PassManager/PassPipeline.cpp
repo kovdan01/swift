@@ -1023,7 +1023,7 @@ SILPassPipelinePlan::getPerformancePassPipeline(const SILOptions &Options) {
   // high-level constructs like @_semantics calls.
   addMidLevelFunctionPipeline(P);
 
-  P.addAutodiffClosureSpecialization();
+  //P.addAutodiffClosureSpecialization();
 
   // Perform optimizations that specialize.
   addClosureSpecializePassPipeline(P);

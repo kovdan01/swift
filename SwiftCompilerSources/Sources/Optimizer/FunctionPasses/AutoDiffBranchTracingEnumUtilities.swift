@@ -42,11 +42,11 @@ struct ClosureInBTE : Equatable {
 }
 
 private func getCapturedArgTypesTupleForClosure(
-  closure: SingleValueInstruction, context: FunctionPassContext
+  closure: SingleValueInstruction, specializedBTEDict: [Type:Type], context: FunctionPassContext
 ) -> AST.`Type` {
   var capturedArgTypes = [AST.`Type`]()
   if let pai = closure as? PartialApplyInst {
-    capturedArgTypes.append(contentsOf: pai.arguments.map{ $0.type.rawType })
+    capturedArgTypes.append(contentsOf: pai.arguments.map{ specializedBTEDict[$0.type]?.rawType ?? $0.type.rawType })
   } else {
     assert(closure is ThinToThickFunctionInst)
   }
@@ -69,6 +69,16 @@ private func getBranchTracingEnumPreds(bteType: Type, in vjp: Function) -> Set<T
 
   var btePreds = Set<Type>()
   for enumCase in enumCases {
+    for payloadElementType in enumCase.payload!.tupleElements {
+      guard payloadElementType.isTuple else {
+        continue
+      }
+      for capturedArgType in payloadElementType.tupleElements {
+        if capturedArgType.isAnyBranchTracingEnum {
+          btePreds.insert(capturedArgType)
+        }
+      }
+    }
     guard let firstTupleElementType = enumCase.payload!.tupleElements.first else {
       continue
     }
@@ -234,15 +244,32 @@ private func getSpecializedParamDeclForEnumCase(
           type: getBranchTracingEnumLoweredType(ed: predED, vjp: topVJP),
           function: topVJP)
         newElementType = specializedBTEDict[predBTEType]!.rawType
+      } else if oldElementType.isTuple {
+        log("OLD ELEMENT TYPE: \(oldElementType)")
+        var newNestedTupleElementTypes = [AST.`Type`]()
+        for nestedTupleElementType in oldElementType.tupleElements {
+          guard nestedTupleElementType.isAnyBranchTracingEnum else {
+            newNestedTupleElementTypes.append(nestedTupleElementType.rawType)
+            continue
+          }
+          log("nestedTupleElementType TYPE: \(nestedTupleElementType)")
+          let ed = nestedTupleElementType.nominal as! EnumDecl
+          let bteTypeSIL = remapType(
+            type: getBranchTracingEnumLoweredType(ed: ed, vjp: topVJP),
+            function: topVJP)
+          log("nestedTupleElementType SPEC TYPE: \(specializedBTEDict[bteTypeSIL]!)")
+          newNestedTupleElementTypes.append(specializedBTEDict[bteTypeSIL]!.rawType)
+        }
+        newElementType = context.getTupleType(elements: newNestedTupleElementTypes)
       }
     } else {
       let closureInBTE = closuresInBTEForCaseAndPayloadIndex.first!
       newElementType = getCapturedArgTypesTupleForClosure(
-        closure: closureInBTE.closure, context: context)
+        closure: closureInBTE.closure, specializedBTEDict: specializedBTEDict, context: context)
       
       for closureInBTECurrent in closuresInBTEForCaseAndPayloadIndex {
         let newElementTypeCurrent = getCapturedArgTypesTupleForClosure(
-          closure: closureInBTE.closure, context: context)
+          closure: closureInBTE.closure, specializedBTEDict: specializedBTEDict, context: context)
         assert(newElementTypeCurrent == newElementType)
       }
 
@@ -372,12 +399,23 @@ private func autodiffSpecializeBranchTracingEnum(
   return newBTEType
 }
 
+private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
+  debugLog(prefix: prefix, "[ADCS] " + message())
+}
+
 // Specialize all branch tracing enums which store control-flow graph info in topVJP.
 func autodiffSpecializeBranchTracingEnums(
   topVJP: Function, topBTE: Type, closuresInBTE: [ClosureInBTE],
-  context: FunctionPassContext
+  dict: [Type:Type], context: FunctionPassContext
 ) -> [Type: Type] {
   let bteSpecializationQueue: [Type] = getBranchTracingEnumSpecializationQueue(topBTEType: topBTE, in: topVJP)
+
+  log("BTE SPEC QUEUE BEGIN topBTE \(topBTE)")
+  for (idx, bteQueueElem) in bteSpecializationQueue.enumerated() {
+    log("IDX \(idx): \(bteQueueElem.rawType.nominal as! EnumDecl)\n")
+  }
+  log("BTE SPEC QUEUE END topBTE \(topBTE)")
+
 
   var closuresInBTEByBTE = [Type: [ClosureInBTE]]()
   for closureInBTE in closuresInBTE {
@@ -385,7 +423,7 @@ func autodiffSpecializeBranchTracingEnums(
     closuresInBTEByBTE[enumType] = (closuresInBTEByBTE[enumType] ?? []) + [closureInBTE]
   }
 
-  var specializedBTEDict = [Type: Type]()
+  var specializedBTEDict = dict//[Type: Type]()
   for bteType in bteSpecializationQueue {
     let ed = bteType.nominal as! EnumDecl
     let remappedBTEType = remapType(

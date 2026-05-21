@@ -1168,7 +1168,18 @@ private func rewriteApplyDirectClosure(
     newArgs.append(op.value)
   }
   newArgs.append(contentsOf: extractedElements)
-  let vjpFn = closureInfo.closure.asSupportedClosureFn!
+  
+  var vjpFn = closureInfo.closure.asSupportedClosureFn!
+
+  if let pai = closureInfo.closure as? PartialApplyInst {
+    // MYTODO
+    assert(pai.arguments.filter { $0.type.isAnyBranchTracingEnum }.count <= 1)
+    if pai.arguments.filter { $0.type.isAnyBranchTracingEnum }.count != 0 {
+      let (specNestedPb, _) = getOrCreateNestedSpecializedFunctionCFG(paiOfNestedPullback: pai, context)
+      vjpFn = specNestedPb
+    }
+  }
+
   let newFri = builder.createFunctionRef(vjpFn)
   let newAi = builder.createApply(
     function: newFri, ai.substitutionMap, arguments: newArgs)
@@ -1321,6 +1332,8 @@ private func rewriteUsesOfPayloadItem(
   case let tei as TupleExtractInst:
     let builder = Builder(before: tei, context)
     let newTei = builder.createTupleExtract(tuple: tei.tuple, elementIndex: tei.fieldIndex)
+    
+    // MYTODO
     // let newRewriteCtx = PayloadRewriteContext(
     //   closureInfoArray: rewriteCtx.closureInfoArray, useTei: true,
     //   throwingSuccessor: rewriteCtx.throwingSuccessor)
@@ -1330,6 +1343,7 @@ private func rewriteUsesOfPayloadItem(
     //     result: newTei.results[0],
     //     rewriteCtx: newRewriteCtx, context)
     // }
+
     tei.replace(with: newTei, context)
 
   case let uedi as UncheckedEnumDataInst:
@@ -1340,6 +1354,7 @@ private func rewriteUsesOfPayloadItem(
     uedi.replace(with: newUedi, context)
 
   case let sei as SwitchEnumInst:
+    log("REWRITE SWITCH ENUM: \(sei)")
     let builder = Builder(before: sei, context)
     let newSEI = builder.createSwitchEnum(
       enum: result, cases: getEnumCasesForSwitchEnumInst(sei))
@@ -1355,6 +1370,7 @@ private func rewriteUsesOfPayloadItem(
 
   // TODO: also tuple_extract?
   case let dti as DestructureTupleInst:
+    log("REWRITE DESTRUCTURE TUPLE: \(dti)")
     let builder = Builder(before: dti, context)
     let newDti = builder.createDestructureTuple(tuple: result)
 
@@ -2472,9 +2488,8 @@ private func getSpecializedBTEDict(closuresInBTE: [ClosureInBTE], paiOfPullback:
   let pullback = paiOfPullback.referencedFunction!
   let enumTypeOfEntryBBArg = pullback.entryBlock.getBranchTracingEnumArg(vjp: vjp)!.type
 
-  var dict = autodiffSpecializeBranchTracingEnums(
-    topVJP: vjp, topBTE: enumTypeOfEntryBBArg,
-    closuresInBTE: closuresInBTE, context: context)
+  var dict = [Type:Type]()
+  
 
   for inst in vjp.instructions {
     guard let pai = inst as? PartialApplyInst,
@@ -2492,7 +2507,7 @@ private func getSpecializedBTEDict(closuresInBTE: [ClosureInBTE], paiOfPullback:
         log("GET SPEC DICT FOR FOREIGN VJP MIDDLE 02")
         let newDict = autodiffSpecializeBranchTracingEnums(
           topVJP: vjp, topBTE: arg.type,
-          closuresInBTE: closuresInBTE, context: context)
+          closuresInBTE: closuresInBTE, dict: dict, context: context)
         for (key, value) in newDict {
           log("SPEC DICT KEY: \(key.rawType.nominal as! EnumDecl)")
           log("SPEC DICT VALUE: \(value.rawType.nominal as! EnumDecl)")
@@ -2508,6 +2523,23 @@ private func getSpecializedBTEDict(closuresInBTE: [ClosureInBTE], paiOfPullback:
       }
     }
     log("GET SPEC DICT FOR FOREIGN VJP END")
+  }
+
+  let mainDict = autodiffSpecializeBranchTracingEnums(
+    topVJP: vjp, topBTE: enumTypeOfEntryBBArg,
+    closuresInBTE: closuresInBTE, dict: dict, context: context)
+
+  for (key, value) in mainDict {
+    log("SPEC DICT KEY: \(key.rawType.nominal as! EnumDecl)")
+    log("SPEC DICT VALUE: \(value.rawType.nominal as! EnumDecl)")
+    if dict[key] == nil {
+      log("SPEC DICT CURRENT: NIL")
+    } else {
+      log("SPEC DICT CURRENT: \(dict[key]!.rawType.nominal as! EnumDecl)")
+    }
+    // TODO: must pass
+    //assert(dict[key] == nil || value == dict[key]!)
+    dict[key] = value
   }
 
   return dict
@@ -2540,6 +2572,17 @@ private struct AutoDiffSpecializationInfo {
       withBranchTracingEnum: argAndIdxInPbPAI.1, argIdx: argAndIdxInPbPAI.0,
       from: pullback)
   }
+}
+
+private func specializedNestedCalleeNameCFG(
+  paiOfNestedPullback: PartialApplyInst, _ context: FunctionPassContext
+) -> String {
+  let argAndIdxInPbPAI = paiOfNestedPullback.arguments.enumerated().filter {
+    $0.1.type.isAnyBranchTracingEnum
+  }.singleElement!
+  return context.mangle(
+    withBranchTracingEnum: argAndIdxInPbPAI.1, argIdx: argAndIdxInPbPAI.0,
+    from: paiOfNestedPullback.referencedFunction!)
 }
 
 private func computeTopologicalBlockOrder(of function: Function) -> [BasicBlock] {
@@ -2610,6 +2653,57 @@ private func collectMatchingClosureInfos(
     }
   }
   return closureInfoArray
+}
+
+private func getOrCreateNestedSpecializedFunctionCFG(
+  paiOfNestedPullback: PartialApplyInst,
+  _ context: FunctionPassContext
+)
+  -> (function: Function, alreadyExists: Bool)
+{
+  let pb = paiOfNestedPullback.referencedFunction!
+  let vjp = paiOfNestedPullback.parentFunction
+
+  let specializedPbName = specializedNestedCalleeNameCFG(
+    paiOfNestedPullback: paiOfNestedPullback, context)
+
+  let specializedPbTry = context.lookupFunction(name: specializedPbName)
+  assert(specializedPbTry == nil)
+  
+  let enumTypeOfEntryBBArg = pb.entryBlock.getBranchTracingEnumArg()!.type
+  enumDict = autodiffSpecializationInfo.specializedBTEDict
+
+  let specializedParameters = getSpecializedParametersCFG(
+    basedOn: autodiffSpecializationInfo, pb: pb, enumType: enumTypeOfEntryBBArg, enumDict: enumDict,
+    context)
+
+  let specializedPb =
+    context.createSpecializedFunctionDeclaration(
+      from: pb, withName: specializedPbName,
+      withParams: specializedParameters,
+      makeBare: true)
+
+  log("BEFORE BUILD SPECIALIZED PB")
+
+  context.buildSpecializedFunction(
+    specializedFunction: specializedPb,
+    buildFn: { (specializedPb, specializedContext) in
+      var cloner = Cloner(cloneToEmptyFunction: specializedPb, specializedContext)
+      defer { cloner.deinitialize() }
+
+      cloneAndSpecializeFunctionBodyCFG(
+        using: &cloner, autodiffSpecializationInfo: autodiffSpecializationInfo, enumDict: enumDict)
+      // Cloning a whole function, even if it contains an `unreachable`, doesn't require lifetime completion.
+      specializedContext.setNeedCompleteLifetimes(to: false)
+    })
+
+  log("SPECIALIZED PB BEGIN")
+  log("\(specializedPb)")
+  log("SPECIALIZED PB END")
+
+  context.notifyNewFunction(function: specializedPb, derivedFrom: pb)
+
+  return (specializedPb, false)
 }
 
 private struct SpecializationInfoCFG {

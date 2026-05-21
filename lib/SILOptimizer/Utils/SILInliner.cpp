@@ -867,6 +867,18 @@ SILValue SILInlineCloner::borrowFunctionArgument(SILValue callArg,
 
 SILValue SILInlineCloner::moveFunctionArgument(SILValue callArg,
                                                unsigned index) {
+  llvm::errs() << "SILInlineCloner::moveFunctionArgument 00\n";
+  llvm::errs() << this->getCalleeFunction()->getName() << "\n";
+  llvm::errs() << "SILInlineCloner::moveFunctionArgument 01\n";
+  llvm::errs() << callArg << "\n";
+  llvm::errs() << "SILInlineCloner::moveFunctionArgument 02\n";
+  llvm::errs() << callArg->getFunction()->getName() << "\n";
+  llvm::errs() << "SILInlineCloner::moveFunctionArgument 03\n";
+  callArg->getFunction()->print(llvm::errs());
+  llvm::errs() << "\nSILInlineCloner::moveFunctionArgument 04\n";
+
+
+
   auto scope = scopeForArgument(Scope::None, callArg, index,
                                 Apply.getFunction(), getCalleeFunction());
   IsLexical_t isLexical;
@@ -882,7 +894,8 @@ SILValue SILInlineCloner::moveFunctionArgument(SILValue callArg,
     break;
   }
   SILBuilderWithScope beginBuilder(Apply.getInstruction(), getBuilder());
-  return beginBuilder.createMoveValue(Apply.getLoc(), callArg, isLexical);
+  //return beginBuilder.createMoveValue(Apply.getLoc(), callArg, isLexical);
+  return beginBuilder.emitMoveValueOperation(Apply.getLoc(), callArg, isLexical);
 }
 
 void SILInlineCloner::visitDebugValueInst(DebugValueInst *Inst) {
