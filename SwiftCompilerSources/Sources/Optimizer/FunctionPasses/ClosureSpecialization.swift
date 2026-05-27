@@ -519,11 +519,6 @@ private struct SpecializationInfo {
     cloner.cloneFunctionBody(from: callee)
 
     addMissingDestroysAtFunctionExits(for: clonedClosureArguments, cloner.context)
-
-    for rootClosure in rootClosures {
-      let clonedRootClosure = cloner.getClonedValue(of: rootClosure) as! PartialApplyInst
-      let _ = cloner.context.tryOptimizeApplyOfPartialApply(closure: clonedRootClosure)
-    }
   }
 
   private func addFunctionArgumentsWithoutClosures(using cloner: inout Cloner) {
