@@ -13,7 +13,7 @@
 import AST
 import SIL
 
-private let verbose = false
+private let verbose = true
 
 private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
   if verbose {
@@ -58,18 +58,75 @@ private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
 let closureSpecialization = FunctionPass(name: "closure-specialization") {
   (function: Function, context: FunctionPassContext) in
 
+  closureSpecializationImpl(function: function, context: context)
+
+  // guard function.hasOwnership else {
+  //   return
+  // }
+
+  // for inst in function.instructions {
+  //   if let apply = inst as? FullApplySite {
+  //     _ = trySpecialize(apply: apply, context)
+  //   }
+  // }
+  // if context.needFixStackNesting {
+  //   context.fixStackNesting(in: function)
+  // }
+}
+
+func closureSpecializationImpl(function: Function, context: FunctionPassContext) {
+  log("closureSpecializationImpl 00")
   guard function.hasOwnership else {
     return
   }
+  log("closureSpecializationImpl 01")
 
-  for inst in function.instructions {
-    if let apply = inst as? FullApplySite {
-      _ = trySpecialize(apply: apply, context)
+
+
+  var remainingSpecializationRounds = 5
+
+  repeat {
+    var changed = false
+
+    log("REMAINING ROUNDS: \(remainingSpecializationRounds)")
+
+    log("CALLER BEGIN")
+    log("\(function)")
+    log("CALLER END")
+
+    for inst in function.instructions {
+      if let apply = inst as? FullApplySite {
+        if let calleeFn = apply.referencedFunction {
+          log("CALLEE BEGIN")
+          log("\(calleeFn)")
+          log("CALLEE END")
+        }
+        log("closureSpecializationImpl 02 \(apply)")
+        if trySpecialize(apply: apply, context) {
+          changed = true
+        }
+      }
     }
-  }
-  if context.needFixStackNesting {
-    context.fixStackNesting(in: function)
-  }
+
+    if context.needFixStackNesting {
+      context.fixStackNesting(in: function)
+    }
+    if !changed {
+      break
+    }
+
+    remainingSpecializationRounds -= 1
+  } while remainingSpecializationRounds > 0
+
+  // for inst in function.instructions {
+  //   if let apply = inst as? FullApplySite {
+  //     log("closureSpecializationImpl 02 \(apply)")
+  //     _ = trySpecialize(apply: apply, context)
+  //   }
+  // }
+  // if context.needFixStackNesting {
+  //   context.fixStackNesting(in: function)
+  // }
 }
 
 /// AutoDiff Closure Specialization
@@ -182,6 +239,14 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
       break
     }
 
+    log("Remaining specialization rounds: \(remainingSpecializationRounds)")
+    log("VJP BEGIN")
+    log("\(function)")
+    log("VJP END")
+    log("PB BEGIN")
+    log("\(partialApplyInst.referencedFunction!)")
+    log("PB END")
+
     if trySpecialize(apply: partialApplyInst, context) {
       changed = true
     }
@@ -200,11 +265,14 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 // ===================== Utility functions and extensions ===================== //
 
 private func trySpecialize(apply: ApplySite, _ context: FunctionPassContext) -> Bool {
+  log("trySpecialize 00")
   guard isCalleeSpecializable(of: apply),
         let specialization = analyzeArguments(of: apply, context)
   else {
+    log("trySpecialize 01 isCalleeSpecializable = \(isCalleeSpecializable(of: apply))")
     return false
   }
+  log("trySpecialize 10")
 
   let specializedParameters = specialization.getSpecializedParameters()
 
@@ -520,10 +588,25 @@ private struct SpecializationInfo {
 
     addMissingDestroysAtFunctionExits(for: clonedClosureArguments, cloner.context)
 
+    var needSpecialize = false
+
     for rootClosure in rootClosures {
       let clonedRootClosure = cloner.getClonedValue(of: rootClosure) as! PartialApplyInst
-      let _ = cloner.context.tryOptimizeApplyOfPartialApply(closure: clonedRootClosure)
+      if cloner.context.tryOptimizeApplyOfPartialApply(closure: clonedRootClosure) {
+        needSpecialize = true
+      }
     }
+
+    //if needSpecialize {
+    log("TRY SPECIALIZE IN PULLBACK BEGIN")
+    log("\(cloner.targetFunction)")
+    log("TRY SPECIALIZE IN PULLBACK END")
+    let specializedPullback = cloner.targetFunction
+    closureSpecializationImpl(function: specializedPullback, context: cloner.context)
+    log("AFTER TRY SPECIALIZE IN PULLBACK BEGIN")
+    log("\(cloner.targetFunction)")
+    log("AFTER TRY SPECIALIZE IN PULLBACK END")
+    //}
   }
 
   private func addFunctionArgumentsWithoutClosures(using cloner: inout Cloner) {
