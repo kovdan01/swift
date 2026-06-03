@@ -144,19 +144,6 @@ void DifferentiableActivityInfo::propagateVaried(
         propagateVariedInwardsThroughProjections(indRes, i);
       for (auto semresArg : applySite.getAutoDiffSemanticResultArguments())
         propagateVariedInwardsThroughProjections(semresArg, i);
-
-      // NEW: Treat box arguments as inout-like semantic results. The callee may
-      // store a varied value into a captured mutable variable via project_box.
-      // Activity analysis is intraprocedural, so conservatively mark box
-      // arguments varied whenever any argument is varied. Post-call loads of the
-      // captured variable then become varied through the generic
-      // project_box/begin_access/load forwarding.
-      for (auto &argOper : applySite.getArgumentOperands()) {
-        SILValue arg = argOper.get();
-        if (arg->getType().is<SILBoxType>())
-          setVariedAndPropagateToUsers(arg, i);
-      }
-
       // Propagate variedness to apply site direct results.
       forEachApplyDirectResult(applySite, [&](SILValue directResult) {
         setVariedAndPropagateToUsers(directResult, i);

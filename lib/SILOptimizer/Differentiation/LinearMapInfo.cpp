@@ -453,18 +453,6 @@ bool LinearMapInfo::shouldDifferentiateApplySite(FullApplySite applySite) {
     if (activityInfo.isActive(inoutArg, config))
       return true;
 
-  // // NEW: Function applications with an active box argument should be
-  // // differentiated. A callee may write an active value into a captured mutable
-  // // variable through the box; semantically this is an inout-like result even
-  // // though the callee returns no formal results (e.g. a `() -> ()` closure that
-  // // mutates a captured `var`).
-  // for (auto &argOper : applySite.getArgumentOperands()) {
-  //   SILValue arg = argOper.get();
-  //   if (arg->getType().is<SILBoxType>() &&
-  //       activityInfo.isActive(arg, config))
-  //     return true;
-  // }
-
   bool hasActiveDirectResults = false;
   forEachApplyDirectResult(applySite, [&](SILValue directResult) {
     hasActiveDirectResults |= activityInfo.isActive(directResult, config);
