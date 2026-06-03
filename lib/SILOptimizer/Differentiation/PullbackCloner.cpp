@@ -2371,19 +2371,6 @@ bool PullbackCloner::Implementation::run() {
       if (isa_and_nonnull<BeginApplyInst>(v.getDefiningInstruction()))
         return false;
 
-      // Diagnose active values that are mutable variables captured by
-      // reference (`box` values), e.g. a `var` captured by a nested function
-      // or closure into which a derivative-dependent value is written.
-      // Differentiating this capture channel is not yet supported; emit a
-      // precise diagnostic rather than silently producing a zero derivative.
-      if (v->getType().is<SILBoxType>()) {
-        getContext().emitNondifferentiabilityError(
-            v, getInvoker(),
-            diag::autodiff_cannot_differentiate_writes_to_mutable_captures);
-        errorOccurred = true;
-        return true;
-      }
-
       // Check that active values are differentiable. Otherwise we may crash
       // later when tangent space is required, but not available.
       if (!getTangentSpace(remapType(type).getASTType())) {

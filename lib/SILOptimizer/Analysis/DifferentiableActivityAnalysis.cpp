@@ -144,16 +144,6 @@ void DifferentiableActivityInfo::propagateVaried(
         propagateVariedInwardsThroughProjections(indRes, i);
       for (auto semresArg : applySite.getAutoDiffSemanticResultArguments())
         propagateVariedInwardsThroughProjections(semresArg, i);
-
-      // A callee may write a varied value into a mutable variable captured by
-      // reference (a `box` argument) — e.g. a `var` captured by a nested
-      // function or closure. Model such box arguments as inout-like semantic
-      // results so that subsequent `project_box` + `load`s of the captured
-      // variable (and any results derived from them) become varied.
-      for (auto arg : applySite.getArgumentsWithoutIndirectResults())
-        if (arg->getType().is<SILBoxType>())
-          propagateVariedInwardsThroughProjections(arg, i);
-
       // Propagate variedness to apply site direct results.
       forEachApplyDirectResult(applySite, [&](SILValue directResult) {
         setVariedAndPropagateToUsers(directResult, i);
