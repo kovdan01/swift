@@ -159,6 +159,8 @@ private:
 
   bool errorOccurred = false;
 
+  bool diagnoseUnsupportedMutableClosureCaptures();
+
   ADContext &getContext() const { return vjpCloner.getContext(); }
   SILModule &getModule() const { return getContext().getModule(); }
   ASTContext &getASTContext() const { return getPullback().getASTContext(); }
@@ -2275,6 +2277,65 @@ bool PullbackCloner::run() {
   return foundError;
 }
 
+bool PullbackCloner::Implementation::
+    diagnoseUnsupportedMutableClosureCaptures() {
+  const auto &activityInfo = getActivityInfo();
+  const auto &config = getConfig();
+
+  for (auto &bb : getOriginal()) {
+    for (auto &inst : bb) {
+      if (!ApplySite::isa(&inst))
+        continue;
+      ApplySite as(&inst);
+
+      // Skip callees explicitly marked non-varying (e.g. `withoutDerivative`),
+      // mirroring activity analysis. Such calls legitimately produce
+      // non-varied results, so the zero-derivative shortcut is correct.
+      if (auto *fri = dyn_cast<FunctionRefInst>(as.getCallee())) {
+        auto *callee = fri->getReferencedFunction();
+        if (callee && callee->hasSemanticsAttr("autodiff.nonvarying"))
+          continue;
+      }
+
+      bool hasVariedArg = false;
+      SILValue mutableUsefulCapture;
+      for (auto &argOp : as.getArgumentOperands()) {
+        SILValue arg = argOp.get();
+        bool argVaried = activityInfo.isVaried(arg, config.parameterIndices);
+        if (argVaried)
+          hasVariedArg = true;
+
+        // A captured mutable variable is lowered either as a box
+        // (`${ var T }`, passed `@guaranteed`) or as an `@inout_aliasable`
+        // address argument. This EXCLUDES indirect results (`@out`),
+        // by-value indirect args (`@in`/`@in_guaranteed`), and ordinary
+        // `@inout` parameters -- none of which are the unsupported
+        // capture-write channel. (This is what made `withoutDerivative`,
+        // whose `@out` result is useful-but-not-varied, falsely match.)
+        bool isBoxCapture = arg->getType().is<SILBoxType>();
+        bool isInoutAliasableCapture =
+            as.getArgumentConvention(argOp) ==
+            SILArgumentConvention::Indirect_InoutAliasable;
+
+        // Useful-but-not-varied: if it were varied, this would be a normally
+        // differentiated call, not the hidden capture channel.
+        if ((isBoxCapture || isInoutAliasableCapture) && !argVaried &&
+            activityInfo.isUseful(arg, config.resultIndices))
+          mutableUsefulCapture = arg;
+      }
+
+      if (hasVariedArg && mutableUsefulCapture) {
+        getContext().emitNondifferentiabilityError(
+            &inst, getInvoker(),
+            diag::autodiff_cannot_differentiate_writes_to_mutable_captures);
+        errorOccurred = true;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 bool PullbackCloner::Implementation::run() {
   PrettyStackTraceSILFunction trace("generating pullback for", &getOriginal());
   auto &original = getOriginal();
@@ -2285,6 +2346,7 @@ bool PullbackCloner::Implementation::run() {
   // Collect original formal results.
   SmallVector<SILValue, 8> origFormalResults;
   collectAllFormalResultsInTypeOrder(original, origFormalResults);
+
   for (auto resultIndex : getConfig().resultIndices->getIndices()) {
     auto origResult = origFormalResults[resultIndex];
     // If original result is non-varied, it will always have a zero derivative.
@@ -2296,6 +2358,8 @@ bool PullbackCloner::Implementation::run() {
     // have no dominated active values; control flow differentiation does not
     // handle this case. See TF-876 for context.
     if (!getActivityInfo().isVaried(origResult, getConfig().parameterIndices)) {
+      if (diagnoseUnsupportedMutableClosureCaptures())
+        return true;
       emitZeroDerivativesForNonvariedResult(origResult);
       return false;
     }
