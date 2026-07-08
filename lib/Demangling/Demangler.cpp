@@ -3440,6 +3440,7 @@ NodePointer Demangler::demangleFunctionSpecialization() {
 
       auto ParamKind = (FunctionSigSpecializationParamKind)KindNd->getIndex();
       switch (ParamKind) {
+        case FunctionSigSpecializationParamKind::AutoDiffBranchTracingEnum:
         case FunctionSigSpecializationParamKind::ClosureProp:
         case FunctionSigSpecializationParamKind::EscapingClosureProp: {
           while (NodePointer Ty = popNode(Node::Kind::Type)) {
@@ -3501,6 +3502,12 @@ NodePointer Demangler::demangleFuncSpecParam(Node::Kind Kind) {
       return addChild(Param, createNode(
          Node::Kind::FunctionSignatureSpecializationParamPayload, (Node::IndexType)prevArgIdx));
     }
+    case 'b':
+      return addChild(
+          Param,
+          createNode(Node::Kind::FunctionSignatureSpecializationParamKind,
+                     uint64_t(FunctionSigSpecializationParamKind::
+                                  AutoDiffBranchTracingEnum)));
     case 'p': {
       for (;;) {
         switch (nextChar()) {

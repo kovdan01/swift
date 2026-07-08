@@ -21,7 +21,15 @@ struct ClosureInBTE : Equatable {
   let useInPayload: Operand
   let enumCase: EnumCase
 
-  var payloadTuple: TupleInst { useInPayload.instruction as! TupleInst }
+  var payloadTuple: TupleInst { 
+    // debugLog("AAAAAAAAAAA \(closure)\n")
+    // debugLog("BBBBBBBBBBB \(useInPayload)\n")
+    // debugLog("CCCCCCCCCCC \(useInPayload.instruction)\n")
+    if let ti = useInPayload.instruction as? TupleInst {
+      return ti
+    }
+    return useInPayload.instruction as! TupleInst
+  }
   var indexInPayload: Int { useInPayload.index }
 }
 
@@ -209,8 +217,18 @@ private func getSpecializedParamDeclForEnumCase(
   for (elementIndex, oldElementType) in oldPayloadTupleElementTypes.enumerated() {
     var newElementType: AST.`Type`
     let closuresInBTEForCaseAndPayloadIndex = closuresInBTEForCase.filter({ $0.indexInPayload == elementIndex })
-    assert(closuresInBTEForCaseAndPayloadIndex.count <= 1)
-    if let closureInBTE = closuresInBTEForCaseAndPayloadIndex.singleElement {
+
+    if closuresInBTEForCaseAndPayloadIndex.count > 1 {
+      let closureInBTE = closuresInBTEForCaseAndPayloadIndex.first!
+      for currentClosureInBTE in closuresInBTEForCaseAndPayloadIndex {
+        assert(closureInBTE.closure == currentClosureInBTE.closure)
+        assert(closureInBTE.subsetThunk == currentClosureInBTE.subsetThunk)
+        assert(closureInBTE.optionalWrapper == currentClosureInBTE.optionalWrapper)
+        assert(closureInBTE.enumCase == currentClosureInBTE.enumCase)
+      }
+    }
+    //assert(closuresInBTEForCaseAndPayloadIndex.count <= 1)
+    if let closureInBTE = closuresInBTEForCaseAndPayloadIndex.first {
       nameSuffix += "_\(elementIndex)"
       newElementType = getCapturedArgTypesTupleForClosure(
         closure: closureInBTE.closure, context: context)
