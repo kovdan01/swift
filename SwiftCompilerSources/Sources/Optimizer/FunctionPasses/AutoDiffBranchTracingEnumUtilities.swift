@@ -219,7 +219,6 @@ private func getSpecializedParamDeclForEnumCase(
         assert(closureInBTE.enumCase == currentClosureInBTE.enumCase)
       }
     }
-    //assert(closuresInBTEForCaseAndPayloadIndex.count <= 1)
     if let closureInBTE = closuresInBTEForCaseAndPayloadIndex.first {
       nameSuffix += "_\(elementIndex)"
       newElementType = getCapturedArgTypesTupleForClosure(

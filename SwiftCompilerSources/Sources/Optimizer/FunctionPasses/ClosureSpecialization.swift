@@ -271,7 +271,7 @@ private func validatePullbackBTEUsage(pb: Function, bteArg: Argument, vjp: Funct
       return false
     }
     log(
-      "Pullback: single-bb; TODO bteArgOfPb.uses.count() uses of branch tracing enum pullback argument found."
+      "Pullback: single-bb; \(bteArg.uses.count) uses of branch tracing enum pullback argument found."
     )
     if !bteArg.uses.isEmpty {
       log(
@@ -471,6 +471,21 @@ extension UseList {
     }
     return n
   }
+
+  var isAtLeastTwo : Bool {
+    !self.isEmpty && self.singleElement == nil
+  }
+
+  var isExactlyTwo : Bool {
+    var n = 0
+    for _ in self {
+      n += 1
+      if n > 2 {
+        return false
+      }
+    }
+    return n == 2
+  }
 }
 
 extension BasicBlockList {
@@ -517,7 +532,7 @@ enum PayloadValues {
 }
 
 func getPayloadValues(payload: Argument, vjp: Function) -> PayloadValues {
-  if payload.uses.count == 0 {
+  if payload.uses.isEmpty {
     return PayloadValues.ZeroUses
   }
 
@@ -528,7 +543,7 @@ func getPayloadValues(payload: Argument, vjp: Function) -> PayloadValues {
   {
     // TODO: do we need to check that results is not empty?
     if dti.operands[0].value.type.tupleElements.count != 0
-      && dti.results[0].type.isBranchTracingEnum(in: vjp) && dti.results[0].uses.count > 1
+      && dti.results[0].type.isBranchTracingEnum(in: vjp) && dti.results[0].uses.isAtLeastTwo
     {
       return PayloadValues.Unsupported
     }
@@ -547,7 +562,7 @@ func getPayloadValues(payload: Argument, vjp: Function) -> PayloadValues {
       return PayloadValues.Unsupported
     }
     if tei.fieldIndex == 0 && tei.type.isBranchTracingEnum(in: vjp)
-      && tei.results[0].uses.count > 1
+      && tei.results[0].uses.isAtLeastTwo
     {
       return PayloadValues.Unsupported
     }
@@ -558,7 +573,7 @@ func getPayloadValues(payload: Argument, vjp: Function) -> PayloadValues {
 }
 
 private func validateUncheckedEnumDataPayloadUse(uedi: UncheckedEnumDataInst, prefixFail: String) -> Bool {
-  if uedi.uses.count > 1 {
+  if uedi.uses.isAtLeastTwo {
     log(
       prefixFail
         + "unchecked_enum_data instr has \(uedi.uses.count) uses, but no more than 1 is allowed"
@@ -591,7 +606,7 @@ private func validateUncheckedEnumDataPayloadUse(uedi: UncheckedEnumDataInst, pr
 }
 
 private func validateConvertFunctionPayloadUse(cfi: ConvertFunctionInst, prefixFail: String) -> Bool {
-  if cfi.uses.count != 2 {
+  if !cfi.uses.isExactlyTwo {
     log(
       prefixFail
         + "expected exactly 2 uses of convert_function use of payload tuple element, found \(cfi.uses.count)"
@@ -645,7 +660,7 @@ private func validateConvertFunctionPayloadUse(cfi: ConvertFunctionInst, prefixF
 }
 
 private func validateBeginBorrowPayloadUse(bbi: BeginBorrowInst, prefixFail: String) -> Bool {
-  if bbi.uses.count != 2 {
+  if !bbi.uses.isExactlyTwo {
     log(
       prefixFail
         + "expected exactly 2 uses of begin_borrow use of payload tuple element, found \(bbi.uses.count)"
@@ -1100,7 +1115,7 @@ private func rewriteConvertFunctionUse(
   result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
 ) {
   if findMatchingClosureInfo(in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx) != nil {
-    assert(cfi.uses.count == 2)
+    assert(cfi.uses.isExactlyTwo)
     let bbiUse = cfi.uses.filter { $0.instruction as? BeginBorrowInst   != nil }.singleElement!
     let dviUse = cfi.uses.filter { $0.instruction as? DestroyValueInst  != nil }.getExactlyOneOrNil()
     let sriUse = cfi.uses.filter { $0.instruction as? StrongReleaseInst != nil }.getExactlyOneOrNil()
@@ -1129,7 +1144,7 @@ private func rewriteBeginBorrowUse(
   result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
 ) {
   if findMatchingClosureInfo(in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx) != nil {
-    assert(bbi.uses.count == 2)
+    assert(bbi.uses.isExactlyTwo)
     let aiUse = bbi.uses.filter { $0.instruction as? ApplyInst     != nil }.singleElement!
     let ebUse = bbi.uses.filter { $0.instruction as? EndBorrowInst != nil }.singleElement!
     context.erase(instruction: ebUse.instruction)
@@ -2353,19 +2368,16 @@ private extension Instruction {
   }
 
   fileprivate var asSupportedClosureFn: Function? {
-    switch self {
-    case let tttf as ThinToThickFunctionInst where tttf.callee is FunctionRefInst:
-      let fri = tttf.callee as! FunctionRefInst
-      return fri.referencedFunction
-    // TODO: figure out what to do with non-inout indirect arguments
-    // https://forums.swift.org/t/non-inout-indirect-types-not-supported-in-closure-specialization-optimization/70826
-    case let pai as PartialApplyInst
-    where pai.callee is FunctionRefInst && pai.hasOnlyInoutIndirectArguments:
-      let fri = pai.callee as! FunctionRefInst
-      return fri.referencedFunction
+    let callee: Value?
+    switch asSupportedClosure {
+    case let tttf as ThinToThickFunctionInst:
+      callee = tttf.callee
+    case let pai as PartialApplyInst:
+      callee = pai.callee
     default:
-      return nil
+      callee = nil
     }
+    return (callee as? FunctionRefInst)?.referencedFunction
   }
 
   var asSubsetThunk: PartialApplyInst? {
