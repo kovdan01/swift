@@ -191,12 +191,12 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 
   if !isSingleBB {
     log(
-      "\n\nTrying to run AutoDiff Closure Specialization pass on " + function.name.string)
+      "\n\nTrying to run AutoDiff Closure Specialization pass on \(function.name.string)")
     bteSpecEligibility = checkIfCanRun(vjp: function, context: context)
     if bteSpecEligibility != .ineligible {
       log(
-        "The VJP " + function.name.string
-          + " has passed the preliminary check. Proceeding to running the pass")
+        "The VJP \(function.name.string) has passed the preliminary check. Proceeding to running the pass"
+      )
     }
   }
 
@@ -233,12 +233,11 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 
     guard !autodiffSpecializationInfo.closuresInBTE.isEmpty else {
       log(
-        "Unable to detect closures to be specialized in " + function.name.string
-          + ", skipping the pass")
+        "Unable to detect closures to be specialized in \(function.name.string), skipping the pass")
       return
     }
 
-    multiBBHelper(
+    specializeAgainstBTE(
       autodiffSpecializationInfo: autodiffSpecializationInfo, function: function,
       context: context)
   }
@@ -693,7 +692,7 @@ private func logSpecializationStats(
   log(msg)
 }
 
-private func multiBBHelper(
+private func specializeAgainstBTE(
   autodiffSpecializationInfo: AutoDiffSpecializationInfo, function: Function,
   context: FunctionPassContext
 ) {
@@ -706,12 +705,12 @@ private func multiBBHelper(
   }
   let totalSupportedClosures = closuresSet.count
 
-  var enumDict = SpecBTEDict()
+  var enumDict = SpecializedBTEMap()
 
-  let specInfo = SpecializationInfoCFG()
+  let specInfo = PullbackSpecializationAgainstBTE()
 
   let (specializedFunction, alreadyExists) =
-    specInfo.getOrCreateSpecializedFunctionCFG(
+    specInfo.getOrCreatePullbackSpecializedAgainstBTE(
       basedOn: autodiffSpecializationInfo, enumDict: &enumDict, context)
 
   if !alreadyExists {
@@ -719,7 +718,7 @@ private func multiBBHelper(
       function: specializedFunction, derivedFrom: autodiffSpecializationInfo.pullback)
   }
 
-  rewriteApplyInstructionCFG(
+  rewriteVJPForBTEPullbackSpecialization(
     using: specializedFunction, autodiffSpecializationInfo: autodiffSpecializationInfo,
     enumDict: enumDict, context: context)
 
@@ -742,7 +741,7 @@ private func multiBBHelper(
 }
 
 private func replaceEnumInstructionsWithSpecializedTypes(
-  in vjp: Function, enumDict: SpecBTEDict, context: FunctionPassContext
+  in vjp: Function, enumDict: SpecializedBTEMap, context: FunctionPassContext
 ) {
   for inst in vjp.instructions {
     guard let ei = inst as? EnumInst else {
@@ -760,7 +759,7 @@ private func replaceEnumInstructionsWithSpecializedTypes(
 }
 
 private func specializeBTEBlockArgsInVJP(
-  vjp: Function, enumDict: SpecBTEDict, context: FunctionPassContext
+  vjp: Function, enumDict: SpecializedBTEMap, context: FunctionPassContext
 ) {
   for bb in vjp.blocks {
     guard let arg = bb.getBranchTracingEnumArg(vjp: vjp) else {
@@ -900,9 +899,9 @@ private func cleanupDeadOptionalEnums(in vjp: Function, context: FunctionPassCon
   } while wasUpdated
 }
 
-private func rewriteApplyInstructionCFG(
+private func rewriteVJPForBTEPullbackSpecialization(
   using specializedCallee: Function, autodiffSpecializationInfo: AutoDiffSpecializationInfo,
-  enumDict: SpecBTEDict,
+  enumDict: SpecializedBTEMap,
   context: FunctionPassContext
 ) {
   let vjp = autodiffSpecializationInfo.paiOfPullback.parentFunction
@@ -913,7 +912,8 @@ private func rewriteApplyInstructionCFG(
   specializeBTEBlockArgsInVJP(vjp: vjp, enumDict: enumDict, context: context)
 
   let _ = replacePullbackPartialApply(
-    pai: autodiffSpecializationInfo.paiOfPullback, specializedCallee: specializedCallee, context: context)
+    pai: autodiffSpecializationInfo.paiOfPullback, specializedCallee: specializedCallee,
+    context: context)
 
   rewritePayloadTuplesInVJP(vjp: vjp, closureInfos: &closureInfos, context: context)
 
@@ -935,9 +935,9 @@ private func findEnumsAndPayloadsInVjp(vjp: Function) -> [EnumInst: TupleInst] {
   return dict
 }
 
-private func getSpecializedParametersCFG(
+private func getParametersForPullbackSpecializedAgainstBTE(
   basedOn autodiffSpecializationInfo: AutoDiffSpecializationInfo, pb: Function, enumType: Type,
-  enumDict: SpecBTEDict,
+  enumDict: SpecializedBTEMap,
   _ context: FunctionPassContext
 ) -> [ParameterInfo] {
   let applySiteCallee = autodiffSpecializationInfo.pullback
@@ -2133,8 +2133,39 @@ private func getSuccessorForOptionalSome(arg: Argument) -> BasicBlock? {
   return sei.getUniqueSuccessor(forCaseIndex: Builder.optionalSomeCaseIndex)!
 }
 
-/// For a block reached via BTE dispatch, the enum being switched/projected and the case index
-/// that leads to `bb`.
+/// BTE payload-layout invariant used by the multi-basic-block specialization path.
+///
+/// For a pullback block reached by dispatching on a branch tracing enum, the corresponding payload tuple
+/// is interpreted as:
+///   1. payload element 0 is the predecessor branch tracing enum, if present;
+///   2. later payload elements may store closures;
+///   3. the last closure may be wrapped in `Optional`, for throwing-function support.
+///
+/// The specialized form keeps the same control-flow shape, but replaces closure payload elements with
+/// tuples of captured arguments.
+///
+/// Before:
+///   bbPred:
+///     %bte = ...
+///     switch_enum %bte, case #...bbK!enumelt: bbK, ...
+///
+///   bbK(%payload: $(predecessor: _AD__$...Pred..., ClosureType1, Optional<ClosureType2>)):
+///     %closure1 = tuple_extract %payload, 1
+///     %closure2opt = tuple_extract %payload, 2
+///
+/// After:
+///   bbPred:
+///     %bte_spec = ...
+///     switch_enum %bte_spec, case #...bbK!enumelt: bbK, ...
+///
+///   bbK(%payload: $(predecessor: _AD__$...Pred..._spec, Captures1, Optional<Captures2>)):
+///     %captures1 = tuple_extract %payload, 1
+///     %captures2opt = tuple_extract %payload, 2
+///
+/// The helpers below rely on this invariant when:
+/// - identifying which pullback block argument is a BTE payload tuple;
+/// - mapping pullback payload blocks back to the corresponding VJP payload tuple;
+/// - rewriting uses of specialized payload elements.
 private func predecessorEnumDispatch(into bb: BasicBlock, argIndex: Int)
   -> (enumValue: Value, enumType: Type, caseIndex: Int)?
 {
@@ -2390,7 +2421,7 @@ private func getSpecializedBTEDict(closuresInBTE: [ClosureInBTE], paiOfPullback:
     closuresInBTE: closuresInBTE, context: context)
 }
 
-private typealias SpecBTEDict = [Type: Type]
+private typealias SpecializedBTEMap = [Type: Type]
 
 private struct AutoDiffSpecializationInfo {
   let paiOfPullback: PartialApplyInst
@@ -2407,7 +2438,7 @@ private struct AutoDiffSpecializationInfo {
       closuresInBTE: self.closuresInBTE, paiOfPullback: self.paiOfPullback, context)
   }
 
-  func specializedCalleeNameCFG(_ context: FunctionPassContext) -> String {
+  func pullbackNameSpecializedAgainstBTE(_ context: FunctionPassContext) -> String {
     let argAndIdxInPbPAI = paiOfPullback.arguments.enumerated().filter {
       $0.1.type.isBranchTracingEnum(in: vjp)
     }.singleElement!
@@ -2444,7 +2475,8 @@ private func computeTopologicalBlockOrder(of function: Function) -> [BasicBlock]
 }
 
 private func findCorrespondingVJPPayloadTuple(
-  forBB bb: BasicBlock, argIndex: Int, enumToPayload: [EnumInst: TupleInst], enumDict: SpecBTEDict
+  forBB bb: BasicBlock, argIndex: Int, enumToPayload: [EnumInst: TupleInst],
+  enumDict: SpecializedBTEMap
 ) -> TupleInst? {
   guard let enumInfo = predecessorEnumDispatch(into: bb, argIndex: argIndex) else {
     return nil
@@ -2475,11 +2507,12 @@ private func collectMatchingClosureInfos(
   }
 }
 
-private struct SpecializationInfoCFG {
+private struct PullbackSpecializationAgainstBTE {
   typealias Cloner = SIL.Cloner<FunctionPassContext>
 
-  func getOrCreateSpecializedFunctionCFG(
-    basedOn autodiffSpecializationInfo: AutoDiffSpecializationInfo, enumDict: inout SpecBTEDict,
+  func getOrCreatePullbackSpecializedAgainstBTE(
+    basedOn autodiffSpecializationInfo: AutoDiffSpecializationInfo,
+    enumDict: inout SpecializedBTEMap,
     _ context: FunctionPassContext
   )
     -> (function: Function, alreadyExists: Bool)
@@ -2487,7 +2520,7 @@ private struct SpecializationInfoCFG {
     let pb = autodiffSpecializationInfo.pullback
     let vjp = autodiffSpecializationInfo.paiOfPullback.parentFunction
 
-    let specializedPbName = autodiffSpecializationInfo.specializedCalleeNameCFG(context)
+    let specializedPbName = autodiffSpecializationInfo.pullbackNameSpecializedAgainstBTE(context)
     if let specializedPb = context.lookupFunction(name: specializedPbName) {
       return (specializedPb, true)
     }
@@ -2495,8 +2528,9 @@ private struct SpecializationInfoCFG {
     let enumTypeOfEntryBBArg = pb.entryBlock.getBranchTracingEnumArg(vjp: vjp)!.type
     enumDict = autodiffSpecializationInfo.specializedBTEDict
 
-    let specializedParameters = getSpecializedParametersCFG(
-      basedOn: autodiffSpecializationInfo, pb: pb, enumType: enumTypeOfEntryBBArg, enumDict: enumDict,
+    let specializedParameters = getParametersForPullbackSpecializedAgainstBTE(
+      basedOn: autodiffSpecializationInfo, pb: pb, enumType: enumTypeOfEntryBBArg,
+      enumDict: enumDict,
       context)
 
     let specializedPb =
@@ -2511,7 +2545,9 @@ private struct SpecializationInfoCFG {
         var cloner = Cloner(cloneToEmptyFunction: specializedPb, specializedContext)
         defer { cloner.deinitialize() }
 
-        cloneAndSpecializeFunctionBodyCFG(using: &cloner, autodiffSpecializationInfo: autodiffSpecializationInfo, enumDict: enumDict)
+        cloneAndSpecializePullbackAgainstBTE(
+          using: &cloner, autodiffSpecializationInfo: autodiffSpecializationInfo, enumDict: enumDict
+        )
         // Cloning a whole function, even if it contains an `unreachable`, doesn't require lifetime completion.
         specializedContext.setNeedCompleteLifetimes(to: false)
       })
@@ -2521,12 +2557,12 @@ private struct SpecializationInfoCFG {
     return (specializedPb, false)
   }
 
-  func cloneAndSpecializeFunctionBodyCFG(
+  func cloneAndSpecializePullbackAgainstBTE(
     using cloner: inout Cloner, autodiffSpecializationInfo: AutoDiffSpecializationInfo,
-    enumDict: SpecBTEDict
+    enumDict: SpecializedBTEMap
   ) {
     let closureInfos = autodiffSpecializationInfo.closuresInBTE
-    self.cloneEntryBlockArgsWithoutOrigClosuresCFG(
+    self.cloneEntryBlockArgsForPullbackSpecializedAgainstBTE(
       using: &cloner, usingOrigCalleeAt: autodiffSpecializationInfo, enumDict: enumDict)
 
     cloner.cloneFunctionBody(
@@ -2634,8 +2670,10 @@ private struct SpecializationInfoCFG {
     }
   }
 
-  private func cloneEntryBlockArgsWithoutOrigClosuresCFG(
-    using cloner: inout Cloner, usingOrigCalleeAt autodiffSpecializationInfo: AutoDiffSpecializationInfo, enumDict: SpecBTEDict
+  private func cloneEntryBlockArgsForPullbackSpecializedAgainstBTE(
+    using cloner: inout Cloner,
+    usingOrigCalleeAt autodiffSpecializationInfo: AutoDiffSpecializationInfo,
+    enumDict: SpecializedBTEMap
   ) {
     let pb = autodiffSpecializationInfo.pullback
     let enumType = pb.entryBlock.getBranchTracingEnumArg(
