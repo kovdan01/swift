@@ -671,6 +671,28 @@ func checkIfCanRunForPayloadValues(
   return true
 }
 
+private func logSpecializationStats(
+  closuresSet: Set<SingleValueInstruction>,
+  totalSupportedClosures: Int,
+  function: Function
+) {
+  var totalClosures: Int = 0
+  for inst in function.instructions {
+    let paiOpt = inst as? PartialApplyInst
+    let tttfOpt = inst as? ThinToThickFunctionInst
+    if paiOpt != nil || tttfOpt != nil {
+      totalClosures += 1
+    }
+  }
+
+  let specializedClosures = totalSupportedClosures - closuresSet.count
+  var msg =
+    "Specialized \(specializedClosures) out of \(totalSupportedClosures) supported closures "
+  msg += "(rate \(Float(specializedClosures) / Float(totalSupportedClosures))). "
+  msg += "Total number of closures is \(totalClosures)"
+  log(msg)
+}
+
 private func multiBBHelper(
   autodiffSpecializationInfo: AutoDiffSpecializationInfo, function: Function,
   context: FunctionPassContext
@@ -683,15 +705,6 @@ private func multiBBHelper(
     closuresSet.insert(closureInfo.closure)
   }
   let totalSupportedClosures = closuresSet.count
-
-  var totalClosures: Int = 0
-  for inst in function.instructions {
-    let paiOpt = inst as? PartialApplyInst
-    let tttfOpt = inst as? ThinToThickFunctionInst
-    if paiOpt != nil || tttfOpt != nil {
-      totalClosures += 1
-    }
-  }
 
   var enumDict = SpecBTEDict()
 
@@ -710,25 +723,22 @@ private func multiBBHelper(
     using: specializedFunction, autodiffSpecializationInfo: autodiffSpecializationInfo,
     enumDict: enumDict, context: context)
 
-  var specializedClosures: Int = 0
   var oldSetSize = 0
   repeat {
     oldSetSize = closuresSet.count
     let closures = Array(closuresSet)
     for closure in closures {
       if closure.uses.isEmpty {
-        specializedClosures += 1
         context.erase(instruction: closure)
         closuresSet.remove(closure)
       }
     }
   } while oldSetSize != closuresSet.count
 
-  var msg =
-    "Specialized \(specializedClosures) out of \(totalSupportedClosures) supported closures "
-  msg += "(rate \(Float(specializedClosures) / Float(totalSupportedClosures))). "
-  msg += "Total number of closures is \(totalClosures)"
-  log(msg)
+  logSpecializationStats(
+    closuresSet: closuresSet,
+    totalSupportedClosures: totalSupportedClosures,
+    function: function)
 }
 
 private func replaceEnumInstructionsWithSpecializedTypes(
@@ -952,14 +962,9 @@ private func getSpecializedParametersCFG(
 }
 
 private func getEnumCasesForSwitchEnumInst(_ sei: SwitchEnumInst) -> [(Int, BasicBlock)] {
-  var enumCases = [(Int, BasicBlock)]()
-  for i in 0..<sei.numCases {
-    let bbForCase = sei.getUniqueSuccessor(forCaseIndex: i)
-    if bbForCase != nil {
-      enumCases.append((i, bbForCase!))
-    }
+  (0..<sei.numCases).compactMap { i in
+    sei.getUniqueSuccessor(forCaseIndex: i).map { (i, $0) }
   }
-  return enumCases
 }
 
 private struct PayloadRewriteContext {
@@ -2517,19 +2522,25 @@ private struct SpecializationInfoCFG {
   }
 
   func cloneAndSpecializeFunctionBodyCFG(
-    using cloner: inout Cloner, autodiffSpecializationInfo: AutoDiffSpecializationInfo, enumDict: SpecBTEDict
+    using cloner: inout Cloner, autodiffSpecializationInfo: AutoDiffSpecializationInfo,
+    enumDict: SpecBTEDict
   ) {
     let closureInfos = autodiffSpecializationInfo.closuresInBTE
     self.cloneEntryBlockArgsWithoutOrigClosuresCFG(
       using: &cloner, usingOrigCalleeAt: autodiffSpecializationInfo, enumDict: enumDict)
 
-    cloner.cloneFunctionBody(from: autodiffSpecializationInfo.pullback, entryBlockArguments: Array(cloner.targetFunction.entryBlock.arguments))
+    cloner.cloneFunctionBody(
+      from: autodiffSpecializationInfo.pullback,
+      entryBlockArguments: Array(cloner.targetFunction.entryBlock.arguments))
 
     let bbQueue = computeTopologicalBlockOrder(of: cloner.targetFunction)
+    let vjp = autodiffSpecializationInfo.paiOfPullback.parentFunction
+    let enumToPayload = findEnumsAndPayloadsInVjp(vjp: vjp)
 
     for bb in bbQueue {
       // With single-bb, we've ensured that there are no uses of BTE arg, so no manipulation required
-      if bb == cloner.targetFunction.entryBlock && cloner.targetFunction.blocks.singleElement == nil {
+      if bb == cloner.targetFunction.entryBlock && cloner.targetFunction.blocks.singleElement == nil
+      {
         let bteArg = bb.getBranchTracingEnumArg(
           vjp: autodiffSpecializationInfo.paiOfPullback.parentFunction)!
         let sei = bteArg.uses.singleUse!.instruction as! SwitchEnumInst
@@ -2549,8 +2560,6 @@ private struct SpecializationInfoCFG {
         continue
       }
 
-      let enumToPayload = findEnumsAndPayloadsInVjp(
-        vjp: autodiffSpecializationInfo.paiOfPullback.parentFunction)
       let tiInVjp = findCorrespondingVJPPayloadTuple(
         forBB: bb, argIndex: arg.index, enumToPayload: enumToPayload, enumDict: enumDict)
 
@@ -2572,7 +2581,8 @@ private struct SpecializationInfoCFG {
       if let successor = throwingSuccessor {
         let oldArg = successor.arguments.singleElement!
         let newArg = specializeOptionalBBArgInPullback(
-          bb: successor, newOptionalType: enumCase.payload!.tupleElements.last!, context: cloner.context)
+          bb: successor, newOptionalType: enumCase.payload!.tupleElements.last!,
+          context: cloner.context)
         oldArg.uses.replaceAll(with: newArg, cloner.context)
         successor.eraseArgument(at: oldArg.index, cloner.context)
       }
