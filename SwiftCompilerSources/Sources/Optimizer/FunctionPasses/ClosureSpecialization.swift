@@ -524,6 +524,147 @@ enum PayloadValues {
   case unsupported
 }
 
+private enum PayloadUseShape {
+  case apply(ApplyInst)
+  case destroyValue(DestroyValueInst)
+  case uncheckedEnumData(UncheckedEnumDataInst)
+  case convertFunction(ConvertFunctionInst)
+  case beginBorrow(BeginBorrowInst)
+  case switchEnum(SwitchEnumInst)
+  case tupleExtract(TupleExtractInst)
+}
+
+private enum ClosurePayloadUseShape {
+  case apply(ApplyInst)
+  case beginBorrow(applyUse: Operand, endBorrowUse: Operand)
+  case convertFunction(beginBorrowUse: Operand, destroyValueUse: Operand)
+}
+
+private func classifyUncheckedEnumDataPayloadUse(_ uedi: UncheckedEnumDataInst) -> Operand? {
+  if uedi.uses.isAtLeastTwo {
+    return nil
+  }
+  if let singleUse = uedi.uses.singleUse {
+    guard singleUse.instruction as? BranchInst != nil else {
+      return nil
+    }
+    return singleUse
+  }
+  return nil
+}
+
+private func classifyConvertFunctionPayloadUse(_ cfi: ConvertFunctionInst)
+  -> (beginBorrowUse: Operand, destroyValueUse: Operand)?
+{
+  guard cfi.uses.isExactlyTwo else {
+    return nil
+  }
+
+  var beginBorrowUse: Operand? = nil
+  var destroyValueUse: Operand? = nil
+  for cfiUse in cfi.uses {
+    switch cfiUse.instruction {
+    case _ as BeginBorrowInst:
+      guard beginBorrowUse == nil else {
+        return nil
+      }
+      beginBorrowUse = cfiUse
+    case _ as DestroyValueInst:
+      guard destroyValueUse == nil else {
+        return nil
+      }
+      destroyValueUse = cfiUse
+    default:
+      return nil
+    }
+  }
+
+  assert(beginBorrowUse != nil)
+  assert(destroyValueUse != nil)
+  return (beginBorrowUse!, destroyValueUse!)
+}
+
+private func classifyBeginBorrowPayloadUse(_ bbi: BeginBorrowInst)
+  -> (applyUse: Operand, endBorrowUse: Operand)?
+{
+  guard bbi.uses.isExactlyTwo else {
+    return nil
+  }
+
+  var applyUse: Operand? = nil
+  var endBorrowUse: Operand? = nil
+  for bbiUse in bbi.uses {
+    switch bbiUse.instruction {
+    case _ as ApplyInst:
+      guard applyUse == nil else {
+        return nil
+      }
+      applyUse = bbiUse
+    case _ as EndBorrowInst:
+      guard endBorrowUse == nil else {
+        return nil
+      }
+      endBorrowUse = bbiUse
+    default:
+      return nil
+    }
+  }
+
+  assert(applyUse != nil)
+  assert(endBorrowUse != nil)
+  return (applyUse!, endBorrowUse!)
+}
+
+private func classifyClosurePayloadUse(_ use: Operand) -> ClosurePayloadUseShape? {
+  switch use.instruction {
+  case let ai as ApplyInst:
+    return .apply(ai)
+  case let bbi as BeginBorrowInst:
+    guard let classified = classifyBeginBorrowPayloadUse(bbi) else {
+      return nil
+    }
+    return .beginBorrow(
+      applyUse: classified.applyUse,
+      endBorrowUse: classified.endBorrowUse)
+  case let cfi as ConvertFunctionInst:
+    guard let classified = classifyConvertFunctionPayloadUse(cfi) else {
+      return nil
+    }
+    return .convertFunction(
+      beginBorrowUse: classified.beginBorrowUse,
+      destroyValueUse: classified.destroyValueUse)
+  default:
+    return nil
+  }
+}
+
+private func classifyPayloadUse(_ use: Operand) -> PayloadUseShape? {
+  switch use.instruction {
+  case let ai as ApplyInst:
+    return .apply(ai)
+  case let dvi as DestroyValueInst:
+    return .destroyValue(dvi)
+  case let uedi as UncheckedEnumDataInst:
+    return classifyUncheckedEnumDataPayloadUse(uedi) == nil && uedi.uses.singleUse != nil
+      ? nil
+      : .uncheckedEnumData(uedi)
+  case let cfi as ConvertFunctionInst:
+    return classifyConvertFunctionPayloadUse(cfi) == nil && !cfi.uses.isEmpty
+      ? nil
+      : .convertFunction(cfi)
+  case let bbi as BeginBorrowInst:
+    return classifyBeginBorrowPayloadUse(bbi) == nil && !bbi.uses.isEmpty
+      ? nil
+      : .beginBorrow(bbi)
+  case let sei as SwitchEnumInst:
+    return .switchEnum(sei)
+  case let tei as TupleExtractInst:
+    return .tupleExtract(tei)
+  default:
+    return nil
+  }
+}
+
 func getPayloadValues(payload: Argument, vjp: Function) -> PayloadValues {
   if payload.uses.isEmpty {
     return PayloadValues.zeroUses
@@ -565,74 +706,27 @@ func getPayloadValues(payload: Argument, vjp: Function) -> PayloadValues {
   return PayloadValues.tupleExtract(results)
 }
 
-private func validateUncheckedEnumDataPayloadUse(uedi: UncheckedEnumDataInst, prefixFail: String) -> Bool {
-  if uedi.uses.isAtLeastTwo {
-    return false
-  }
-  if let singleUse = uedi.uses.singleUse {
-    if singleUse.instruction as? BranchInst == nil {
-      return false
-    }
-  }
-  return true
+private func validateUncheckedEnumDataPayloadUse(uedi: UncheckedEnumDataInst, prefixFail: String)
+  -> Bool
+{
+  classifyUncheckedEnumDataPayloadUse(uedi) != nil || uedi.uses.isEmpty
 }
 
 private func validateConvertFunctionPayloadUse(cfi: ConvertFunctionInst, prefixFail: String) -> Bool
 {
-  if !cfi.uses.isExactlyTwo {
-    return false
-  }
-  var bbiUse: Operand? = nil
-  var dviUse: Operand? = nil
-  for cfiUse in cfi.uses {
-    switch cfiUse.instruction {
-    case _ as BeginBorrowInst:
-      if bbiUse != nil {
-        return false
-      }
-      bbiUse = cfiUse
-    case _ as DestroyValueInst:
-      if dviUse != nil {
-        return false
-      }
-      dviUse = cfiUse
-    default:
-      return false
-    }
-  }
-  assert(dviUse != nil)
-  assert(bbiUse != nil)
-  return true
+  classifyConvertFunctionPayloadUse(cfi) != nil
 }
 
 private func validateBeginBorrowPayloadUse(bbi: BeginBorrowInst, prefixFail: String) -> Bool {
+  if classifyBeginBorrowPayloadUse(bbi) != nil {
+    return true
+  }
   if !bbi.uses.isExactlyTwo {
     for (idx, bbiUse) in bbi.uses.enumerated() {
       log("use \(idx): \(bbiUse)")
     }
-    return false
   }
-  var aiUse: Operand? = nil
-  var ebUse: Operand? = nil
-  for bbiUse in bbi.uses {
-    switch bbiUse.instruction {
-    case _ as EndBorrowInst:
-      if ebUse != nil {
-        return false
-      }
-      ebUse = bbiUse
-    case _ as ApplyInst:
-      if aiUse != nil {
-        return false
-      }
-      aiUse = bbiUse
-    default:
-      return false
-    }
-  }
-  assert(ebUse != nil)
-  assert(aiUse != nil)
-  return true
+  return false
 }
 
 func checkIfCanRunForPayloadValues(
@@ -640,35 +734,36 @@ func checkIfCanRunForPayloadValues(
 ) -> Bool {
   for result in results {
     for use in result.uses {
-      switch use.instruction {
-      case _ as ApplyInst:
-        ()
-      case _ as DestroyValueInst:
-        ()
-      case let uedi as UncheckedEnumDataInst:
-        if !validateUncheckedEnumDataPayloadUse(uedi: uedi, prefixFail: prefixFail) {
-          return false
-        }
-      case let cfi as ConvertFunctionInst:
-        if !validateConvertFunctionPayloadUse(cfi: cfi, prefixFail: prefixFail) {
-          return false
-        }
-      case let bbi as BeginBorrowInst:
-        if !validateBeginBorrowPayloadUse(bbi: bbi, prefixFail: prefixFail) {
-          return false
-        }
-      case _ as SwitchEnumInst:
-        ()
-      case _ as TupleExtractInst:
-        ()
-
-      default:
+      guard let payloadUseShape = classifyPayloadUse(use) else {
         log(
           prefixFail + "unexpected use of an element of the tuple being argument of pullback "
             + pb.name.string + " basic block " + pbBB.shortDescription)
         log("  result: \(result)")
         log("  use.instruction: \(use.instruction)")
         return false
+      }
+
+      switch payloadUseShape {
+      case .apply:
+        ()
+      case .destroyValue:
+        ()
+      case .uncheckedEnumData(let uedi):
+        if !validateUncheckedEnumDataPayloadUse(uedi: uedi, prefixFail: prefixFail) {
+          return false
+        }
+      case .convertFunction(let cfi):
+        if !validateConvertFunctionPayloadUse(cfi: cfi, prefixFail: prefixFail) {
+          return false
+        }
+      case .beginBorrow(let bbi):
+        if !validateBeginBorrowPayloadUse(bbi: bbi, prefixFail: prefixFail) {
+          return false
+        }
+      case .switchEnum:
+        ()
+      case .tupleExtract:
+        ()
       }
     }
   }
@@ -1071,13 +1166,13 @@ private func rewriteConvertFunctionUse(
   result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
 ) {
   if findMatchingClosureInfo(in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx) != nil {
-    assert(cfi.uses.isExactlyTwo)
-    let bbiUse = cfi.uses.filter { $0.instruction as? BeginBorrowInst   != nil }.singleElement!
-    let dviUse = cfi.uses.filter { $0.instruction as? DestroyValueInst  != nil }.singleElementAssumingAtMostOne
-    assert(dviUse != nil)
-    context.erase(instruction: dviUse!.instruction)
+    guard let classified = classifyConvertFunctionPayloadUse(cfi) else {
+      assert(false)
+      return
+    }
+    context.erase(instruction: classified.destroyValueUse.instruction)
     rewriteUsesOfPayloadItem(
-      use: bbiUse, resultIdx: resultIdx,
+      use: classified.beginBorrowUse, resultIdx: resultIdx,
       result: result, rewriteCtx: rewriteCtx, context)
     context.erase(instruction: cfi)
   } else {
@@ -1095,12 +1190,13 @@ private func rewriteBeginBorrowUse(
   result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
 ) {
   if findMatchingClosureInfo(in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx) != nil {
-    assert(bbi.uses.isExactlyTwo)
-    let aiUse = bbi.uses.filter { $0.instruction as? ApplyInst     != nil }.singleElement!
-    let ebUse = bbi.uses.filter { $0.instruction as? EndBorrowInst != nil }.singleElement!
-    context.erase(instruction: ebUse.instruction)
+    guard let classified = classifyBeginBorrowPayloadUse(bbi) else {
+      assert(false)
+      return
+    }
+    context.erase(instruction: classified.endBorrowUse.instruction)
     rewriteUsesOfPayloadItem(
-      use: aiUse, resultIdx: resultIdx,
+      use: classified.applyUse, resultIdx: resultIdx,
       result: result, rewriteCtx: rewriteCtx, context)
     context.erase(instruction: bbi)
   } else {
@@ -1176,8 +1272,11 @@ private func rewriteApplyUse(
   result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
 ) {
   let builder = Builder(before: ai, context)
-  if let closureInfo = findMatchingClosureInfo(in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx) {
-    let extractedElements = extractTupleElements(from: result, useTupleExtract: rewriteCtx.useTei, builder: builder)
+  if let closureInfo = findMatchingClosureInfo(
+    in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx)
+  {
+    let extractedElements = extractTupleElements(
+      from: result, useTupleExtract: rewriteCtx.useTei, builder: builder)
     if closureInfo.subsetThunk == nil {
       rewriteApplyDirectClosure(
         ai: ai, closureInfo: closureInfo, extractedElements: extractedElements,
@@ -1214,40 +1313,45 @@ private func rewriteUsesOfPayloadItem(
   use: Operand, resultIdx: Int,
   result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
 ) {
-  switch use.instruction {
-  case let cfi as ConvertFunctionInst:
+  guard let payloadUseShape = classifyPayloadUse(use) else {
+    assert(false)
+    return
+  }
+
+  switch payloadUseShape {
+  case .convertFunction(let cfi):
     rewriteConvertFunctionUse(
       cfi: cfi, resultIdx: resultIdx,
       result: result, rewriteCtx: rewriteCtx, context)
 
-  case let bbi as BeginBorrowInst:
+  case .beginBorrow(let bbi):
     rewriteBeginBorrowUse(
       bbi: bbi, resultIdx: resultIdx,
       result: result, rewriteCtx: rewriteCtx, context)
 
-  case let ai as ApplyInst:
+  case .apply(let ai):
     rewriteApplyUse(
       ai: ai, resultIdx: resultIdx,
       result: result, rewriteCtx: rewriteCtx, context)
 
-  case let dvi as DestroyValueInst:
+  case .destroyValue(let dvi):
     rewriteDestroyValueUse(
       dvi: dvi, resultIdx: resultIdx,
       result: result, rewriteCtx: rewriteCtx, context)
 
-  case let tei as TupleExtractInst:
+  case .tupleExtract(let tei):
     let builder = Builder(before: tei, context)
     let newTei = builder.createTupleExtract(tuple: tei.tuple, elementIndex: tei.fieldIndex)
     tei.replace(with: newTei, context)
 
-  case let uedi as UncheckedEnumDataInst:
+  case .uncheckedEnumData(let uedi):
     let builder = Builder(before: uedi, context)
     let newUedi = builder.createUncheckedEnumData(
       enum: result, caseIndex: uedi.caseIndex,
       resultType: result.type.getEnumCases(in: uedi.parentFunction)![uedi.caseIndex]!.payload!)
     uedi.replace(with: newUedi, context)
 
-  case let sei as SwitchEnumInst:
+  case .switchEnum(let sei):
     let builder = Builder(before: sei, context)
     builder.createSwitchEnum(
       enum: result, cases: getEnumCasesForSwitchEnumInst(sei))
@@ -1257,12 +1361,11 @@ private func rewriteUsesOfPayloadItem(
       let arg = successor.arguments.singleElement!
       let argUses = Array(arg.uses)
       for argUse in argUses {
-        rewriteUsesOfPayloadItem(use: argUse, resultIdx: resultIdx, result: arg, rewriteCtx: rewriteCtx, context)
+        rewriteUsesOfPayloadItem(
+          use: argUse, resultIdx: resultIdx,
+          result: arg, rewriteCtx: rewriteCtx, context)
       }
     }
-
-  default:
-    assert(false)
   }
 }
 
@@ -2618,6 +2721,23 @@ private struct PullbackSpecializationAgainstBTE {
     return (specializedPb, false)
   }
 
+  private func rewriteProjectedPayloadValues(
+    projections: [(resultIdx: Int, oldResultUses: [Operand], replacementValue: Value)],
+    rewriteCtx: PayloadRewriteContext,
+    context: FunctionPassContext
+  ) {
+    for projection in projections {
+      for use in projection.oldResultUses {
+        rewriteUsesOfPayloadItem(
+          use: use,
+          resultIdx: projection.resultIdx,
+          result: projection.replacementValue,
+          rewriteCtx: rewriteCtx,
+          context)
+      }
+    }
+  }
+
   func cloneAndSpecializePullbackAgainstBTE(
     using cloner: inout Cloner, autodiffSpecializationInfo: AutoDiffSpecializationInfo,
     enumDict: SpecializedBTEMap
@@ -2666,6 +2786,7 @@ private struct PullbackSpecializationAgainstBTE {
         }
         return []
       }()
+
       let newArg = specializePayloadTupleBBArgInPullback(
         arg: arg, enumCase: enumCase, context: cloner.context)
       arg.uses.replaceAll(with: newArg, cloner.context)
@@ -2684,50 +2805,62 @@ private struct PullbackSpecializationAgainstBTE {
         successor.eraseArgument(at: oldArg.index, cloner.context)
       }
 
-      if newArg.uses.singleUse != nil
-        && newArg.uses.singleUse!.instruction as? DestructureTupleInst != nil
+      if let singleUse = newArg.uses.singleUse,
+        let oldDti = singleUse.instruction as? DestructureTupleInst
       {
-        let oldDti = newArg.uses.singleUse!.instruction as! DestructureTupleInst
         let builderBeforeOldDti = Builder(before: oldDti, cloner.context)
         let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
 
         let rewriteCtx = PayloadRewriteContext(
-          closureInfoArray: closureInfoArray, useTei: false,
+          closureInfoArray: closureInfoArray,
+          useTei: false,
           throwingSuccessor: throwingSuccessor)
-        for (resultIdx, result) in oldDti.results.enumerated() {
-          let resultUses = Array(result.uses)
-          for use in resultUses {
-            rewriteUsesOfPayloadItem(
-              use: use, resultIdx: resultIdx,
-              result: newDti.results[resultIdx],
-              rewriteCtx: rewriteCtx, cloner.context)
-          }
+
+        let projections = oldDti.results.enumerated().map { resultIdx, result in
+          (
+            resultIdx: resultIdx,
+            oldResultUses: Array(result.uses),
+            replacementValue: newDti.results[resultIdx] as Value
+          )
         }
+
+        rewriteProjectedPayloadValues(
+          projections: projections,
+          rewriteCtx: rewriteCtx,
+          context: cloner.context)
 
         cloner.context.erase(instruction: oldDti)
         continue
       }
 
       let rewriteCtx = PayloadRewriteContext(
-        closureInfoArray: closureInfoArray, useTei: true,
+        closureInfoArray: closureInfoArray,
+        useTei: true,
         throwingSuccessor: throwingSuccessor)
+
       let newArgUses = Array(newArg.uses)
+      var projections = [(resultIdx: Int, oldResultUses: [Operand], replacementValue: Value)]()
+
       for newArgUse in newArgUses {
         let oldTei = newArgUse.instruction as! TupleExtractInst
         let builderBeforeOldTei = Builder(before: oldTei, cloner.context)
         let newTei = builderBeforeOldTei.createTupleExtract(
           tuple: oldTei.tuple, elementIndex: oldTei.fieldIndex)
 
-        let oldTeiResultUses = Array(oldTei.results[0].uses)
-        for use in oldTeiResultUses {
-          rewriteUsesOfPayloadItem(
-            use: use, resultIdx: oldTei.fieldIndex,
-            result: newTei.results[0],
-            rewriteCtx: rewriteCtx, cloner.context)
-        }
+        projections.append(
+          (
+            resultIdx: oldTei.fieldIndex,
+            oldResultUses: Array(oldTei.results[0].uses),
+            replacementValue: newTei.results[0]
+          ))
 
         oldTei.replace(with: newTei, cloner.context)
       }
+
+      rewriteProjectedPayloadValues(
+        projections: projections,
+        rewriteCtx: rewriteCtx,
+        context: cloner.context)
     }
   }
 
