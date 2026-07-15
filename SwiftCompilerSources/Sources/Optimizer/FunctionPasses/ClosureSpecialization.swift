@@ -229,16 +229,21 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
   } while remainingSpecializationRounds > 0
 
   if !isSingleBB && bteSpecEligibility == .eligible {
-    let autodiffSpecializationInfo = AutoDiffSpecializationInfo(vjp: function, context)
+    let closureAnalysis = PullbackClosureAnalysis(vjp: function)
 
-    guard !autodiffSpecializationInfo.closuresInBTE.isEmpty else {
+    guard !closureAnalysis.closuresInBTE.isEmpty else {
       log(
         "Unable to detect closures to be specialized in \(function.name.string), skipping the pass")
       return
     }
 
+    let specializedBTEDict = synthesizeSpecializedEnums(
+      from: closureAnalysis, context: context)
+
     specializeAgainstBTE(
-      autodiffSpecializationInfo: autodiffSpecializationInfo, function: function,
+      closureAnalysis: closureAnalysis,
+      specializedBTEDict: specializedBTEDict,
+      function: function,
       context: context)
   }
 }
@@ -692,35 +697,27 @@ private func logSpecializationStats(
   log(msg)
 }
 
-private func specializeAgainstBTE(
-  autodiffSpecializationInfo: AutoDiffSpecializationInfo, function: Function,
+private func synthesizeSpecializedEnums(
+  from closureAnalysis: PullbackClosureAnalysis,
   context: FunctionPassContext
-) {
+) -> SpecializedBTEMap {
+  getSpecializedBTEDict(
+    closuresInBTE: closureAnalysis.closuresInBTE,
+    paiOfPullback: closureAnalysis.paiOfPullback,
+    context)
+}
+
+private func eraseDeadSpecializedClosures(
+  from closuresInBTE: [ClosureInBTE],
+  context: FunctionPassContext
+) -> Set<SingleValueInstruction> {
   var closuresSet = Set<SingleValueInstruction>()
-  for closureInfo in autodiffSpecializationInfo.closuresInBTE {
+  for closureInfo in closuresInBTE {
     if let subsetThunk = closureInfo.subsetThunk {
       closuresSet.insert(subsetThunk)
     }
     closuresSet.insert(closureInfo.closure)
   }
-  let totalSupportedClosures = closuresSet.count
-
-  var enumDict = SpecializedBTEMap()
-
-  let specInfo = PullbackSpecializationAgainstBTE()
-
-  let (specializedFunction, alreadyExists) =
-    specInfo.getOrCreatePullbackSpecializedAgainstBTE(
-      basedOn: autodiffSpecializationInfo, enumDict: &enumDict, context)
-
-  if !alreadyExists {
-    context.notifyNewFunction(
-      function: specializedFunction, derivedFrom: autodiffSpecializationInfo.pullback)
-  }
-
-  rewriteVJPForBTEPullbackSpecialization(
-    using: specializedFunction, autodiffSpecializationInfo: autodiffSpecializationInfo,
-    enumDict: enumDict, context: context)
 
   var oldSetSize = 0
   repeat {
@@ -734,8 +731,52 @@ private func specializeAgainstBTE(
     }
   } while oldSetSize != closuresSet.count
 
+  return closuresSet
+}
+
+private func specializeAgainstBTE(
+  closureAnalysis: PullbackClosureAnalysis,
+  specializedBTEDict: SpecializedBTEMap,
+  function: Function,
+  context: FunctionPassContext
+) {
+  let totalSupportedClosures = Set(
+    closureAnalysis.closuresInBTE.flatMap { closureInfo -> [SingleValueInstruction] in
+      if let subsetThunk = closureInfo.subsetThunk {
+        return [closureInfo.closure, subsetThunk]
+      }
+      return [closureInfo.closure]
+    }
+  ).count
+
+  let autodiffSpecializationInfo = AutoDiffSpecializationInfo(
+    closureAnalysis: closureAnalysis,
+    specializedBTEDict: specializedBTEDict)
+
+  let specInfo = PullbackSpecializationAgainstBTE()
+
+  let (specializedFunction, alreadyExists) =
+    specInfo.getOrCreatePullbackSpecializedAgainstBTE(
+      basedOn: autodiffSpecializationInfo,
+      enumDict: autodiffSpecializationInfo.specializedBTEDict,
+      context)
+
+  if !alreadyExists {
+    context.notifyNewFunction(
+      function: specializedFunction, derivedFrom: autodiffSpecializationInfo.pullback)
+  }
+
+  rewriteVJPForBTEPullbackSpecialization(
+    using: specializedFunction,
+    autodiffSpecializationInfo: autodiffSpecializationInfo,
+    enumDict: autodiffSpecializationInfo.specializedBTEDict,
+    context: context)
+
+  let remainingClosures = eraseDeadSpecializedClosures(
+    from: closureAnalysis.closuresInBTE, context: context)
+
   logSpecializationStats(
-    closuresSet: closuresSet,
+    closuresSet: remainingClosures,
     totalSupportedClosures: totalSupportedClosures,
     function: function)
 }
@@ -2423,19 +2464,40 @@ private func getSpecializedBTEDict(closuresInBTE: [ClosureInBTE], paiOfPullback:
 
 private typealias SpecializedBTEMap = [Type: Type]
 
-private struct AutoDiffSpecializationInfo {
+private struct PullbackClosureAnalysis {
   let paiOfPullback: PartialApplyInst
   let closuresInBTE: [ClosureInBTE]
-  let specializedBTEDict: [Type: Type]
 
   var vjp: Function { paiOfPullback.parentFunction }
   var pullback: Function { paiOfPullback.referencedFunction! }
 
-  init(vjp: Function, _ context: FunctionPassContext) {
+  init(vjp: Function) {
     self.paiOfPullback = getPartialApplyOfPullbackInExitVJPBB(vjp: vjp)!
     self.closuresInBTE = findClosuresInBTE(paiOfPullback: self.paiOfPullback)
-    self.specializedBTEDict = getSpecializedBTEDict(
-      closuresInBTE: self.closuresInBTE, paiOfPullback: self.paiOfPullback, context)
+  }
+}
+
+private struct AutoDiffSpecializationInfo {
+  let closureAnalysis: PullbackClosureAnalysis
+  let specializedBTEDict: [Type: Type]
+
+  var paiOfPullback: PartialApplyInst { closureAnalysis.paiOfPullback }
+  var closuresInBTE: [ClosureInBTE] { closureAnalysis.closuresInBTE }
+  var vjp: Function { closureAnalysis.vjp }
+  var pullback: Function { closureAnalysis.pullback }
+
+  init(closureAnalysis: PullbackClosureAnalysis, specializedBTEDict: [Type: Type]) {
+    self.closureAnalysis = closureAnalysis
+    self.specializedBTEDict = specializedBTEDict
+  }
+
+  init(vjp: Function, _ context: FunctionPassContext) {
+    let closureAnalysis = PullbackClosureAnalysis(vjp: vjp)
+    self.init(
+      closureAnalysis: closureAnalysis,
+      specializedBTEDict: synthesizeSpecializedEnums(
+        from: closureAnalysis,
+        context: context))
   }
 
   func pullbackNameSpecializedAgainstBTE(_ context: FunctionPassContext) -> String {
@@ -2512,7 +2574,7 @@ private struct PullbackSpecializationAgainstBTE {
 
   func getOrCreatePullbackSpecializedAgainstBTE(
     basedOn autodiffSpecializationInfo: AutoDiffSpecializationInfo,
-    enumDict: inout SpecializedBTEMap,
+    enumDict: SpecializedBTEMap,
     _ context: FunctionPassContext
   )
     -> (function: Function, alreadyExists: Bool)
@@ -2526,7 +2588,6 @@ private struct PullbackSpecializationAgainstBTE {
     }
 
     let enumTypeOfEntryBBArg = pb.entryBlock.getBranchTracingEnumArg(vjp: vjp)!.type
-    enumDict = autodiffSpecializationInfo.specializedBTEDict
 
     let specializedParameters = getParametersForPullbackSpecializedAgainstBTE(
       basedOn: autodiffSpecializationInfo, pb: pb, enumType: enumTypeOfEntryBBArg,
