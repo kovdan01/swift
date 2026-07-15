@@ -229,25 +229,18 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
   } while remainingSpecializationRounds > 0
 
   if !isSingleBB && bteSpecEligibility == .eligible {
-    remainingSpecializationRounds = 5
-    repeat {
-      log("Remaining specialization rounds: " + String(remainingSpecializationRounds))
+    let autodiffSpecializationInfo = AutoDiffSpecializationInfo(vjp: function, context)
 
-      let autodiffSpecializationInfo = AutoDiffSpecializationInfo(vjp: function, context)
+    guard !autodiffSpecializationInfo.closuresInBTE.isEmpty else {
+      log(
+        "Unable to detect closures to be specialized in " + function.name.string
+          + ", skipping the pass")
+      return
+    }
 
-      if autodiffSpecializationInfo.closuresInBTE.count == 0 {
-        log(
-          "Unable to detect closures to be specialized in " + function.name.string
-            + ", skipping the pass")
-        break
-      }
-
-      multiBBHelper(
-        autodiffSpecializationInfo: autodiffSpecializationInfo, function: function,
-        context: context)
-
-      remainingSpecializationRounds -= 1
-    } while remainingSpecializationRounds > 0
+    multiBBHelper(
+      autodiffSpecializationInfo: autodiffSpecializationInfo, function: function,
+      context: context)
   }
 }
 
