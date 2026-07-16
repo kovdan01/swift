@@ -237,11 +237,6 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
       return
     }
 
-    log("VJP BEGIN")
-    log("\(function)")
-    log("VJP END")
-    
-
     let specializedBTEDict = synthesizeSpecializedEnums(
       from: closureAnalysis, context: context)
 
@@ -820,9 +815,7 @@ private func eraseDeadSpecializedClosures(
         guard let allocStack = paiArg as? AllocStackInst else {
           continue
         }
-        log("FFFFFFFFF 00: \(allocStack.uses.count) \(allocStack)")
         assert(allocStack.uses.count == 3)
-        log("FFFFFFFFF 01: \(allocStack.uses.count) \(allocStack)")
         allocStacks.append(allocStack)
       }
     }
@@ -846,13 +839,9 @@ private func eraseDeadSpecializedClosures(
   } while oldSetSize != closuresSet.count
 
   for allocStack in allocStacks {
-    log("FFFFFFFFF 10: \(allocStack.uses.count) \(allocStack)")
     assert(allocStack.uses.count == 2)
-    log("FFFFFFFFF 11: \(allocStack.uses.count) \(allocStack)")
     for use in allocStack.uses {
-      log("FFFFFFFFF 20: \(allocStack.uses.count) \(allocStack)")
       assert(use.instruction is DeallocStackInst || use.instruction is StoreInst)
-      log("FFFFFFFFF 21: \(allocStack.uses.count) \(allocStack)")
       context.erase(instruction: use.instruction)
     }
     context.erase(instruction: allocStack)
@@ -957,26 +946,17 @@ private func buildReplacementElement(
   capturedArgs: [Value], isOptionalSome: Bool?,
   tupleType: Type, vjp: Function, builder: Builder
 ) -> Value {
-  log("XXXXXXX buildReplacementElement 00")
   if let isOptionalSome = isOptionalSome {
-    log("XXXXXXX buildReplacementElement 10")
     let optionalTupleType = tupleType.rawType.optionalType.loweredType(in: vjp)
     if isOptionalSome {
-      log("XXXXXXX buildReplacementElement 20")
       let tuple = builder.createTuple(type: tupleType, elements: capturedArgs)
-      log("XXXXXXX buildReplacementElement 21")
       return builder.createOptionalSome(operand: tuple, type: optionalTupleType)
     } else {
-      log("XXXXXXX buildReplacementElement 30")
       return builder.createOptionalNone(type: optionalTupleType)
     }
   } else {
-    log("XXXXXXX buildReplacementElement 40")
-    log("\(tupleType)")
-    log("XXXXXXX buildReplacementElement 41")
     return builder.createTuple(type: tupleType, elements: capturedArgs)
   }
-  log("XXXXXXX buildReplacementElement 90")
 }
 
 private func rewritePayloadTuplesInVJP(
@@ -1029,13 +1009,9 @@ private func rewritePayloadTuplesInVJP(
       let tupleType = context.getTupleType(
         elements: entry.values.map { $0.type }
       ).loweredType(in: vjp)
-      log("XXXXXXX tupleIdxToCapturedArgs: \(tupleIdxToCapturedArgs)")
-      log("XXXXXXX ti: \(ti)")
-      log("XXXXXXX buildReplacementElement BEFORE")
       let replacement = buildReplacementElement(
         capturedArgs: entry.values, isOptionalSome: entry.isOptionalSome,
         tupleType: tupleType, vjp: vjp, builder: builderPred)
-      log("XXXXXXX buildReplacementElement AFTER")
       newPayloadValues.append(replacement)
     }
 
@@ -1177,10 +1153,9 @@ private func insertLifetimeEndIfNeeded(
   }
   let builder = Builder(before: insertionPoint, context)
   if value.parentFunction.hasOwnership {
-    log("CCCCCCCCCC 10")
     builder.createDestroyValue(operand: value)
-    log("CCCCCCCCCC 11")
   } else {
+    // TODO: we are OSSA-only? So delete this?
     builder.createReleaseValue(operand: value)
   }
 }
@@ -1279,33 +1254,14 @@ private func rewriteApplyDirectClosure(
   let rootClosure : SingleValueInstruction
   if let pai = closureInfo.closure as? PartialApplyInst {
     var indirectArgs = [(idx: Int, allocStack: AllocStackInst, store: StoreInst)]()
-    log("BBBBBBBB 00 \(pai.operandConventions.count)")
-    log("BBBBBBBB 01 \(extractedElements.count)")
-    log("\(extractedElements)")
-    log("BBBBBBBB 02")
-    log("\(pai.operandConventions)")
-    log("BBBBBBBB 03")
     for idx in 0..<extractedElements.count {
-      //pai.operandConventions[idx] == .indirectInGuaranteed { // TODO: preliminary check
-      log("BBBBBBBB 10 \(idx)")
-      log("\(pai.convention(of: pai.argumentOperands[idx]))")
-      log("BBBBBBBB 11 \(idx)")
-      
       if case .indirectInGuaranteed = pai.convention(of: pai.argumentOperands[idx]) { // TODO: preliminary check
-        log("BBBBBBBB 20 \(idx)")
         let allocStack = builder.createAllocStack(extractedElements[idx].type)
-        log("BBBBBBBB 21 \(idx)")
         let store = builder.createStore(source: extractedElements[idx], destination: allocStack, ownership: StoreInst.StoreOwnership.initialize)
-        log("BBBBBBBB 22 \(idx)")
         indirectArgs.append((idx: idx, allocStack: allocStack, store: store))
-        log("BBBBBBBB 23 \(idx)")
         extractedElements[idx] = allocStack
-        log("BBBBBBBB 24 \(idx)")
       }
-
-      log("BBBBBBBB 30 \(idx)")
     }
-    log("BBBBBBBB 40")
 
     rootClosure = builder.createPartialApply(
       function: newFri,
@@ -1365,28 +1321,20 @@ private func rewriteApplyUse(
   ai: ApplyInst, resultIdx: Int,
   result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
 ) {
-  log("AAAAAAAA rewriteApplyUse 00")
   let builder = Builder(before: ai, context)
   if let closureInfo = findMatchingClosureInfo(
     in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx)
   {
-    log("AAAAAAAA rewriteApplyUse 10")
     let extractedElements = extractTupleElements(
       from: result, useTupleExtract: rewriteCtx.useTei, builder: builder)
-    log("AAAAAAAA rewriteApplyUse 11")
-    log("AAAAAAAA rewriteApplyUse 20")
     rewriteApplyDirectClosure(
       ai: ai, closureInfo: closureInfo, extractedElements: extractedElements,
       builder: builder, context)
-    log("AAAAAAAA rewriteApplyUse 21")
   } else {
-    log("AAAAAAAA rewriteApplyUse 40")
     let newAi = builder.createApply(
       function: result, ai.substitutionMap, arguments: Array(ai.arguments))
-    log("AAAAAAAA rewriteApplyUse 41")
     ai.replace(with: newAi, context)
   }
-  log("AAAAAAAA rewriteApplyUse 90")
 }
 
 private func rewriteDestroyValueUse(
@@ -1397,10 +1345,9 @@ private func rewriteDestroyValueUse(
   if !isClosurePayload {
     let builder = Builder(before: dvi, context)
     if dvi.parentFunction.hasOwnership {
-      log("CCCCCCCCCC 00")
       builder.createDestroyValue(operand: result)
-      log("CCCCCCCCCC 01")
     } else {
+      // TODO: we are OSSA-only? So delete this?
       builder.createReleaseValue(operand: result)
     }
   }
@@ -2489,15 +2436,9 @@ extension ClosureInBTE {
       for idx in 0..<paiArgs.count {
         // TODO: preliminary check; also check that store is init
         if paiArgs[idx].type.isAddress {
-          log("DDDDDDDDD 00 \(idx): \(paiArgs[idx])")
-          log("DDDDDDDDD 00 \(idx): type \(paiArgs[idx].type)")
           assert(paiArgs[idx].uses.count == 3)
-          log("DDDDDDDDD 01 \(idx): \(paiArgs[idx])")
           let store = paiArgs[idx].uses.filter { $0.instruction is StoreInst }.map{ $0.instruction as! StoreInst }.singleElement!
-          log("DDDDDDDDD 02 \(idx): \(store)")
-          log("DDDDDDDDD 03 \(idx): \(store.source)")
           paiArgs[idx] = store.source
-          log("DDDDDDDDD 04 \(idx): \(store.source)")
         }
       }
       return paiArgs
@@ -2654,12 +2595,10 @@ private func findClosuresInBTE(paiOfPullback: PartialApplyInst) -> [ClosureInBTE
   var reabstractions = Set<SingleValueInstruction>()
   var closuresInBTE = [ClosureInBTE]()
   for inst in vjp.instructions {
-    log("AAAAAAAAAAA INST: \(inst)")
     guard inst != paiOfPullback,
           let rootClosure = inst.asSupportedClosure,
           !reabstractions.contains(rootClosure)
     else {
-      log("AS SUPPORTED CLOSURE: \(inst.asSupportedClosure)")
       continue
     }
 
