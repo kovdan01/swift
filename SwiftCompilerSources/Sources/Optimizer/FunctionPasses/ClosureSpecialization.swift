@@ -13,7 +13,7 @@
 import AST
 import SIL
 
-private let verbose = false
+private let verbose = true
 
 private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
   if verbose {
@@ -236,6 +236,11 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
         "Unable to detect closures to be specialized in \(function.name.string), skipping the pass")
       return
     }
+
+    log("VJP BEGIN")
+    log("\(function)")
+    log("VJP END")
+    
 
     let specializedBTEDict = synthesizeSpecializedEnums(
       from: closureAnalysis, context: context)
@@ -807,11 +812,28 @@ private func eraseDeadSpecializedClosures(
   context: FunctionPassContext
 ) -> Set<SingleValueInstruction> {
   var closuresSet = Set<SingleValueInstruction>()
+  var allocStacks = [AllocStackInst]()
+
   for closureInfo in closuresInBTE {
-    if let subsetThunk = closureInfo.subsetThunk {
-      closuresSet.insert(subsetThunk)
+    if let pai = closureInfo.closure as? PartialApplyInst {
+      for paiArg in pai.arguments {
+        guard let allocStack = paiArg as? AllocStackInst else {
+          continue
+        }
+        log("FFFFFFFFF 00: \(allocStack.uses.count) \(allocStack)")
+        assert(allocStack.uses.count == 3)
+        log("FFFFFFFFF 01: \(allocStack.uses.count) \(allocStack)")
+        allocStacks.append(allocStack)
+      }
     }
+
+    // if let subsetThunk = closureInfo.subsetThunk {
+    //   closuresSet.insert(subsetThunk)
+    // }
     closuresSet.insert(closureInfo.closure)
+    for reabstraction in closureInfo.reabstractions {
+      closuresSet.insert(reabstraction)
+    }
   }
 
   var oldSetSize = 0
@@ -826,6 +848,19 @@ private func eraseDeadSpecializedClosures(
     }
   } while oldSetSize != closuresSet.count
 
+  for allocStack in allocStacks {
+    log("FFFFFFFFF 10: \(allocStack.uses.count) \(allocStack)")
+    assert(allocStack.uses.count == 2)
+    log("FFFFFFFFF 11: \(allocStack.uses.count) \(allocStack)")
+    for use in allocStack.uses {
+      log("FFFFFFFFF 20: \(allocStack.uses.count) \(allocStack)")
+      assert(use.instruction is DeallocStackInst || use.instruction is StoreInst)
+      log("FFFFFFFFF 21: \(allocStack.uses.count) \(allocStack)")
+      context.erase(instruction: use.instruction)
+    }
+    context.erase(instruction: allocStack)
+  }
+
   return closuresSet
 }
 
@@ -837,9 +872,9 @@ private func specializeAgainstBTE(
 ) {
   let totalSupportedClosures = Set(
     closureAnalysis.closuresInBTE.flatMap { closureInfo -> [SingleValueInstruction] in
-      if let subsetThunk = closureInfo.subsetThunk {
-        return [closureInfo.closure, subsetThunk]
-      }
+      // if let subsetThunk = closureInfo.subsetThunk {
+      //   return [closureInfo.closure, subsetThunk]
+      // }
       return [closureInfo.closure]
     }
   ).count
@@ -932,17 +967,26 @@ private func buildReplacementElement(
   capturedArgs: [Value], isOptionalSome: Bool?,
   tupleType: Type, vjp: Function, builder: Builder
 ) -> Value {
+  log("XXXXXXX buildReplacementElement 00")
   if let isOptionalSome = isOptionalSome {
+    log("XXXXXXX buildReplacementElement 10")
     let optionalTupleType = tupleType.rawType.optionalType.loweredType(in: vjp)
     if isOptionalSome {
+      log("XXXXXXX buildReplacementElement 20")
       let tuple = builder.createTuple(type: tupleType, elements: capturedArgs)
+      log("XXXXXXX buildReplacementElement 21")
       return builder.createOptionalSome(operand: tuple, type: optionalTupleType)
     } else {
+      log("XXXXXXX buildReplacementElement 30")
       return builder.createOptionalNone(type: optionalTupleType)
     }
   } else {
+    log("XXXXXXX buildReplacementElement 40")
+    log("\(tupleType)")
+    log("XXXXXXX buildReplacementElement 41")
     return builder.createTuple(type: tupleType, elements: capturedArgs)
   }
+  log("XXXXXXX buildReplacementElement 90")
 }
 
 private func rewritePayloadTuplesInVJP(
@@ -995,9 +1039,13 @@ private func rewritePayloadTuplesInVJP(
       let tupleType = context.getTupleType(
         elements: entry.values.map { $0.type }
       ).loweredType(in: vjp)
+      log("XXXXXXX tupleIdxToCapturedArgs: \(tupleIdxToCapturedArgs)")
+      log("XXXXXXX ti: \(ti)")
+      log("XXXXXXX buildReplacementElement BEFORE")
       let replacement = buildReplacementElement(
         capturedArgs: entry.values, isOptionalSome: entry.isOptionalSome,
         tupleType: tupleType, vjp: vjp, builder: builderPred)
+      log("XXXXXXX buildReplacementElement AFTER")
       newPayloadValues.append(replacement)
     }
 
@@ -1139,7 +1187,9 @@ private func insertLifetimeEndIfNeeded(
   }
   let builder = Builder(before: insertionPoint, context)
   if value.parentFunction.hasOwnership {
+    log("CCCCCCCCCC 10")
     builder.createDestroyValue(operand: value)
+    log("CCCCCCCCCC 11")
   } else {
     builder.createReleaseValue(operand: value)
   }
@@ -1214,13 +1264,106 @@ private func rewriteApplyDirectClosure(
   ai: ApplyInst, closureInfo: ClosureInBTE, extractedElements: [Value],
   builder: Builder, _ context: FunctionPassContext
 ) {
-  var newArgs = Array(ai.arguments)
-  newArgs.append(contentsOf: extractedElements)
+  if closureInfo.reabstractions.isEmpty {
+    var newArgs = Array(ai.arguments)
+    newArgs.append(contentsOf: extractedElements)
+    let vjpFn = closureInfo.closure.asSupportedClosureFn!
+    let newFri = builder.createFunctionRef(vjpFn)
+    let newAi = builder.createApply(
+      function: newFri, ai.substitutionMap, arguments: newArgs)
+    ai.replace(with: newAi, context)
+
+    // TODO: maybe we can set insertion point earlier
+    for res in extractedElements {
+      insertLifetimeEndIfNeeded(for: res, before: newAi.parentBlock.terminator, context)
+    }
+
+    return
+  }
+
+  var extractedElements = extractedElements
+
+  let newArgs = Array(ai.arguments)
   let vjpFn = closureInfo.closure.asSupportedClosureFn!
   let newFri = builder.createFunctionRef(vjpFn)
+  let rootClosure : SingleValueInstruction
+  if let pai = closureInfo.closure as? PartialApplyInst {
+    var indirectArgs = [(idx: Int, allocStack: AllocStackInst, store: StoreInst)]()
+    log("BBBBBBBB 00 \(pai.operandConventions.count)")
+    log("BBBBBBBB 01 \(extractedElements.count)")
+    log("\(extractedElements)")
+    log("BBBBBBBB 02")
+    log("\(pai.operandConventions)")
+    log("BBBBBBBB 03")
+    for idx in 0..<extractedElements.count {
+      //pai.operandConventions[idx] == .indirectInGuaranteed { // TODO: preliminary check
+      log("BBBBBBBB 10 \(idx)")
+      log("\(pai.convention(of: pai.argumentOperands[idx]))")
+      log("BBBBBBBB 11 \(idx)")
+      
+      if case .indirectInGuaranteed = pai.convention(of: pai.argumentOperands[idx]) { // TODO: preliminary check
+        log("BBBBBBBB 20 \(idx)")
+        let allocStack = builder.createAllocStack(extractedElements[idx].type)
+        log("BBBBBBBB 21 \(idx)")
+        let store = builder.createStore(source: extractedElements[idx], destination: allocStack, ownership: StoreInst.StoreOwnership.initialize)
+        log("BBBBBBBB 22 \(idx)")
+        indirectArgs.append((idx: idx, allocStack: allocStack, store: store))
+        log("BBBBBBBB 23 \(idx)")
+        extractedElements[idx] = allocStack
+        log("BBBBBBBB 24 \(idx)")
+      }
+
+      log("BBBBBBBB 30 \(idx)")
+    }
+    log("BBBBBBBB 40")
+
+    rootClosure = builder.createPartialApply(
+      function: newFri,
+      substitutionMap: ai.substitutionMap, // TODO
+      capturedArguments: extractedElements,
+      calleeConvention: pai.calleeConvention, 
+      hasUnknownResultIsolation: pai.hasUnknownResultIsolation,
+      isOnStack: pai.isOnStack,
+      isNested: pai.isNested)
+    
+    for (idx, allocStack, store) in indirectArgs.reversed() {
+      extractedElements[idx] = store.source
+      builder.createDeallocStack(allocStack)
+    }
+  } else {
+    assert(closureInfo.closure is ThinToThickFunctionInst)
+    rootClosure = builder.createThinToThickFunction(thinFunction: newFri, resultType: closureInfo.closure.type)
+  }
+
+  var allNewClosures : [SingleValueInstruction] = [rootClosure]
+
+  var currentClosure = rootClosure
+  for reabstraction in closureInfo.reabstractions {
+    let reabstractionFn = reabstraction.asSupportedClosureFn! // TODO: must be checked in findBTEUses
+    let reabstractionFri = builder.createFunctionRef(reabstractionFn)
+    let newReabstraction = builder.createPartialApply(
+      function: reabstractionFri,
+      substitutionMap: ai.substitutionMap, // TODO
+      capturedArguments: [currentClosure],
+      calleeConvention: reabstraction.calleeConvention,
+      hasUnknownResultIsolation: reabstraction.hasUnknownResultIsolation,
+      isOnStack: reabstraction.isOnStack,
+      isNested: reabstraction.isNested)
+    currentClosure = newReabstraction
+    allNewClosures.append(newReabstraction)
+  }
+
   let newAi = builder.createApply(
-    function: newFri, ai.substitutionMap, arguments: newArgs)
+    function: currentClosure, ai.substitutionMap, arguments: newArgs)
   ai.replace(with: newAi, context)
+
+
+
+  //insertLifetimeEndIfNeeded(for: currentClosure, before: newAi.parentBlock.terminator, context)
+
+  for newClosure in allNewClosures.reversed() {
+    insertLifetimeEndIfNeeded(for: newClosure, before: newAi.parentBlock.terminator, context)
+  }
 
   // TODO: maybe we can set insertion point earlier
   for res in extractedElements {
@@ -1228,69 +1371,79 @@ private func rewriteApplyDirectClosure(
   }
 }
 
-private func rewriteApplyViaSubsetThunk(
-  ai: ApplyInst, closureInfo: ClosureInBTE, extractedElements: [Value],
-  builder: Builder, _ context: FunctionPassContext
-) {
-  var newClosure: SingleValueInstruction? = nil
-  if let pai = closureInfo.closure as? PartialApplyInst {
-    let vjpFn = closureInfo.closure.asSupportedClosureFn!
-    let newFri = builder.createFunctionRef(vjpFn)
-    let newPai = builder.createPartialApply(
-      function: newFri, substitutionMap: pai.substitutionMap,
-      capturedArguments: extractedElements, calleeConvention: pai.calleeConvention,
-      hasUnknownResultIsolation: pai.hasUnknownResultIsolation,
-      isOnStack: pai.isOnStack, isNested: pai.isNested)
-    newClosure = newPai
+// private func rewriteApplyViaSubsetThunk(
+//   ai: ApplyInst, closureInfo: ClosureInBTE, extractedElements: [Value],
+//   builder: Builder, _ context: FunctionPassContext
+// ) {
+//   var newClosure: SingleValueInstruction? = nil
+//   if let pai = closureInfo.closure as? PartialApplyInst {
+//     let vjpFn = closureInfo.closure.asSupportedClosureFn!
+//     let newFri = builder.createFunctionRef(vjpFn)
+//     let newPai = builder.createPartialApply(
+//       function: newFri, substitutionMap: pai.substitutionMap,
+//       capturedArguments: extractedElements, calleeConvention: pai.calleeConvention,
+//       hasUnknownResultIsolation: pai.hasUnknownResultIsolation,
+//       isOnStack: pai.isOnStack, isNested: pai.isNested)
+//     newClosure = newPai
 
-    // TODO: maybe we can set insertion point earlier
-    for res in extractedElements {
-      insertLifetimeEndIfNeeded(for: res, before: newPai.parentBlock.terminator, context)
-    }
-  } else {
-    let tttfi = closureInfo.closure as! ThinToThickFunctionInst
-    let vjpFn = closureInfo.closure.asSupportedClosureFn!
-    let newFri = builder.createFunctionRef(vjpFn)
-    let newTttfi = builder.createThinToThickFunction(
-      thinFunction: newFri, resultType: tttfi.type)
-    newClosure = newTttfi
-  }
-  assert(newClosure != nil)
-  let subsetThunkFn = closureInfo.subsetThunk!.referencedFunction!
-  let newFri = builder.createFunctionRef(subsetThunkFn)
+//     // TODO: maybe we can set insertion point earlier
+//     for res in extractedElements {
+//       insertLifetimeEndIfNeeded(for: res, before: newPai.parentBlock.terminator, context)
+//     }
+//   } else {
+//     let tttfi = closureInfo.closure as! ThinToThickFunctionInst
+//     let vjpFn = closureInfo.closure.asSupportedClosureFn!
+//     let newFri = builder.createFunctionRef(vjpFn)
+//     let newTttfi = builder.createThinToThickFunction(
+//       thinFunction: newFri, resultType: tttfi.type)
+//     newClosure = newTttfi
+//   }
+//   assert(newClosure != nil)
+//   let subsetThunkFn = closureInfo.subsetThunk!.referencedFunction!
+//   let newFri = builder.createFunctionRef(subsetThunkFn)
 
-  let newArgs = Array(ai.arguments) + [newClosure!]
-  let newAi = builder.createApply(
-    function: newFri, ai.substitutionMap, arguments: newArgs)
-  ai.replace(with: newAi, context)
-  assert(newClosure!.uses.singleUse != nil)
-  insertLifetimeEndIfNeeded(for: newClosure!, before: newAi.parentBlock.terminator, context)
-}
+//   let newArgs = Array(ai.arguments) + [newClosure!]
+//   let newAi = builder.createApply(
+//     function: newFri, ai.substitutionMap, arguments: newArgs)
+//   ai.replace(with: newAi, context)
+//   assert(newClosure!.uses.singleUse != nil)
+//   insertLifetimeEndIfNeeded(for: newClosure!, before: newAi.parentBlock.terminator, context)
+// }
 
 private func rewriteApplyUse(
   ai: ApplyInst, resultIdx: Int,
   result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
 ) {
+  log("AAAAAAAA rewriteApplyUse 00")
   let builder = Builder(before: ai, context)
   if let closureInfo = findMatchingClosureInfo(
     in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx)
   {
+    log("AAAAAAAA rewriteApplyUse 10")
     let extractedElements = extractTupleElements(
       from: result, useTupleExtract: rewriteCtx.useTei, builder: builder)
-    if closureInfo.subsetThunk == nil {
-      rewriteApplyDirectClosure(
-        ai: ai, closureInfo: closureInfo, extractedElements: extractedElements,
-        builder: builder, context)
-    } else {
-      rewriteApplyViaSubsetThunk(
-        ai: ai, closureInfo: closureInfo, extractedElements: extractedElements,
-        builder: builder, context)
-    }
+    log("AAAAAAAA rewriteApplyUse 11")
+    //if closureInfo.subsetThunk == nil {
+    log("AAAAAAAA rewriteApplyUse 20")
+    rewriteApplyDirectClosure(
+      ai: ai, closureInfo: closureInfo, extractedElements: extractedElements,
+      builder: builder, context)
+    log("AAAAAAAA rewriteApplyUse 21")
+    // } else {
+    //   log("AAAAAAAA rewriteApplyUse 30")
+    //   rewriteApplyViaSubsetThunk(
+    //     ai: ai, closureInfo: closureInfo, extractedElements: extractedElements,
+    //     builder: builder, context)
+    //   log("AAAAAAAA rewriteApplyUse 31")
+    // }
   } else {
+    log("AAAAAAAA rewriteApplyUse 40")
     let newAi = builder.createApply(
       function: result, ai.substitutionMap, arguments: Array(ai.arguments))
+    log("AAAAAAAA rewriteApplyUse 41")
     ai.replace(with: newAi, context)
   }
+  log("AAAAAAAA rewriteApplyUse 90")
 }
 
 private func rewriteDestroyValueUse(
@@ -1301,7 +1454,9 @@ private func rewriteDestroyValueUse(
   if !isClosurePayload {
     let builder = Builder(before: dvi, context)
     if dvi.parentFunction.hasOwnership {
+      log("CCCCCCCCCC 00")
       builder.createDestroyValue(operand: result)
+      log("CCCCCCCCCC 01")
     } else {
       builder.createReleaseValue(operand: result)
     }
@@ -2223,7 +2378,8 @@ private func findOptionalNoneMatchingOptionalSome(in vjp: Function, closuresInBT
 
     closuresInBTEForOptionalNone.append(ClosureInBTE(
       closure: closureInBTE.closure,
-      subsetThunk: closureInBTE.subsetThunk,
+      reabstractions: closureInBTE.reabstractions,
+      //subsetThunk: closureInBTE.subsetThunk,
       optionalWrapper: optionalNone,
       useInPayload: payloadTuple.operands.last!,
       enumCase: bteWithNone.type.getEnumCases(in: vjp)![bteWithNone.caseIndex]!
@@ -2387,7 +2543,22 @@ private func getBTEPayloadArgOfPbBBInfo(_ bb: BasicBlock, vjp: Function)
 extension ClosureInBTE {
   var capturedArgs : [Value] {
     if let pai = self.closure as? PartialApplyInst {
-      return Array(pai.arguments)
+      var paiArgs = Array(pai.arguments)
+      for idx in 0..<paiArgs.count {
+        // TODO: preliminary check; also check that store is init
+        if paiArgs[idx].type.isAddress {
+          log("DDDDDDDDD 00 \(idx): \(paiArgs[idx])")
+          log("DDDDDDDDD 00 \(idx): type \(paiArgs[idx].type)")
+          assert(paiArgs[idx].uses.count == 3)
+          log("DDDDDDDDD 01 \(idx): \(paiArgs[idx])")
+          let store = paiArgs[idx].uses.filter { $0.instruction is StoreInst }.map{ $0.instruction as! StoreInst }.singleElement!
+          log("DDDDDDDDD 02 \(idx): \(store)")
+          log("DDDDDDDDD 03 \(idx): \(store.source)")
+          paiArgs[idx] = store.source
+          log("DDDDDDDDD 04 \(idx): \(store.source)")
+        }
+      }
+      return paiArgs
     }
     guard self.closure is ThinToThickFunctionInst else {
       fatalError("unexpected closure type")
@@ -2404,7 +2575,7 @@ private extension Instruction {
     // TODO: figure out what to do with non-inout indirect arguments
     // https://forums.swift.org/t/non-inout-indirect-types-not-supported-in-closure-specialization-optimization/70826
     case let pai as PartialApplyInst
-    where pai.callee is FunctionRefInst && pai.hasOnlyInoutIndirectArguments:
+    where pai.callee is FunctionRefInst:// && pai.hasOnlyInoutIndirectArguments: // TODO: is it correct? also see above
       return pai
     default:
       return nil
@@ -2488,10 +2659,24 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
   let vjp = rootClosure.parentFunction
   var closuresInBTE = [ClosureInBTE]()
 
-  let subsetThunk = rootClosure.uses.singleElement?.instruction.asSubsetThunk
-  let optionalWrapper = rootClosure.uses.singleElement?.instruction.asOptionalWrapper
-  assert(subsetThunk == nil || optionalWrapper == nil)
-  let closure = subsetThunk ?? (optionalWrapper ?? rootClosure)
+  var reabstractions = [PartialApplyInst]()
+  var currentClosure = rootClosure
+  while let singleUse = currentClosure.uses.singleElement {
+    guard let pai = singleUse.instruction as? PartialApplyInst else {
+      break
+    }
+    // guard pai.asSubsetThunk == nil else {
+    //   break
+    // }
+    currentClosure = pai
+    reabstractions.append(pai)
+  }
+
+  //let subsetThunk = PartialApplyInst?(nil)//currentClosure.uses.singleElement?.instruction.asSubsetThunk
+  let optionalWrapper = currentClosure.uses.singleElement?.instruction.asOptionalWrapper
+  //assert(subsetThunk == nil || optionalWrapper == nil)
+  //let closure = subsetThunk ?? (optionalWrapper ?? currentClosure)
+  let closure = optionalWrapper ?? currentClosure
 
   for use in closure.uses {
     guard let ti = use.instruction as? TupleInst else {
@@ -2512,7 +2697,8 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
       let enumCase = ei.type.getEnumCases(in: vjp)![ei.caseIndex]!
       let closureInBTE = ClosureInBTE(
         closure: rootClosure,
-        subsetThunk: subsetThunk,
+        reabstractions: reabstractions,
+        //subsetThunk: subsetThunk,
         optionalWrapper: optionalWrapper,
         useInPayload: use,
         enumCase: enumCase
@@ -2530,19 +2716,24 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
 
 private func findClosuresInBTE(paiOfPullback: PartialApplyInst) -> [ClosureInBTE] {
   let vjp = paiOfPullback.parentFunction
-  var subsetThunks = Set<SingleValueInstruction>()
+  var reabstractions = Set<SingleValueInstruction>()
+  //var subsetThunks = Set<SingleValueInstruction>()
   var closuresInBTE = [ClosureInBTE]()
   for inst in vjp.instructions {
+    log("AAAAAAAAAAA INST: \(inst)")
     guard inst != paiOfPullback,
           let rootClosure = inst.asSupportedClosure,
-          !subsetThunks.contains(rootClosure)
+          //!subsetThunks.contains(rootClosure),
+          !reabstractions.contains(rootClosure)
     else {
+      log("AS SUPPORTED CLOSURE: \(inst.asSupportedClosure)")
       continue
     }
 
     let currentClosuresInBTE = findBTEUses(for: rootClosure)
     closuresInBTE.append(contentsOf: currentClosuresInBTE)
-    subsetThunks.formUnion(closuresInBTE.filter{ $0.subsetThunk != nil }.map{ $0.subsetThunk! })
+    //subsetThunks.formUnion(closuresInBTE.filter{ $0.subsetThunk != nil }.map{ $0.subsetThunk! })
+    reabstractions.formUnion(closuresInBTE.flatMap(\.reabstractions))
   }
 
   closuresInBTE.append(contentsOf:
@@ -2658,8 +2849,9 @@ extension ClosureInBTE {
   /// The value that actually appears as the payload-tuple operand for this closure:
   /// the subset thunk if present, otherwise the optional-wrapper enum, otherwise the raw closure.
   var valueInPayload: Value {
-    if let subsetThunk { return subsetThunk }
+    //if let subsetThunk { return subsetThunk }
     if let optionalWrapper { return optionalWrapper }
+    if let reabstraction = reabstractions.last { return reabstraction }
     return closure
   }
 }
@@ -2900,7 +3092,13 @@ let getAutoDiffSpecializationInfoTest = FunctionTest("autodiff_get_specializatio
   for closureInBTE in autodiffSpecializationInfo.closuresInBTE {
     print("    ClosureInBTE(")
     print("      closure: \(closureInBTE.closure)")
-    print("      subsetThunk: " + (closureInBTE.subsetThunk == nil ? "nil" : "\(closureInBTE.subsetThunk!)"))
+    print("      reabstractions: " + (closureInBTE.reabstractions.isEmpty ? "[]" : "["))
+    for reabstraction in closureInBTE.reabstractions {
+      print("        \(reabstraction)")
+    }
+    if !closureInBTE.reabstractions.isEmpty {
+      print("    ]")
+    }
     print("      optionalWrapper: " + (closureInBTE.optionalWrapper == nil ? "nil" : "\(closureInBTE.optionalWrapper!)"))
     print("      useInPayload: \(closureInBTE.useInPayload)")
     let enumCase = closureInBTE.enumCase
