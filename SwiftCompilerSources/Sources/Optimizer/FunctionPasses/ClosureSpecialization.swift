@@ -2799,8 +2799,6 @@ private struct PullbackSpecializationAgainstBTE {
         specializedContext.setNeedCompleteLifetimes(to: false)
       })
 
-    context.notifyNewFunction(function: specializedPb, derivedFrom: pb)
-
     return (specializedPb, false)
   }
 
