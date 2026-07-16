@@ -827,9 +827,6 @@ private func eraseDeadSpecializedClosures(
       }
     }
 
-    // if let subsetThunk = closureInfo.subsetThunk {
-    //   closuresSet.insert(subsetThunk)
-    // }
     closuresSet.insert(closureInfo.closure)
     for reabstraction in closureInfo.reabstractions {
       closuresSet.insert(reabstraction)
@@ -870,14 +867,7 @@ private func specializeAgainstBTE(
   function: Function,
   context: FunctionPassContext
 ) {
-  let totalSupportedClosures = Set(
-    closureAnalysis.closuresInBTE.flatMap { closureInfo -> [SingleValueInstruction] in
-      // if let subsetThunk = closureInfo.subsetThunk {
-      //   return [closureInfo.closure, subsetThunk]
-      // }
-      return [closureInfo.closure]
-    }
-  ).count
+  let totalSupportedClosures = Set(closureAnalysis.closuresInBTE.map { $0.closure }).count
 
   let autodiffSpecializationInfo = AutoDiffSpecializationInfo(
     closureAnalysis: closureAnalysis,
@@ -1371,45 +1361,6 @@ private func rewriteApplyDirectClosure(
   }
 }
 
-// private func rewriteApplyViaSubsetThunk(
-//   ai: ApplyInst, closureInfo: ClosureInBTE, extractedElements: [Value],
-//   builder: Builder, _ context: FunctionPassContext
-// ) {
-//   var newClosure: SingleValueInstruction? = nil
-//   if let pai = closureInfo.closure as? PartialApplyInst {
-//     let vjpFn = closureInfo.closure.asSupportedClosureFn!
-//     let newFri = builder.createFunctionRef(vjpFn)
-//     let newPai = builder.createPartialApply(
-//       function: newFri, substitutionMap: pai.substitutionMap,
-//       capturedArguments: extractedElements, calleeConvention: pai.calleeConvention,
-//       hasUnknownResultIsolation: pai.hasUnknownResultIsolation,
-//       isOnStack: pai.isOnStack, isNested: pai.isNested)
-//     newClosure = newPai
-
-//     // TODO: maybe we can set insertion point earlier
-//     for res in extractedElements {
-//       insertLifetimeEndIfNeeded(for: res, before: newPai.parentBlock.terminator, context)
-//     }
-//   } else {
-//     let tttfi = closureInfo.closure as! ThinToThickFunctionInst
-//     let vjpFn = closureInfo.closure.asSupportedClosureFn!
-//     let newFri = builder.createFunctionRef(vjpFn)
-//     let newTttfi = builder.createThinToThickFunction(
-//       thinFunction: newFri, resultType: tttfi.type)
-//     newClosure = newTttfi
-//   }
-//   assert(newClosure != nil)
-//   let subsetThunkFn = closureInfo.subsetThunk!.referencedFunction!
-//   let newFri = builder.createFunctionRef(subsetThunkFn)
-
-//   let newArgs = Array(ai.arguments) + [newClosure!]
-//   let newAi = builder.createApply(
-//     function: newFri, ai.substitutionMap, arguments: newArgs)
-//   ai.replace(with: newAi, context)
-//   assert(newClosure!.uses.singleUse != nil)
-//   insertLifetimeEndIfNeeded(for: newClosure!, before: newAi.parentBlock.terminator, context)
-// }
-
 private func rewriteApplyUse(
   ai: ApplyInst, resultIdx: Int,
   result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
@@ -1423,19 +1374,11 @@ private func rewriteApplyUse(
     let extractedElements = extractTupleElements(
       from: result, useTupleExtract: rewriteCtx.useTei, builder: builder)
     log("AAAAAAAA rewriteApplyUse 11")
-    //if closureInfo.subsetThunk == nil {
     log("AAAAAAAA rewriteApplyUse 20")
     rewriteApplyDirectClosure(
       ai: ai, closureInfo: closureInfo, extractedElements: extractedElements,
       builder: builder, context)
     log("AAAAAAAA rewriteApplyUse 21")
-    // } else {
-    //   log("AAAAAAAA rewriteApplyUse 30")
-    //   rewriteApplyViaSubsetThunk(
-    //     ai: ai, closureInfo: closureInfo, extractedElements: extractedElements,
-    //     builder: builder, context)
-    //   log("AAAAAAAA rewriteApplyUse 31")
-    // }
   } else {
     log("AAAAAAAA rewriteApplyUse 40")
     let newAi = builder.createApply(
@@ -2379,7 +2322,6 @@ private func findOptionalNoneMatchingOptionalSome(in vjp: Function, closuresInBT
     closuresInBTEForOptionalNone.append(ClosureInBTE(
       closure: closureInBTE.closure,
       reabstractions: closureInBTE.reabstractions,
-      //subsetThunk: closureInBTE.subsetThunk,
       optionalWrapper: optionalNone,
       useInPayload: payloadTuple.operands.last!,
       enumCase: bteWithNone.type.getEnumCases(in: vjp)![bteWithNone.caseIndex]!
@@ -2665,17 +2607,11 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
     guard let pai = singleUse.instruction as? PartialApplyInst else {
       break
     }
-    // guard pai.asSubsetThunk == nil else {
-    //   break
-    // }
     currentClosure = pai
     reabstractions.append(pai)
   }
 
-  //let subsetThunk = PartialApplyInst?(nil)//currentClosure.uses.singleElement?.instruction.asSubsetThunk
   let optionalWrapper = currentClosure.uses.singleElement?.instruction.asOptionalWrapper
-  //assert(subsetThunk == nil || optionalWrapper == nil)
-  //let closure = subsetThunk ?? (optionalWrapper ?? currentClosure)
   let closure = optionalWrapper ?? currentClosure
 
   for use in closure.uses {
@@ -2698,7 +2634,6 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
       let closureInBTE = ClosureInBTE(
         closure: rootClosure,
         reabstractions: reabstractions,
-        //subsetThunk: subsetThunk,
         optionalWrapper: optionalWrapper,
         useInPayload: use,
         enumCase: enumCase
@@ -2717,13 +2652,11 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
 private func findClosuresInBTE(paiOfPullback: PartialApplyInst) -> [ClosureInBTE] {
   let vjp = paiOfPullback.parentFunction
   var reabstractions = Set<SingleValueInstruction>()
-  //var subsetThunks = Set<SingleValueInstruction>()
   var closuresInBTE = [ClosureInBTE]()
   for inst in vjp.instructions {
     log("AAAAAAAAAAA INST: \(inst)")
     guard inst != paiOfPullback,
           let rootClosure = inst.asSupportedClosure,
-          //!subsetThunks.contains(rootClosure),
           !reabstractions.contains(rootClosure)
     else {
       log("AS SUPPORTED CLOSURE: \(inst.asSupportedClosure)")
@@ -2732,7 +2665,6 @@ private func findClosuresInBTE(paiOfPullback: PartialApplyInst) -> [ClosureInBTE
 
     let currentClosuresInBTE = findBTEUses(for: rootClosure)
     closuresInBTE.append(contentsOf: currentClosuresInBTE)
-    //subsetThunks.formUnion(closuresInBTE.filter{ $0.subsetThunk != nil }.map{ $0.subsetThunk! })
     reabstractions.formUnion(closuresInBTE.flatMap(\.reabstractions))
   }
 
@@ -2849,7 +2781,6 @@ extension ClosureInBTE {
   /// The value that actually appears as the payload-tuple operand for this closure:
   /// the subset thunk if present, otherwise the optional-wrapper enum, otherwise the raw closure.
   var valueInPayload: Value {
-    //if let subsetThunk { return subsetThunk }
     if let optionalWrapper { return optionalWrapper }
     if let reabstraction = reabstractions.last { return reabstraction }
     return closure

@@ -17,7 +17,6 @@ extension EnumCase {
 struct ClosureInBTE : Equatable {
   let closure: SingleValueInstruction
   let reabstractions: [PartialApplyInst]
-  //let subsetThunk: PartialApplyInst?
   let optionalWrapper: EnumInst?
   let useInPayload: Operand
   let enumCase: EnumCase
@@ -215,7 +214,6 @@ private func getSpecializedParamDeclForEnumCase(
       let closureInBTE = closuresInBTEForCaseAndPayloadIndex.first!
       for currentClosureInBTE in closuresInBTEForCaseAndPayloadIndex {
         assert(closureInBTE.closure == currentClosureInBTE.closure)
-        //assert(closureInBTE.subsetThunk == currentClosureInBTE.subsetThunk)
         assert(closureInBTE.optionalWrapper == currentClosureInBTE.optionalWrapper)
         assert(closureInBTE.enumCase == currentClosureInBTE.enumCase)
       }
