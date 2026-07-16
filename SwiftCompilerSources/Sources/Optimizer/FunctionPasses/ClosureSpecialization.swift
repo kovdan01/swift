@@ -1255,7 +1255,7 @@ private func rewriteApplyDirectClosure(
   if let pai = closureInfo.closure as? PartialApplyInst {
     var indirectArgs = [(idx: Int, allocStack: AllocStackInst, store: StoreInst)]()
     for idx in 0..<extractedElements.count {
-      if case .indirectInGuaranteed = pai.convention(of: pai.argumentOperands[idx]) { // TODO: preliminary check
+      if pai.arguments[idx].type.isAddress && !pai.convention(of: pai.argumentOperands[idx])!.isInout {
         let allocStack = builder.createAllocStack(extractedElements[idx].type)
         let store = builder.createStore(source: extractedElements[idx], destination: allocStack, ownership: StoreInst.StoreOwnership.initialize)
         indirectArgs.append((idx: idx, allocStack: allocStack, store: store))
@@ -2435,7 +2435,7 @@ extension ClosureInBTE {
       var paiArgs = Array(pai.arguments)
       for idx in 0..<paiArgs.count {
         // TODO: preliminary check; also check that store is init
-        if paiArgs[idx].type.isAddress {
+        if paiArgs[idx].type.isAddress && !pai.convention(of: pai.argumentOperands[idx])!.isInout {
           assert(paiArgs[idx].uses.count == 3)
           let store = paiArgs[idx].uses.filter { $0.instruction is StoreInst }.map{ $0.instruction as! StoreInst }.singleElement!
           paiArgs[idx] = store.source
@@ -2458,7 +2458,39 @@ private extension Instruction {
     // TODO: figure out what to do with non-inout indirect arguments
     // https://forums.swift.org/t/non-inout-indirect-types-not-supported-in-closure-specialization-optimization/70826
     case let pai as PartialApplyInst
-    where pai.callee is FunctionRefInst:// && pai.hasOnlyInoutIndirectArguments: // TODO: is it correct? also see above
+    where pai.callee is FunctionRefInst:
+      if pai.hasOnlyInoutIndirectArguments {
+        return pai
+      }
+      for op in pai.argumentOperands {
+        guard op.value.type.isAddress else {
+          continue
+        }
+        guard !pai.convention(of: op)!.isInout else {
+          continue
+        }
+        guard let allocStack = op.value as? AllocStackInst else {
+          return nil
+        }
+        guard allocStack.uses.count == 3 else {
+          return nil
+        }
+        guard let storeUse = allocStack.uses.filter{ $0.instruction is StoreInst }.singleElement else {
+          return nil
+        }
+        let store = storeUse.instruction as! StoreInst
+        guard case .initialize = store.storeOwnership else {
+          return nil
+        }
+        guard let paiUse = allocStack.uses.filter{ $0.instruction is PartialApplyInst }.singleElement else {
+          return nil
+        }
+        assert(paiUse.instruction == pai)
+        guard let deallocStackUse = allocStack.uses.filter{ $0.instruction is DeallocStackInst }.singleElement else {
+          return nil
+        }
+        continue
+      }
       return pai
     default:
       return nil
@@ -2545,6 +2577,7 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
   var reabstractions = [PartialApplyInst]()
   var currentClosure = rootClosure
   while let singleUse = currentClosure.uses.singleElement {
+    // TODO: handle other stuff like convert_function, thin_to_thick_function, etc
     guard let pai = singleUse.instruction as? PartialApplyInst else {
       break
     }
