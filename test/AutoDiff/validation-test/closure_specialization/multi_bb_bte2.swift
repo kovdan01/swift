@@ -1167,15 +1167,15 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test14,Test15") {
   // RUN: cat %t/out.sil | %FileCheck --check-prefix=CHECK15-ENUM3 %s
 
   // CHECK15-ENUM1-LABEL: {{^}}enum _AD__$s3outyycfU11_7myfoo15L_yS2fF_bb1__Pred__src_0_wrt_0_spec_bb0_0_1_2_3 {
-  // CHECK15-ENUM1-NEXT:    case bb0(((), (), (), (_: @callee_guaranteed (@in_guaranteed Pair<FloatPair, Float>.TangentVector) -> (@out FloatPair.TangentVector, @out Float))))
+  // CHECK15-ENUM1-NEXT:    case bb0(((), (), (), ()))
   // CHECK15-ENUM1-NEXT:  }
 
   // CHECK15-ENUM2-LABEL: {{^}}enum _AD__$s3outyycfU11_7myfoo15L_yS2fF_bb2__Pred__src_0_wrt_0_spec_bb0_0_1_2_3 {
-  // CHECK15-ENUM2-NEXT:    case bb0(((), (), (), (_: @callee_guaranteed (@in_guaranteed Pair<FloatPair, Float>.TangentVector) -> (@out FloatPair.TangentVector, @out Float))))
+  // CHECK15-ENUM2-NEXT:    case bb0(((), (), (), ()))
   // CHECK15-ENUM2-NEXT:  }
 
   // CHECK15-ENUM3-LABEL: {{^}}enum _AD__$s3outyycfU11_7myfoo15L_yS2fF_bb3__Pred__src_0_wrt_0_spec_bb2_1_2_3_4_bb1_1_2_3 {
-  // CHECK15-ENUM3-NEXT:    case bb2((predecessor: _AD__$s3outyycfU11_7myfoo15L_yS2fF_bb2__Pred__src_0_wrt_0_spec_bb0_0_1_2_3, (), (), (), (_: @callee_guaranteed (@in_guaranteed Pair<FloatPair, Float>.TangentVector) -> (@out FloatPair.TangentVector, @out Float))))
+  // CHECK15-ENUM3-NEXT:    case bb2((predecessor: _AD__$s3outyycfU11_7myfoo15L_yS2fF_bb2__Pred__src_0_wrt_0_spec_bb0_0_1_2_3, (), (), (), ()))
   // CHECK15-ENUM3-NEXT:    case bb1((predecessor: _AD__$s3outyycfU11_7myfoo15L_yS2fF_bb1__Pred__src_0_wrt_0_spec_bb0_0_1_2_3, (), (), ()))
   // CHECK15-ENUM3-NEXT:  }
 
@@ -1231,7 +1231,7 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test16") {
 
   // CHECK16-ENUM3-LABEL: {{^}}enum _AD__$s3outyycfU12_7myfoo16L_4from2atSdSgSDySSSdG_SStF_bb3__Pred__src_0_wrt_0_spec_bb1_1 {
   // CHECK16-ENUM3-NEXT:    case bb2((predecessor: _AD__$s3outyycfU12_7myfoo16L_4from2atSdSgSDySSSdG_SStF_bb2__Pred__src_0_wrt_0_spec))
-  // CHECK16-ENUM3-NEXT:    case bb1((predecessor: _AD__$s3outyycfU12_7myfoo16L_4from2atSdSgSDySSSdG_SStF_bb1__Pred__src_0_wrt_0_spec, (_: @callee_guaranteed (@in_guaranteed Optional<Double>.TangentVector) -> @owned Dictionary<String, Double>)))
+  // CHECK16-ENUM3-NEXT:    case bb1((predecessor: _AD__$s3outyycfU12_7myfoo16L_4from2atSdSgSDySSSdG_SStF_bb1__Pred__src_0_wrt_0_spec, (_: String)))
   // CHECK16-ENUM3-NEXT:  }
 
   // CHECK16-LABEL: {{^}}// reverse-mode derivative of myfoo16
