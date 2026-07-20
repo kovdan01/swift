@@ -1285,7 +1285,7 @@ private func rewriteApplyDirectClosure(
 
   var currentClosure = rootClosure
   for reabstraction in closureInfo.reabstractions {
-    let reabstractionFn = reabstraction.asSupportedClosureFn! // TODO: must be checked in findBTEUses
+    let reabstractionFn = reabstraction.asSupportedClosureFn!
     let reabstractionFri = builder.createFunctionRef(reabstractionFn)
     let newReabstraction = builder.createPartialApply(
       function: reabstractionFri,
