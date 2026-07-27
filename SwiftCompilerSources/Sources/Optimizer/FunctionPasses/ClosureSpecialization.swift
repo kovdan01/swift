@@ -231,6 +231,13 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
   if !isSingleBB && bteSpecEligibility == .eligible {
     let closureAnalysis = PullbackClosureAnalysis(vjp: function)
 
+    log("ORIG VJP BEGIN")
+    log("\(function)")
+    log("ORIG VJP END")
+    log("ORIG PB BEGIN")
+    log("\(closureAnalysis.pullback)")
+    log("ORIG PB END")
+
     guard !closureAnalysis.closuresInBTE.isEmpty else {
       log(
         "Unable to detect closures to be specialized in \(function.name.string), skipping the pass")
@@ -888,6 +895,10 @@ private func specializeAgainstBTE(
     closuresSet: remainingClosures,
     totalSupportedClosures: totalSupportedClosures,
     function: function)
+
+  log("NEW VJP BEGIN")
+  log("\(function)")
+  log("NEW VJP END")
 }
 
 private func replaceEnumInstructionsWithSpecializedTypes(
@@ -1248,7 +1259,6 @@ private func rewriteApplyDirectClosure(
 
   var extractedElements = extractedElements
 
-  let newArgs = Array(ai.arguments)
   let vjpFn = closureInfo.closure.asSupportedClosureFn!
   let newFri = builder.createFunctionRef(vjpFn)
   var indirectArgs = [(idx: Int, allocStack: AllocStackInst, store: StoreInst)]()
@@ -1265,7 +1275,7 @@ private func rewriteApplyDirectClosure(
 
     rootClosure = builder.createPartialApply(
       function: newFri,
-      substitutionMap: ai.substitutionMap, // TODO
+      substitutionMap: pai.substitutionMap, // TODO
       capturedArguments: extractedElements,
       calleeConvention: pai.calleeConvention, 
       hasUnknownResultIsolation: pai.hasUnknownResultIsolation,
@@ -1284,12 +1294,12 @@ private func rewriteApplyDirectClosure(
   var allNewClosures : [SingleValueInstruction] = [rootClosure]
 
   var currentClosure = rootClosure
-  for reabstraction in closureInfo.reabstractions {
+  for reabstraction in closureInfo.reabstractions.dropLast() {
     let reabstractionFn = reabstraction.asSupportedClosureFn!
     let reabstractionFri = builder.createFunctionRef(reabstractionFn)
     let newReabstraction = builder.createPartialApply(
       function: reabstractionFri,
-      substitutionMap: ai.substitutionMap, // TODO
+      substitutionMap: reabstraction.substitutionMap, // TODO
       capturedArguments: [currentClosure],
       calleeConvention: reabstraction.calleeConvention,
       hasUnknownResultIsolation: reabstraction.hasUnknownResultIsolation,
@@ -1299,9 +1309,17 @@ private func rewriteApplyDirectClosure(
     allNewClosures.append(newReabstraction)
   }
 
+  var newArgs = Array(ai.arguments)
+  newArgs.append(currentClosure)
+  let fn = closureInfo.reabstractions.last!.asSupportedClosureFn!
+  let newFriForAi = builder.createFunctionRef(fn)
   let newAi = builder.createApply(
-    function: currentClosure, ai.substitutionMap, arguments: newArgs)
+    function: newFriForAi, ai.substitutionMap, arguments: newArgs)
   ai.replace(with: newAi, context)
+
+  // let newAi = builder.createApply(
+  //   function: currentClosure, ai.substitutionMap, arguments: newArgs)
+  // ai.replace(with: newAi, context)
 
   for newClosure in allNewClosures.reversed() {
     insertLifetimeEndIfNeeded(for: newClosure, before: newAi.parentBlock.terminator, context)
@@ -1491,7 +1509,15 @@ private func analyzeArguments(of apply: ApplySite, _ context: FunctionPassContex
   var rootClosuresAdded = InstructionSet(context)
   defer { rootClosuresAdded.deinitialize() }
 
+  log("analyzeArguments 00")
+  log("\(apply)")
+  log("analyzeArguments 01")
   for argOp in apply.argumentOperands {
+    log("analyzeArguments 10")
+    log("\(argOp)")
+    log("analyzeArguments 11")
+    log("\(argOp.value)")
+    log("analyzeArguments 12")
     var visited = ValueSet(context)
     defer { visited.deinitialize() }
     if let closure = findSpecializableClosure(of: argOp.value, &visited),
@@ -1500,14 +1526,18 @@ private func analyzeArguments(of apply: ApplySite, _ context: FunctionPassContex
        // called by the callee). This opens optimization opportunities, like inlining.
        isClosureApplied(apply.calleeArgument(of: argOp, in: apply.referencedFunction!)!)
     {
+      log("analyzeArguments 20")
       argumentsToSpecialize.append((argOp, closure))
       if let partialApply = closure as? PartialApplyInst,
          rootClosuresAdded.insert(partialApply)
       {
+        log("analyzeArguments 30")
         rootClosures.append(partialApply)
       }
     }
+    log("analyzeArguments 80")
   }
+  log("analyzeArguments 90")
   if argumentsToSpecialize.isEmpty {
     return nil
   }
@@ -1516,9 +1546,14 @@ private func analyzeArguments(of apply: ApplySite, _ context: FunctionPassContex
 
 // Walks down the use-def chain of a function argument, recursively, to find a rootClosure.
 private func findSpecializableClosure(of value: Value, _ visited: inout ValueSet) -> Closure? {
+  log("findSpecializableClosure 00")
   visited.insert(value)
 
   let specializationLevelLimit = 2
+
+  log("findSpecializableClosure 01")
+  log("\(value)")
+  log("findSpecializableClosure 02")
 
   switch value {
   case is ConvertFunctionInst,
@@ -2491,36 +2526,37 @@ private extension Instruction {
       if pai.hasOnlyInoutIndirectArguments {
         return pai
       }
-      for op in pai.argumentOperands {
-        guard op.value.type.isAddress else {
-          continue
-        }
-        guard !pai.convention(of: op)!.isInout else {
-          continue
-        }
-        guard let allocStack = op.value as? AllocStackInst else {
-          return nil
-        }
-        guard allocStack.uses.count == 3 else {
-          return nil
-        }
-        guard let storeUse = allocStack.uses.filter({ $0.instruction is StoreInst }).singleElement else {
-          return nil
-        }
-        let store = storeUse.instruction as! StoreInst
-        guard case .initialize = store.storeOwnership else {
-          return nil
-        }
-        guard let paiUse = allocStack.uses.filter({ $0.instruction is PartialApplyInst }).singleElement else {
-          return nil
-        }
-        assert(paiUse.instruction == pai)
-        guard allocStack.uses.filter({ $0.instruction is DeallocStackInst }).singleElement != nil else {
-          return nil
-        }
-        continue
-      }
-      return pai
+      return nil
+      // for op in pai.argumentOperands {
+      //   guard op.value.type.isAddress else {
+      //     continue
+      //   }
+      //   guard !pai.convention(of: op)!.isInout else {
+      //     continue
+      //   }
+      //   guard let allocStack = op.value as? AllocStackInst else {
+      //     return nil
+      //   }
+      //   guard allocStack.uses.count == 3 else {
+      //     return nil
+      //   }
+      //   guard let storeUse = allocStack.uses.filter({ $0.instruction is StoreInst }).singleElement else {
+      //     return nil
+      //   }
+      //   let store = storeUse.instruction as! StoreInst
+      //   guard case .initialize = store.storeOwnership else {
+      //     return nil
+      //   }
+      //   guard let paiUse = allocStack.uses.filter({ $0.instruction is PartialApplyInst }).singleElement else {
+      //     return nil
+      //   }
+      //   assert(paiUse.instruction == pai)
+      //   guard allocStack.uses.filter({ $0.instruction is DeallocStackInst }).singleElement != nil else {
+      //     return nil
+      //   }
+      //   continue
+      // }
+      // return pai
     default:
       return nil
     }
@@ -2599,7 +2635,8 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
     guard let pai = singleUse.instruction as? PartialApplyInst else {
       break
     }
-    guard pai.isPartialApplyOfThunk else {
+    guard pai.isPartialApplyOfThunk
+        || pai.referencedFunction?.bridged.isAutodiffSubsetParametersThunk() == true else {
       break
     }
     currentClosure = pai
@@ -2830,6 +2867,15 @@ private struct PullbackSpecializationAgainstBTE {
         )
         // Cloning a whole function, even if it contains an `unreachable`, doesn't require lifetime completion.
         specializedContext.setNeedCompleteLifetimes(to: false)
+
+        log("NEW PB BEGIN")
+        log("\(specializedPb)")
+        log("NEW PB END")
+
+        runClosureSpecialization(function: specializedPb, context: cloner.context)
+        log("NEW 2 PB BEGIN")
+        log("\(specializedPb)")
+        log("NEW 2 PB END")
       })
 
     return (specializedPb, false)
