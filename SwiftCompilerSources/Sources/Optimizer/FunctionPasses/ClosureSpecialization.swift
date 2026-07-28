@@ -283,7 +283,12 @@ private func isCalleeSpecializable(of apply: ApplySite) -> Bool {
      !callee.mayBindDynamicSelf,
 
      // Don't support self-recursive functions because that would result in duplicate mapping of values when cloning.
-     callee != apply.parentFunction
+     // Don't support mutual recursion (recursion cycles) either.
+     // Cloning such callees can produce duplicate/unmapped value mappings,
+     // and the nested specialization runs can conflate different closure chains
+     // of the recursive self-call, silently dropping wrapper closures (miscompile).
+     callee != apply.parentFunction,
+     !callee.isPartOfRecursionCycle
   {
     return true
   }
@@ -952,6 +957,24 @@ private extension Function {
     case .readNone, .readOnly, .releaseNone: return false
     default: return true
     }
+  }
+
+  var isPartOfRecursionCycle: Bool {
+    //false
+    let budget = 5000
+    var visited: Set<Function> = []
+
+    func reaches(_ f: Function) -> Bool {
+      for inst in f.instructions {
+        guard let callee = (inst as? FunctionRefInst)?.referencedFunction else { continue }
+        if callee == self { return true }
+        guard callee.isDefinition, visited.insert(callee).inserted else { continue }
+        if visited.count > budget { return true }
+        if reaches(callee) { return true }
+      }
+      return false
+    }
+    return reaches(self)
   }
 }
 
