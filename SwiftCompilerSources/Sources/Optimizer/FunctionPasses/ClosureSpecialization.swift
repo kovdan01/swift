@@ -799,7 +799,18 @@ private func checkRecursivelyIfClosureIsApplied(_ closure: Value, _ handledFuncs
     log("CLOSURE USE: \(use)")
     switch use.instruction {
 
+    case is ConvertFunctionInst,
+      is ConvertEscapeToNoEscapeInst,
+      is MoveValueInst,
+      is CopyValueInst:
+      if checkRecursivelyIfClosureIsApplied(use.instruction, &handledFuncs) {
+        return true
+      }
+
     case let pai as PartialApplyInst:
+      if pai.isPartialApplyOfThunk {
+        return checkRecursivelyIfClosureIsApplied(pai, &handledFuncs)
+      }
       guard let fn = pai.referencedFunction,
         fn.isDefinition,
         handledFuncs.insert(fn).inserted,

@@ -564,7 +564,29 @@ bool BridgedFunction::isAddressor() const {
   return false;
 }
 
+// static bool isAutodiffSubsetParametersThunk(StringRef str) {
+
+//   Demangle::Context Ctx;
+//   if (auto *root = Ctx.demangleSymbolAsNode(str)) {
+//     // root node has Global kind, the AutoDiffSubsetParametersThunk node (if
+//     // present) is direct child of root.
+//     if (root->findByKind(Demangle::Node::Kind::AutoDiffSubsetParametersThunk,
+//                          /*maxDepth=*/1) != nullptr) {
+//       llvm::errs() << "IS SUBSET THUNK: YES " << str << "\n";
+//       return true;
+//     }
+//     llvm::errs() << "IS SUBSET THUNK: NO 1 " << str << "\n";
+//     return false;
+//   }
+
+//   llvm::errs() << "IS SUBSET THUNK: NO 2 " << str << "\n";
+
+//   return false;
+// }
+
 bool BridgedFunction::isAutodiffSubsetParametersThunk() const {
+  //::isAutodiffSubsetParametersThunk("subset_parameter_thunk_XeTJSpSpSrSP");
+
   Demangle::Context Ctx;
   if (auto *root = Ctx.demangleSymbolAsNode(getFunction()->getName())) {
     // root node has Global kind, the AutoDiffSubsetParametersThunk node (if
