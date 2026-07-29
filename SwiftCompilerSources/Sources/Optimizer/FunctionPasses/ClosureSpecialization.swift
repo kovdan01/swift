@@ -186,6 +186,10 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     return
   }
 
+  log("VJP BEGIN")
+  log("\(function)")
+  log("VJP END")
+
   var remainingSpecializationRounds = 5
 
   repeat {
@@ -323,7 +327,7 @@ private func analyzeArguments(of apply: ApplySite, _ context: FunctionPassContex
 private func findSpecializableClosure(of value: Value, _ visited: inout ValueSet) -> Closure? {
   visited.insert(value)
 
-  let specializationLevelLimit = 2
+  let specializationLevelLimit = 4
 
   switch value {
   case is ConvertFunctionInst,
@@ -357,8 +361,10 @@ private func findSpecializableClosure(of value: Value, _ visited: inout ValueSet
     if partialApply.isPartialApplyOfThunk,
        let argumentClosure = findSpecializableClosure(of: partialApply.arguments[0], &visited)
     {
+      log("PAI THUNK \(partialApply)")
       return argumentClosure
     }
+    log("PAI NOT THUNK \(partialApply)")
     guard let callee = partialApply.referencedFunction,
           !partialApply.hasSubstitutions,
 
@@ -385,8 +391,10 @@ private func findSpecializableClosure(of value: Value, _ visited: inout ValueSet
 
           (partialApply.isOnStack || partialApply.allArgumentsCanBeCopied)
     else {
+      log("PAI NOT SUPPORTED \(partialApply)")
       return nil
     }
+    log("PAI SUPPORTED \(partialApply)")
     return partialApply
 
   case let tttfi as ThinToThickFunctionInst:
@@ -786,14 +794,41 @@ private func isClosureApplied(_ closure: Value) -> Bool {
 }
 
 private func checkRecursivelyIfClosureIsApplied(_ closure: Value, _ handledFuncs: inout Set<Function>) -> Bool {
+  let recursionBudget = 100
   for use in closure.uses {
+    log("CLOSURE USE: \(use)")
     switch use.instruction {
 
+    case let pai as PartialApplyInst:
+      guard let fn = pai.referencedFunction,
+        fn.isDefinition,
+        handledFuncs.insert(fn).inserted,
+        handledFuncs.count <= recursionBudget,
+        let calleeArg = pai.calleeArgument(of: use, in: fn)
+        else {
+        continue
+      }
+      log("PAI USE FN BEGIN")
+      log("\(fn)")
+      log("PAI USE FN END")
+
+      if checkRecursivelyIfClosureIsApplied(calleeArg, &handledFuncs) {
+        return checkRecursivelyIfClosureIsApplied(pai, &handledFuncs)
+      }
+    
     case let apply as FullApplySite:
       if apply.callee == closure {
+        log("CLOSURE APPLIED: CLOSURE = \(closure)")
+        log("CLOSURE APPLIED: APPLY = \(apply)")
         return true
       }
-      let recursionBudget = 8
+
+      log("CLOSURE CHECK APPLY: \(apply)")
+      if let fn = apply.referencedFunction {
+        log("CLOSURE CHECK APPLY: FN BEGIN")
+        log("\(fn)")
+        log("CLOSURE CHECK APPLY: FN END")
+      }
 
       // Recurse into called function
       if let callee = apply.referencedFunction,
@@ -803,12 +838,16 @@ private func checkRecursivelyIfClosureIsApplied(_ closure: Value, _ handledFuncs
          let calleeArg = apply.calleeArgument(of: use, in: callee)
       {
         if checkRecursivelyIfClosureIsApplied(calleeArg, &handledFuncs) {
+          log("CLOSURE APPLIED: CLOSURE = \(closure)")
+          log("CLOSURE APPLIED: CALLEE ARG = \(calleeArg)")
           return true
         }
       }
 
     case is CopyValueInst, is MoveValueInst:
       if checkRecursivelyIfClosureIsApplied(use.instruction as! SingleValueInstruction, &handledFuncs) {
+        log("CLOSURE APPLIED: CLOSURE = \(closure)")
+        log("CLOSURE APPLIED: COPY/MOVE = \(use.instruction)")
         return true
       }
 
@@ -816,6 +855,12 @@ private func checkRecursivelyIfClosureIsApplied(_ closure: Value, _ handledFuncs
       break
     }
   }
+
+  log("CLOSURE NOT APPLIED: CLOSURE = \(closure)")
+  log("CLOSURE NOT APPLIED: HANDLED = \(handledFuncs.count)")
+  log("CLOSURE NOT APPLIED: CALLER BEGIN")
+  log("\(closure.parentFunction)")
+  log("CLOSURE NOT APPLIED: CALLER END")
 
   return false
 }
@@ -908,7 +953,7 @@ private extension PartialApplyInst {
   var isPartialApplyOfThunk: Bool {
     if self.numArguments == 1,
       let fun = self.referencedFunction,
-      fun.thunkKind == .reabstractionThunk || fun.thunkKind == .thunk,
+      fun.thunkKind == .reabstractionThunk || fun.isAutodiffSubsetParametersThunk,
       self.arguments[0].type.isLoweredFunction,
       self.arguments[0].type.isReferenceCounted(in: self.parentFunction) || self.callee.type.isThickFunction
     {
@@ -1227,7 +1272,7 @@ private extension Instruction {
     guard let pai = self as? PartialApplyInst,
           pai.argumentOperands.singleElement != nil,
           let function = pai.referencedFunction,
-          function.bridged.isAutodiffSubsetParametersThunk()
+          function.isAutodiffSubsetParametersThunk
     else {
       return nil
     }
