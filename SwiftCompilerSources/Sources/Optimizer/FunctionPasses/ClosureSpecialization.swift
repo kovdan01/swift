@@ -13,7 +13,7 @@
 import AST
 import SIL
 
-private let verbose = false
+private let verbose = true
 
 private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
   if verbose {
@@ -66,6 +66,10 @@ func runClosureSpecialization(function: Function, context: FunctionPassContext) 
     return
   }
 
+  log("RUN CLOSURE SPECIALIZATION BEGIN \(function.name)")
+  log("\(function)")
+  log("RUN CLOSURE SPECIALIZATION END \(function.name)")
+
   var remainingSpecializationRounds = 5
 
   repeat {
@@ -79,9 +83,9 @@ func runClosureSpecialization(function: Function, context: FunctionPassContext) 
       }
     }
 
-    if context.needFixStackNesting {
-      context.fixStackNesting(in: function)
-    }
+    // if context.needFixStackNesting {
+    //   context.fixStackNesting(in: function)
+    // }
     if !changed {
       break
     }
@@ -219,11 +223,13 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
 
 private func trySpecialize(apply: ApplySite, _ context: FunctionPassContext) -> Bool {
   guard isCalleeSpecializable(of: apply),
-        let specialization = analyzeArguments(of: apply, context)
+        let specialization: SpecializationInfo = analyzeArguments(of: apply, context)
   else {
     return false
   }
 
+  let callee = specialization.callee
+  let caller = apply.parentFunction
   let specializedParameters = specialization.getSpecializedParameters()
 
   // A function cannot have more than one "isolated" parameter.
@@ -247,13 +253,27 @@ private func trySpecialize(apply: ApplySite, _ context: FunctionPassContext) -> 
   //
   specialization.uniqueCaptureArguments(context)
 
-  let specializedFunction = specialization.getOrCreateSpecializedFunction(specializedParameters, context)
+  var clonerContext = FunctionPassContext?(nil)
+  let specializedFunction = specialization.getOrCreateSpecializedFunction(specializedParameters, &clonerContext, context)
 
   specialization.unUniqueCaptureArguments(context)
 
   specialization.rewriteApply(for: specializedFunction, context)
 
   specialization.deleteDeadClosures(context)
+
+  if context.needFixStackNesting {
+    context.fixStackNesting(in: caller)
+  }
+
+  if let clonerContext = clonerContext {
+    clonerContext.setNeedCompleteLifetimes(to: false)
+    runClosureSpecialization(function: specializedFunction/*cloner.targetFunction*/, context: clonerContext)
+    //cloner.deinitialize()
+    context.bridgedPassContext.deinitializedNestedPassContext()
+  }
+
+  context.notifyNewFunction(function: specializedFunction, derivedFrom: callee)
 
   return true
 }
@@ -405,6 +425,19 @@ private func findSpecializableClosure(of value: Value, _ visited: inout ValueSet
 /// Either a `partial_apply` or a `thin_to_thick_function`
 private typealias Closure = SingleValueInstruction
 
+// extension FunctionPassContext {
+//   func buildSpecializedFunctionAndContext<T>(
+//     specializedFunction: Function, buildFn: (Function, FunctionPassContext) -> T
+//   ) -> (T, FunctionPassContext) {
+//     let nestedBridgedContext = bridgedPassContext.initializeNestedPassContext(
+//       specializedFunction.bridged)
+//     let nestedContext = FunctionPassContext(_bridged: nestedBridgedContext)
+//     //defer { bridgedPassContext.deinitializedNestedPassContext() }
+
+//     return (buildFn(specializedFunction, nestedContext), nestedContext)
+//   }
+// }
+
 /// Information about the function to be specialized and for which closure arguments.
 private struct SpecializationInfo {
 
@@ -433,7 +466,7 @@ private struct SpecializationInfo {
   private typealias Cloner = SIL.Cloner<FunctionPassContext>
 
   func getOrCreateSpecializedFunction(_ specializedParameters: [ParameterInfo],
-                                      _ context: FunctionPassContext
+                                      _ clonerContext: inout FunctionPassContext?, _ context: FunctionPassContext
   ) -> Function {
     let specializedFunctionName = getSpecializedFunctionName(context)
 
@@ -450,18 +483,32 @@ private struct SpecializationInfo {
         // method anymore.
         withRepresentation: .thin, makeBare: true)
 
-    context.buildSpecializedFunction(
-      specializedFunction: specializedFunction,
-      buildFn: { (specializedFunction, specializedContext) in
-        var cloner = Cloner(cloneToEmptyFunction: specializedFunction, specializedContext)
-        defer { cloner.deinitialize() }
 
-        cloneAndSpecializeFunctionBody(using: &cloner)
-        // Cloning a whole function, even if it contains an `unreachable`, doesn't require lifetime completion.
-        specializedContext.setNeedCompleteLifetimes(to: false)
-      })
+    let nestedBridgedContext = context.bridgedPassContext.initializeNestedPassContext(
+      specializedFunction.bridged)
+    clonerContext = FunctionPassContext(_bridged: nestedBridgedContext)
+    //defer { bridgedPassContext.deinitializedNestedPassContext() }
 
-    context.notifyNewFunction(function: specializedFunction, derivedFrom: callee)
+
+    var cloner = SIL.Cloner<FunctionPassContext>(cloneToEmptyFunction: specializedFunction, clonerContext!)
+    defer { cloner.deinitialize() }
+    cloneAndSpecializeFunctionBody(using: &cloner)
+    
+    // context.buildSpecializedFunction(
+    //   specializedFunction: specializedFunction,
+    //   buildFn: { (specializedFunction, &specializedContext) in
+    //     clonerContext = specializedContext
+    //     var cloner = SIL.Cloner<FunctionPassContext>(cloneToEmptyFunction: specializedFunction, clonerContext!)
+
+    //     defer { cloner.deinitialize() }
+
+    //     cloneAndSpecializeFunctionBody(using: &cloner)
+    //     // Cloning a whole function, even if it contains an `unreachable`, doesn't require lifetime completion.
+    //     //clonerContext.setNeedCompleteLifetimes(to: false)
+        
+    //   })
+
+    
 
     return specializedFunction
   }
@@ -654,7 +701,7 @@ private struct SpecializationInfo {
     ///   specialized_closure1_final(%0 : Float, %1 : Float) -> Float:
     ///     return apply @closure0(%0, %1)
 
-    runClosureSpecialization(function: cloner.targetFunction, context: cloner.context)
+    //runClosureSpecialization(function: cloner.targetFunction, context: cloner.context)
   }
 
   private func addFunctionArgumentsWithoutClosures(using cloner: inout Cloner) {

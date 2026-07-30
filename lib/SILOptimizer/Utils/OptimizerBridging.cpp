@@ -126,6 +126,23 @@ void BridgedPassContext::eraseFunction(BridgedFunction function) const {
   invocation->getPassManager()->getModule()->eraseFunction(function.getFunction());
 }
 
+BridgedContext BridgedPassContext::initializeNestedPassContext(BridgedFunction newFunction) const {
+  BridgedContext ret = { invocation->initializeNestedSwiftPassInvocation(newFunction.getFunction()) };
+  llvm::errs() << "BridgedPassContext::initializeNestedPassContext for " << newFunction.getFunction()->getName() << "\n";
+  llvm::errs() << "BridgedPassContext::initializeNestedPassContext inv " << (void*)(invocation) << "\n";
+  llvm::errs() << "BridgedPassContext::initializeNestedPassContext ctx " << (void*)(ret.context) << "\n";
+  return ret;
+}
+
+void BridgedPassContext::deinitializedNestedPassContext() const {
+  llvm::errs() << "BridgedPassContext::deinitializedNestedPassContext inv " << (void*)(invocation) << "\n";
+  llvm::errs() << "BridgedPassContext::deinitializedNestedPassContext fun " << (void*)this->invocation->getFunction() << "\n";
+  if (this->invocation->getFunction()) {
+    llvm::errs() << "BridgedPassContext::deinitializedNestedPassContext for " << this->invocation->getFunction()->getName() << "\n";
+  }
+  invocation->deinitializeNestedSwiftPassInvocation();
+}
+
 static const irgen::TypeInfo &getTypeInfoOfBuiltin(swift::SILType type, irgen::IRGenModule &IGM) {
   SILType lowered = IGM.getLoweredType(swift::Lowering::AbstractionPattern::getOpaque(), type.getASTType());
   return IGM.getTypeInfo(lowered);
