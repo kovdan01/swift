@@ -23,7 +23,6 @@ import Swift
 
 sil @$ss12_SmallStringV15_invariantCheckyyF : $@convention(method) (_SmallString) -> ()
 sil @$ss13_StringObjectV15_invariantCheckyyF : $@convention(method) (@guaranteed _StringObject) -> ()
-sil @$ss17_assertionFailure__4file4line5flagss5NeverOs12StaticStringV_A2HSus6UInt32VtF : $@convention(thin) (StaticString, StaticString, StaticString, UInt, UInt32) -> Never
 sil @$ss11_StringGutsV15_invariantCheckyyF : $@convention(method) (@guaranteed _StringGuts) -> ()
 sil @$sSS15_invariantCheckyyF : $@convention(method) (@guaranteed String) -> ()
 sil [transparent] [thunk] [ossa] @$s2s24step_5depth1fSSx_SiSSxXEtlFSSxXEfU_SS_TG5 : $@convention(thin) (@in_guaranteed String, @guaranteed @noescape @callee_guaranteed @substituted <τ_0_0> (@in_guaranteed τ_0_0) -> @owned String for <String>) -> @owned String

@@ -13,7 +13,7 @@
 import AST
 import SIL
 
-private let verbose = false
+private let verbose = true
 
 private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
   if verbose {
@@ -66,6 +66,10 @@ func runClosureSpecialization(function: Function, context: FunctionPassContext) 
     return
   }
 
+  log("RUN CLOSURE SPEC BEGIN \(function.name)")
+  log("\(function)")
+  log("RUN CLOSURE SPEC END \(function.name)")
+
   var remainingSpecializationRounds = 5
 
   repeat {
@@ -83,8 +87,13 @@ func runClosureSpecialization(function: Function, context: FunctionPassContext) 
       context.fixStackNesting(in: function)
     }
     if !changed {
+      log("CHANGED NO \(remainingSpecializationRounds): \(function.name)")
       break
     }
+
+    log("CHANGED YES \(remainingSpecializationRounds) BEGIN \(function.name)")
+    log("\(function)")
+    log("CHANGED YES \(remainingSpecializationRounds) END \(function.name)")
 
     remainingSpecializationRounds -= 1
   } while remainingSpecializationRounds > 0
@@ -803,7 +812,7 @@ private func checkRecursivelyIfClosureIsApplied(_ closure: Value, _ handledFuncs
       is ConvertEscapeToNoEscapeInst,
       is MoveValueInst,
       is CopyValueInst:
-      if checkRecursivelyIfClosureIsApplied(use.instruction, &handledFuncs) {
+      if checkRecursivelyIfClosureIsApplied(use.instruction as! SingleValueInstruction, &handledFuncs) {
         return true
       }
 
