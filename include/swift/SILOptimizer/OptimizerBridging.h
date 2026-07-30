@@ -272,8 +272,8 @@ struct BridgedPassContext {
 
   BRIDGED_INLINE bool continueWithNextSubpassRun(OptionalBridgedInstruction inst) const;
   BRIDGED_INLINE bool continueWithNextSubpassRun(OptionalBridgedValue value) const;
-  SWIFT_IMPORT_UNSAFE /*BRIDGED_INLINE */BridgedContext initializeNestedPassContext(BridgedFunction newFunction) const;
-  /*BRIDGED_INLINE */void deinitializedNestedPassContext() const;
+  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedContext initializeNestedPassContext(BridgedFunction newFunction) const;
+  BRIDGED_INLINE void deinitializedNestedPassContext() const;
   BRIDGED_INLINE void
   addFunctionToPassManagerWorklist(BridgedFunction newFunction,
                                    BridgedFunction oldFunction) const;

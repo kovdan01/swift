@@ -375,18 +375,13 @@ bool BridgedPassContext::continueWithNextSubpassRun(OptionalBridgedValue value) 
       silValue, invocation->getFunction(), invocation->getTransform());
 }
 
-// BridgedContext BridgedPassContext::initializeNestedPassContext(BridgedFunction newFunction) const {
-//   BridgedContext ret = { invocation->initializeNestedSwiftPassInvocation(newFunction.getFunction()) };
-//   llvm::errs() << "BridgedPassContext::initializeNestedPassContext for " << newFunction.getFunction()->getName() << "\n";
-//   llvm::errs() << "BridgedPassContext::initializeNestedPassContext inv " << (void*)(invocation) << "\n";
-//   llvm::errs() << "BridgedPassContext::initializeNestedPassContext ctx " << (void*)(ret.context) << "\n";
-//   return ret;
-// }
+BridgedContext BridgedPassContext::initializeNestedPassContext(BridgedFunction newFunction) const {
+  return { invocation->initializeNestedSwiftPassInvocation(newFunction.getFunction()) };
+}
 
-// void BridgedPassContext::deinitializedNestedPassContext() const {
-//   llvm::errs() << "BridgedPassContext::deinitializedNestedPassContext inv " << (void*)(invocation) << "\n";invocation->deinitializeNestedSwiftPassInvocation();
-//   llvm::errs() << "BridgedPassContext::deinitializedNestedPassContext for " << this->invocation->getFunction()->getName() << "\n";
-// }
+void BridgedPassContext::deinitializedNestedPassContext() const {
+  invocation->deinitializeNestedSwiftPassInvocation();
+}
 
 void BridgedPassContext::addFunctionToPassManagerWorklist(
     BridgedFunction newFunction, BridgedFunction oldFunction) const {
