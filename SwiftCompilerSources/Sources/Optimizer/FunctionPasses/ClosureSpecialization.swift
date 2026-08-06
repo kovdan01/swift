@@ -13,7 +13,7 @@
 import AST
 import SIL
 
-private let verbose = false
+private let verbose = true
 
 private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
   if verbose {
@@ -2083,11 +2083,14 @@ private func checkRecursivelyIfClosureIsApplied(_ closure: Value, _ handledFuncs
       log("\(use.instruction)")
       log("checkRecursivelyIfClosureIsApplied 21")
       if pai.isPartialApplyOfThunk {
-        log("checkRecursivelyIfClosureIsApplied 22")
+        log("checkRecursivelyIfClosureIsApplied 22a")
         // `pai.isPartialApplyOfThunk` implies that the captured closure (`closure` here) is applied in the thunk.
         // If the thunk closure (`pai` here) is applied by itself as well, the closure captured by
         // the thunk closure also becomes effectively applied transitively.
-        return checkRecursivelyIfClosureIsApplied(pai, &handledFuncs)
+        if checkRecursivelyIfClosureIsApplied(pai, &handledFuncs) {
+          log("checkRecursivelyIfClosureIsApplied 22b")
+          return true
+        }
       }
       log("checkRecursivelyIfClosureIsApplied 23")
 
@@ -2610,37 +2613,46 @@ private extension Instruction {
       if pai.hasOnlyInoutIndirectArguments {
         return pai
       }
-      return nil
-      // for op in pai.argumentOperands {
-      //   guard op.value.type.isAddress else {
-      //     continue
-      //   }
-      //   guard !pai.convention(of: op)!.isInout else {
-      //     continue
-      //   }
-      //   guard let allocStack = op.value as? AllocStackInst else {
-      //     return nil
-      //   }
-      //   guard allocStack.uses.count == 3 else {
-      //     return nil
-      //   }
-      //   guard let storeUse = allocStack.uses.filter({ $0.instruction is StoreInst }).singleElement else {
-      //     return nil
-      //   }
-      //   let store = storeUse.instruction as! StoreInst
-      //   guard case .initialize = store.storeOwnership else {
-      //     return nil
-      //   }
-      //   guard let paiUse = allocStack.uses.filter({ $0.instruction is PartialApplyInst }).singleElement else {
-      //     return nil
-      //   }
-      //   assert(paiUse.instruction == pai)
-      //   guard allocStack.uses.filter({ $0.instruction is DeallocStackInst }).singleElement != nil else {
-      //     return nil
-      //   }
-      //   continue
-      // }
-      // return pai
+      //return nil
+      for op in pai.argumentOperands {
+        log("CHECK OPERAND 00 \(op)")
+        guard op.value.type.isAddress else {
+          continue
+        }
+        log("CHECK OPERAND 01 \(op)")
+        guard !pai.convention(of: op)!.isInout else {
+          continue
+        }
+        log("CHECK OPERAND 02 \(op)")
+        guard let allocStack = op.value as? AllocStackInst else {
+          return nil
+        }
+        log("CHECK OPERAND 03 \(op)")
+        guard allocStack.uses.count == 3 else {
+          return nil
+        }
+        log("CHECK OPERAND 04 \(op)")
+        guard let storeUse = allocStack.uses.filter({ $0.instruction is StoreInst }).singleElement else {
+          return nil
+        }
+        log("CHECK OPERAND 05 \(op)")
+        let store = storeUse.instruction as! StoreInst
+        guard case .initialize = store.storeOwnership else {
+          return nil
+        }
+        log("CHECK OPERAND 06 \(op)")
+        guard let paiUse = allocStack.uses.filter({ $0.instruction is PartialApplyInst }).singleElement else {
+          return nil
+        }
+        log("CHECK OPERAND 07 \(op)")
+        assert(paiUse.instruction == pai)
+        guard allocStack.uses.filter({ $0.instruction is DeallocStackInst }).singleElement != nil else {
+          return nil
+        }
+        log("CHECK OPERAND 08 \(op)")
+        continue
+      }
+      return pai
     default:
       return nil
     }
@@ -2783,6 +2795,12 @@ private func findClosuresInBTE(paiOfPullback: PartialApplyInst) -> [ClosureInBTE
           let rootClosure = inst.asSupportedClosure,
           !reabstractions.contains(rootClosure)
     else {
+      if let pai = inst as? PartialApplyInst {
+        log("findClosuresInBTE FALSE PAI \(pai)")
+        log("findClosuresInBTE FALSE PB \(paiOfPullback)")
+        log("findClosuresInBTE FALSE root closure \(inst.asSupportedClosure)")
+        log("findClosuresInBTE FALSE \(reabstractions)")
+      }
       continue
     }
 
