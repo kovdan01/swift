@@ -2635,10 +2635,19 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
     guard let pai = singleUse.instruction as? PartialApplyInst else {
       break
     }
-    guard pai.isPartialApplyOfThunk
-        || pai.referencedFunction?.bridged.isAutodiffSubsetParametersThunk() == true else {
+    // guard pai.isPartialApplyOfThunk
+    //     || pai.referencedFunction?.bridged.isAutodiffSubsetParametersThunk() == true else {
+    //   break
+    // }
+
+    guard pai.numArguments == 1,
+      pai.arguments[0].type.isLoweredFunction,
+      pai.arguments[0].type.isReferenceCounted(in: pai.parentFunction)
+        || pai.callee.type.isThickFunction
+    else {
       break
     }
+
     currentClosure = pai
     reabstractions.append(pai)
   }
@@ -2872,10 +2881,10 @@ private struct PullbackSpecializationAgainstBTE {
         log("\(specializedPb)")
         log("NEW PB END")
 
-        runClosureSpecialization(function: specializedPb, context: cloner.context)
-        log("NEW 2 PB BEGIN")
-        log("\(specializedPb)")
-        log("NEW 2 PB END")
+        // runClosureSpecialization(function: specializedPb, context: cloner.context)
+        // log("NEW 2 PB BEGIN")
+        // log("\(specializedPb)")
+        // log("NEW 2 PB END")
       })
 
     return (specializedPb, false)
