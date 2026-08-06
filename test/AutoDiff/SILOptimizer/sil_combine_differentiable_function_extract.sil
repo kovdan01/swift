@@ -159,7 +159,7 @@ bb0:
 
   // function_ref thunk for @callee_guaranteed (@unowned Double) -> (@unowned Double)
   %8 = function_ref @$sS2dIgyd_S2dIegnr_TR : $@convention(thin) (@in_guaranteed Double, @guaranteed @noescape @callee_guaranteed (Double) -> Double) -> @out Double // user: %9
-  // CHECK: %[[#A0:]] = function_ref @$sS2dIgyd_S2dIegnr_TR : $@convention(thin) (@in_guaranteed Double, @guaranteed @noescape @callee_guaranteed (Double) -> Double) -> @out Double // users: %[[#]], %[[#]]{{$}}
+  // CHECK: %[[#A0:]] = function_ref @$sS2dIgyd_S2dIegnr_TR : $@convention(thin) (@in_guaranteed Double, @guaranteed @noescape @callee_guaranteed (Double) -> Double) -> @out Double // user: %[[#]]{{$}}
 
   %9 = partial_apply [callee_guaranteed] %8(%4) : $@convention(thin) (@in_guaranteed Double, @guaranteed @noescape @callee_guaranteed (Double) -> Double) -> @out Double // user: %10
   // CHECK: %[[#A1:]] = partial_apply [callee_guaranteed] %[[#A0]](%[[#A2:]]) : $@convention(thin) (@in_guaranteed Double, @guaranteed @noescape @callee_guaranteed (Double) -> Double) -> @out Double // user: %[[#A3:]]
@@ -206,14 +206,12 @@ bb0:
   store %28 to [trivial] %33 // id: %34
 
   debug_value %32, let, name "f", argno 1, scope 5 // id: %35
-  // CHECK: debug_value %[[#A5]]
-  // CHECK: debug_value %[[#A7]]
-
   debug_value %33, let, name "x", argno 2, expr op_deref, scope 5 // id: %36
 
+  // CHECK: %[[#A29:]] = begin_borrow [lexical] %[[#A5]]
   // CHECK: %[[#A8:]] = alloc_stack $Double
   %37 = apply %32(%0, %33) : $@noescape @callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <Double, Double>
-  // CHECK: %[[#]] = apply %[[#A0]](%0, %[[#A8]], %[[#A2]])
+  // CHECK: %[[#]] = apply %[[#A29]](%0, %[[#A8]])
 
   dealloc_stack %33 // id: %38
   end_borrow %29 // id: %39
@@ -300,7 +298,7 @@ bb0(%0 : $Float):
   %7 = thin_to_thick_function %4 to $@noescape @callee_guaranteed (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) // users: %17, %9; ownership: none
 
   %8 = thin_to_thick_function %5 to $@noescape @callee_guaranteed (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) // users: %23, %9; ownership: none
-  // CHECK: %[[#B8]] = thin_to_thick_function %[[#B5]] to $@noescape @callee_guaranteed (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) // users: %[[#]], %[[#]]; ownership: none
+  // CHECK: %[[#B8]] = thin_to_thick_function %[[#B5]] to $@noescape @callee_guaranteed (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) // user: %[[#B22:]]
 
   %9 = differentiable_function [parameters 0] [results 0] %6 with_derivative {%7, %8} // user: %38
   // function_ref thunk for @callee_guaranteed (@unowned Float) -> (@unowned Float)
@@ -320,10 +318,10 @@ bb0(%0 : $Float):
 
   // function_ref thunk for @callee_guaranteed (@unowned Float) -> (@unowned Float, @owned @escaping @callee_guaranteed (@unowned Float) -> (@unowned Float))
   %22 = function_ref @$sS4fIegyd_Igydo_S2fxq_Ri_zRi0_zRi__Ri0__r0_lyS2fIsegnr_Iegnro_TR : $@convention(thin) (@in_guaranteed Float, @guaranteed @noescape @callee_guaranteed (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float)) -> (@out Float, @owned @callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <Float, Float>) // user: %23
-  // CHECK: %[[#B21:]] = function_ref @$sS4fIegyd_Igydo_S2fxq_Ri_zRi0_zRi__Ri0__r0_lyS2fIsegnr_Iegnro_TR : $@convention(thin) (@in_guaranteed Float, @guaranteed @noescape @callee_guaranteed (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float)) -> (@out Float, @owned @callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <Float, Float>) // users: %[[#]], %[[#]]{{$}}
+  // CHECK: %[[#B21:]] = function_ref @$sS4fIegyd_Igydo_S2fxq_Ri_zRi0_zRi__Ri0__r0_lyS2fIsegnr_Iegnro_TR : $@convention(thin) (@in_guaranteed Float, @guaranteed @noescape @callee_guaranteed (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float)) -> (@out Float, @owned @callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <Float, Float>) // user: %[[#B22]]{{$}}
 
   %23 = partial_apply [callee_guaranteed] %22(%8) : $@convention(thin) (@in_guaranteed Float, @guaranteed @noescape @callee_guaranteed (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float)) -> (@out Float, @owned @callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <Float, Float>) // user: %24
-  // CHECK: %[[#B22:]] = partial_apply [callee_guaranteed] %[[#B21]](%[[#B8]]) : $@convention(thin) (@in_guaranteed Float, @guaranteed @noescape @callee_guaranteed (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float)) -> (@out Float, @owned @callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <Float, Float>) // user: %[[#B23:]]
+  // CHECK: %[[#B22]] = partial_apply [callee_guaranteed] %[[#B21]](%[[#B8]]) : $@convention(thin) (@in_guaranteed Float, @guaranteed @noescape @callee_guaranteed (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float)) -> (@out Float, @owned @callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <Float, Float>) // user: %[[#B23:]]
 
   %24 = convert_function %23 to $@callee_guaranteed @substituted <τ_0_0, τ_0_1, τ_0_2, τ_0_3> (@in_guaranteed τ_0_0) -> (@out τ_0_1, @owned @callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <τ_0_2, τ_0_3>) for <Float, Float, Float, Float> // users: %26, %25
   // CHECK: %[[#B23]] = convert_function %[[#B22]] to $@callee_guaranteed @substituted <τ_0_0, τ_0_1, τ_0_2, τ_0_3> (@in_guaranteed τ_0_0) -> (@out τ_0_1, @owned @callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <τ_0_2, τ_0_3>) for <Float, Float, Float, Float> // users: %[[#]], %[[#]]{{$}}
@@ -335,35 +333,36 @@ bb0(%0 : $Float):
   // CHECK: destroy_value %[[#B23]]
 
   %27 = convert_escape_to_noescape %25 to $@noescape @callee_guaranteed @substituted <τ_0_0, τ_0_1, τ_0_2, τ_0_3> (@in_guaranteed τ_0_0) -> (@out τ_0_1, @owned @callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <τ_0_2, τ_0_3>) for <Float, Float, Float, Float> // user: %28
-  // CHECK: %[[#B26:]] = convert_escape_to_noescape %[[#B24]] to $@noescape @callee_guaranteed @substituted <τ_0_0, τ_0_1, τ_0_2, τ_0_3> (@in_guaranteed τ_0_0) -> (@out τ_0_1, @owned @callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <τ_0_2, τ_0_3>) for <Float, Float, Float, Float> // users: %[[#]], %[[#]]{{$}}
+  // CHECK: %[[#B26:]] = convert_escape_to_noescape %[[#B24]] to $@noescape @callee_guaranteed @substituted <τ_0_0, τ_0_1, τ_0_2, τ_0_3> (@in_guaranteed τ_0_0) -> (@out τ_0_1, @owned @callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <τ_0_2, τ_0_3>) for <Float, Float, Float, Float> // users: %[[#]], %[[#]], %[[#]]{{$}}
   // CHECK: %[[#B27:]] = copy_value %[[#B26]] // user: %[[#B28:]]
 
   %28 = differentiable_function [parameters 0] [results 0] %15 with_derivative {%21, %27} // users: %29, %37
-  // CHECK: %[[#B28]] = differentiable_function [parameters 0] [results 0] %[[#]] with_derivative {%[[#]], %[[#B27]]} // user: %[[#B34:]]
+  // CHECK: %[[#B28]] = differentiable_function [parameters 0] [results 0] %[[#]] with_derivative {%[[#]], %[[#B27]]} // users: %[[#]], %[[#]]
 
   %29 = begin_borrow [lexical] %28                // users: %32, %36
+  // CHECK: %[[#B29:]] = begin_borrow [lexical] %[[#B26]]
+  // CHECK: %[[#B30:]] = copy_value %[[#B29]]
 
   %30 = alloc_stack $Float                        // users: %35, %34, %31
 
-  // CHECK: %[[#B29:]] = alloc_stack $Float // users: %[[#]], %[[#]], %[[#]]{{$}}
+  // CHECK: %[[#B32:]] = alloc_stack $Float // users: %[[#]], %[[#]], %[[#]]{{$}}
   store %0 to [trivial] %30                       // id: %31
-  // CHECK: store %0 to [trivial] %[[#B29]]
+  // CHECK: store %0 to [trivial] %[[#B32]]
 
   %32 = convert_function %29 to $@differentiable(reverse) @noescape @callee_guaranteed (@in_guaranteed Float) -> @out Float // user: %33
   %33 = differentiable_function_extract [vjp] %32 as $@noescape @callee_guaranteed (@in_guaranteed Float) -> (@out Float, @owned @callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <Float, Float>) // user: %34
 
   %34 = apply %33(%2, %30) : $@noescape @callee_guaranteed (@in_guaranteed Float) -> (@out Float, @owned @callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <Float, Float>) // user: %40
-  // CHECK: %[[#B31:]] = apply %[[#B21]](%[[#B2]], %[[#B29]], %[[#B8]]) : $@convention(thin) (@in_guaranteed Float, @guaranteed @noescape @callee_guaranteed (Float) -> (Float, @owned @callee_guaranteed (Float) -> Float)) -> (@out Float, @owned @callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <Float, Float>) // user: %[[#]]
-
-  // CHECK: destroy_value %[[#B26]]
+  // CHECK: %[[#B31:]] = apply %[[#B30]](%[[#B2]], %[[#B32]]) : $@noescape @callee_guaranteed @substituted <τ_0_0, τ_0_1, τ_0_2, τ_0_3> (@in_guaranteed τ_0_0) -> (@out τ_0_1, @owned @callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <τ_0_2, τ_0_3>) for <Float, Float, Float, Float> // user: %[[#]]
 
   dealloc_stack %30                               // id: %35
-  // CHECK: dealloc_stack %[[#B29]]
+  // CHECK: dealloc_stack %[[#B32]]
+  // CHECK: destroy_value %[[#B26]]
 
   end_borrow %29                                  // id: %36
 
   destroy_value %28                               // id: %37
-  // CHECK: destroy_value %[[#B28]] // id: %[[#B34]]
+  // CHECK: destroy_value %[[#B28]]
 
   destroy_value %9                                // id: %38
   %39 = load [trivial] %2                         // users: %47, %46, %43, %51
