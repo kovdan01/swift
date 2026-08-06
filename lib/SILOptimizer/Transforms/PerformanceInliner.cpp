@@ -753,6 +753,7 @@ static bool isProfitableToInlineAutodiffVJP(FullApplySite applySiteOfVJP,
   bool hasOnlyDirectUses = hasPullbackOnlyDirectUses(applySiteOfVJP);
 
   bool calleeHasBTE = vjpHasBranchTracingEnumContext(calleeVJP);
+  bool callerHasBTE = vjpHasBranchTracingEnumContext(caller);
 
   if (callerHasLoops) {
     if (calleeHasLoops) {
@@ -766,13 +767,20 @@ static bool isProfitableToInlineAutodiffVJP(FullApplySite applySiteOfVJP,
     return false;
   }
 
+  if (calleeHasLoops) {
+    if (callerHasBTE) {
+      return false;
+    }
+    assert(calleeHasTopLevelSpecClosures);
+    // Iterative specialization does its job.
+    return hasOnlyDirectUses;
+  }
+
   assert(!callerHasLoops && !calleeHasLoops);
 
   // Can only do specialization against BTE when non-inlined
   if (calleeHasBTE)
     return false;
-
-  bool callerHasBTE = vjpHasBranchTracingEnumContext(caller);
 
   if (callerHasBTE) {
     return hasOnlyDirectUses;
