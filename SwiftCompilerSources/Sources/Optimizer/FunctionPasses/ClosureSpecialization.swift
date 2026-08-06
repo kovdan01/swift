@@ -176,15 +176,26 @@ func runClosureSpecialization(function: Function, context: FunctionPassContext) 
 let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-specialization") {
   (function: Function, context: FunctionPassContext) in
 
+  log("ADCS START 00: \(function.name)")
+
   guard function.hasOwnership else {
+    if function.isAutodiffVJP {
+      log("NO OWNERSHIP BEGIN \(function.name)")
+      log("\(function)")
+      log("NO OWNERSHIP END \(function.name)")
+    }
     return
   }
+
+  log("ADCS START 01: \(function.name)")
 
   guard !function.isDefinedExternally,
     function.isAutodiffVJP
   else {
     return
   }
+
+  log("ADCS START 02: \(function.name)")
 
   let isSingleBB = function.blocks.singleElement != nil
   var bteSpecEligibility = BTESpecEligibility.ineligible
@@ -205,13 +216,27 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
   repeat {
     var changed = false
 
+    log("TRY RUN \(remainingSpecializationRounds): \(function.name)")
+
     guard let returnInst = function.returnInstruction,
       let tupleInst = returnInst.returnedValue.definingInstruction as? TupleInst,
       let lastTupleOp = tupleInst.operands.last,
       let partialApplyInst = lastTupleOp.value.definingInstruction as? PartialApplyInst,
       partialApplyInst.uses.singleUse?.instruction == tupleInst
     else {
+      log("CANNOT RUN BEGIN \(remainingSpecializationRounds): \(function.name)")
+      log("\(function)")
+      log("CANNOT RUN END \(remainingSpecializationRounds): \(function.name)")
       break
+    }
+
+    log("ORIG VJP BEGIN \(remainingSpecializationRounds) \(function.name)")
+    log("\(function)")
+    log("ORIG VJP END \(remainingSpecializationRounds) \(function.name)")
+    if let pb = partialApplyInst.referencedFunction {
+      log("ORIG PB BEGIN \(remainingSpecializationRounds) \(pb.name)")
+      log("\(pb)")
+      log("ORIG PB END \(remainingSpecializationRounds) \(pb.name)")
     }
 
     if trySpecialize(apply: partialApplyInst, context) {
@@ -221,6 +246,22 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
     if context.needFixStackNesting {
       context.fixStackNesting(in: function)
     }
+
+    log("NEW VJP BEGIN \(remainingSpecializationRounds) \(function.name)")
+    log("\(function)")
+    log("NEW VJP END \(remainingSpecializationRounds) \(function.name)")
+
+    if let returnInstNew = function.returnInstruction,
+      let tupleInstNew = returnInstNew.returnedValue.definingInstruction as? TupleInst,
+      let lastTupleOpNew = tupleInstNew.operands.last,
+      let partialApplyInstNew = lastTupleOpNew.value.definingInstruction as? PartialApplyInst,
+      partialApplyInstNew.uses.singleUse?.instruction == tupleInstNew,
+      let pbNew = partialApplyInstNew.referencedFunction {
+      log("NEW PB BEGIN \(remainingSpecializationRounds) \(pbNew.name)")
+      log("\(pbNew)")
+      log("NEW PB END \(remainingSpecializationRounds) \(pbNew.name)")
+    }
+
     if !changed {
       break
     }
@@ -2016,7 +2057,11 @@ private func isClosureApplied(_ closure: Value) -> Bool {
 }
 
 private func checkRecursivelyIfClosureIsApplied(_ closure: Value, _ handledFuncs: inout Set<Function>) -> Bool {
-  let recursionBudget = 8
+  log("checkRecursivelyIfClosureIsApplied 00")
+  log("\(closure)")
+  log("checkRecursivelyIfClosureIsApplied 01")
+
+  let recursionBudget = 80
   for use in closure.uses {
     switch use.instruction {
 
@@ -2024,17 +2069,27 @@ private func checkRecursivelyIfClosureIsApplied(_ closure: Value, _ handledFuncs
          is ConvertEscapeToNoEscapeInst,
          is MoveValueInst,
          is CopyValueInst:
+      log("checkRecursivelyIfClosureIsApplied 10")
+      log("\(use.instruction)")
+      log("checkRecursivelyIfClosureIsApplied 11")
       if checkRecursivelyIfClosureIsApplied(use.instruction as! SingleValueInstruction, &handledFuncs) {
+        log("checkRecursivelyIfClosureIsApplied 12")
         return true
       }
+      log("checkRecursivelyIfClosureIsApplied 13")
 
     case let pai as PartialApplyInst:
+      log("checkRecursivelyIfClosureIsApplied 20")
+      log("\(use.instruction)")
+      log("checkRecursivelyIfClosureIsApplied 21")
       if pai.isPartialApplyOfThunk {
+        log("checkRecursivelyIfClosureIsApplied 22")
         // `pai.isPartialApplyOfThunk` implies that the captured closure (`closure` here) is applied in the thunk.
         // If the thunk closure (`pai` here) is applied by itself as well, the closure captured by
         // the thunk closure also becomes effectively applied transitively.
         return checkRecursivelyIfClosureIsApplied(pai, &handledFuncs)
       }
+      log("checkRecursivelyIfClosureIsApplied 23")
 
       guard let callee = pai.referencedFunction,
             callee.isDefinition,
@@ -2042,8 +2097,13 @@ private func checkRecursivelyIfClosureIsApplied(_ closure: Value, _ handledFuncs
             handledFuncs.count <= recursionBudget,
             let calleeArg = pai.calleeArgument(of: use, in: callee)
       else {
+        log("checkRecursivelyIfClosureIsApplied 24")
         continue
       }
+
+      log("CHECK CLOSURE \(closure) IS APPLIED IN \(callee.name) BEGIN: \(calleeArg)")
+      log("\(callee)")
+      log("CHECK CLOSURE \(closure) IS APPLIED IN \(callee.name) END: \(calleeArg)")
 
       // Check if the captured closure (`closure` here) is applied in context of wrapper closure (`pai` here).
       if checkRecursivelyIfClosureIsApplied(calleeArg, &handledFuncs) {
@@ -2055,28 +2115,52 @@ private func checkRecursivelyIfClosureIsApplied(_ closure: Value, _ handledFuncs
         //     %closure2 = partial_apply @wrapper(%closure1)
         //     apply %closure2(%arg1, %arg2)
         //   }
-        return checkRecursivelyIfClosureIsApplied(pai, &handledFuncs)
-      }
 
-    case let apply as FullApplySite:
-      if apply.callee == closure {
-        return true
-      }
 
-      // Recurse into called function
-      if let callee = apply.referencedFunction,
-         callee.isDefinition,
-         handledFuncs.insert(callee).inserted,
-         handledFuncs.count <= recursionBudget,
-         let calleeArg = apply.calleeArgument(of: use, in: callee)
-      {
-        if checkRecursivelyIfClosureIsApplied(calleeArg, &handledFuncs) {
+        log("CHECK PAI \(pai) IS APPLIED IN \(pai.parentFunction.name) BEGIN")
+        log("\(pai.parentFunction)")
+        log("CHECK PAI \(pai) IS APPLIED IN \(pai.parentFunction.name) END")
+
+        if checkRecursivelyIfClosureIsApplied(pai, &handledFuncs) {
+          log("checkRecursivelyIfClosureIsApplied 29")
           return true
         }
       }
 
+    case let apply as FullApplySite:
+      log("checkRecursivelyIfClosureIsApplied 30")
+      log("\(use.instruction)")
+      log("checkRecursivelyIfClosureIsApplied 31")
+      if apply.callee == closure {
+        log("checkRecursivelyIfClosureIsApplied 32")
+        return true
+      }
+      log("checkRecursivelyIfClosureIsApplied 33")
+
+      // Recurse into called function
+      if let callee = apply.referencedFunction,
+         callee.isDefinition,
+         
+         let calleeArg = apply.calleeArgument(of: use, in: callee)
+      {
+        log("checkRecursivelyIfClosureIsApplied 34A")
+        handledFuncs.insert(callee)
+        if handledFuncs.count <= recursionBudget {
+          log("checkRecursivelyIfClosureIsApplied 34B")
+          if checkRecursivelyIfClosureIsApplied(calleeArg, &handledFuncs) {
+            log("checkRecursivelyIfClosureIsApplied 35")
+            return true
+          }
+          log("checkRecursivelyIfClosureIsApplied 36")
+        }
+      }
+      log("checkRecursivelyIfClosureIsApplied 37")
+
     default:
-      break
+      log("checkRecursivelyIfClosureIsApplied 40")
+      log("\(use.instruction)")
+      log("checkRecursivelyIfClosureIsApplied 41")
+      continue
     }
   }
 

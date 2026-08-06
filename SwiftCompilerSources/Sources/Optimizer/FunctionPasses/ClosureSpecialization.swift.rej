@@ -1,0 +1,22 @@
+--- SwiftCompilerSources/Sources/Optimizer/FunctionPasses/ClosureSpecialization.swift
++++ SwiftCompilerSources/Sources/Optimizer/FunctionPasses/ClosureSpecialization.swift
+@@ -2692,9 +2776,18 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
+     guard let pai = singleUse.instruction as? PartialApplyInst else {
+       break
+     }
+-    guard pai.isPartialApplyOfThunk else {
++
++    guard pai.numArguments == 1,
++      pai.arguments[0].type.isLoweredFunction,
++      pai.arguments[0].type.isReferenceCounted(in: pai.parentFunction)
++        || pai.callee.type.isThickFunction
++    else {
+       break
+     }
++
++    // guard pai.isPartialApplyOfThunk else {
++    //   break
++    // }
+     currentClosure = pai
+     reabstractions.append(pai)
+   }
