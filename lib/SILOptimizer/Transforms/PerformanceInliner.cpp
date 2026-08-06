@@ -488,7 +488,10 @@ static bool hasPullbackOnlyDirectUses(FullApplySite applySiteOfVJP) {
   SILValue calleePullback = nullptr;
   if (applyOfVJP->getType().isTuple()) {
     auto numTupleElements = applyOfVJP->getType().getNumTupleElements();
-    assert(numTupleElements > 0);
+    if (numTupleElements == 0) {
+      return false;
+    }
+
     for (auto user : applyOfVJP->getUsers()) {
       if (auto *tei = dyn_cast<TupleExtractInst>(user)) {
         if (tei->getFieldIndex() + 1 == numTupleElements) {
@@ -505,8 +508,11 @@ static bool hasPullbackOnlyDirectUses(FullApplySite applySiteOfVJP) {
   } else {
     calleePullback = applyOfVJP;
   }
-  assert(calleePullback != nullptr);
-  assert(calleePullback->getType().isFunction());
+
+  if (calleePullback == nullptr)
+    return false;
+  if (!calleePullback->getType().isFunction())
+    return false;
 
   auto getSingleUser = [](SILValue val) -> SILInstruction * {
     auto *use = val->getSingleUse();
