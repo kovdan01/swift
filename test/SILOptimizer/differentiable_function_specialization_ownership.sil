@@ -1,0 +1,304 @@
+// RUN: %target-sil-opt -enable-sil-verify-all -closure-specialization %s > %t
+// RUN: %FileCheck %s --check-prefix=COMPONENTS < %t
+// RUN: %FileCheck %s --check-prefix=TWO-OWNED < %t
+// RUN: %FileCheck %s --check-prefix=TWO-GUARANTEED < %t
+// RUN: %FileCheck %s --check-prefix=MIXED < %t
+// RUN: %FileCheck %s --check-prefix=RETURN-ONLY < %t
+// RUN: %FileCheck %s --check-prefix=OUTER-CONVERT < %t
+// RUN: %FileCheck %s --check-prefix=CONTROL-FLOW < %t
+// REQUIRES: differentiable_programming
+
+sil_stage canonical
+
+import Builtin
+import Swift
+import _Differentiation
+
+sil @primal : $@convention(thin) (Double) -> Double
+sil @derivative_a : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+sil @derivative_b : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+
+// The first call creates a type-based specialization with the same SSA value
+// in its JVP and VJP slots. The second call must reuse that specialization with
+// distinct values in those slots. Reconstructing from a global map keyed by
+// source component SSA would incorrectly use the JVP parameter for both slots.
+//
+// Only the original component is copied: this makes the first aggregate owned
+// while keeping its repeated derivative component at ownership none. Repeating
+// a consumed owned derivative operand would make the input SIL invalid.
+sil [ossa] @same_and_distinct_components : $@convention(thin) (Double) -> (Double, Double) {
+bb0(%x : $Double):
+  %original_ref = function_ref @primal : $@convention(thin) (Double) -> Double
+  %a_ref = function_ref @derivative_a : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %b_ref = function_ref @derivative_b : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %original = thin_to_thick_function %original_ref : $@convention(thin) (Double) -> Double to $@callee_guaranteed (Double) -> Double
+  %a = thin_to_thick_function %a_ref : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double) to $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %b = thin_to_thick_function %b_ref : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double) to $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %consumer = function_ref @read_vjp : $@convention(thin) (Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> Double
+  %original_copy1 = copy_value %original : $@callee_guaranteed (Double) -> Double
+  %shared = differentiable_function [parameters 0] [results 0] %original_copy1 : $@callee_guaranteed (Double) -> Double with_derivative {%a : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), %a : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)}
+  %first = apply %consumer(%x, %shared) : $@convention(thin) (Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> Double
+  destroy_value %shared : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  %original_copy2 = copy_value %original : $@callee_guaranteed (Double) -> Double
+  %distinct = differentiable_function [parameters 0] [results 0] %original_copy2 : $@callee_guaranteed (Double) -> Double with_derivative {%a : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), %b : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)}
+  %second = apply %consumer(%x, %distinct) : $@convention(thin) (Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> Double
+  destroy_value %distinct : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  %result = tuple (%first : $Double, %second : $Double)
+  return %result : $(Double, Double)
+}
+
+// The name ending at Tf1na_n selects the component-exploded specialization,
+// before ordinary closure propagation adds the concrete component identities.
+// COMPONENTS-LABEL: sil shared [noinline] [ossa] @$s8read_vjp{{[^ ]*}}Tf1na_n :
+// COMPONENTS-SAME: $@convention(thin) (Double, @owned @callee_guaranteed (Double) -> Double, @owned @callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), @owned @callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)) -> Double {
+// COMPONENTS: bb0(%[[X:[0-9]+]] : $Double, %[[ORIGINAL:[0-9]+]] : @owned $@callee_guaranteed (Double) -> Double, %[[JVP:[0-9]+]] : @owned $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), %[[VJP:[0-9]+]] : @owned $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)):
+// The reconstructed bundle consumes copies, not the owned parameters.
+// A direct component apply exposed by simplification must be able to reuse
+// the parameter independently (test2). Retaining an owned bundle also lets
+// reabstraction-thunk specialization continue (test3).
+// COMPONENTS: %[[C_ORIGINAL:[0-9]+]] = copy_value %[[ORIGINAL]]
+// COMPONENTS: %[[C_JVP:[0-9]+]] = copy_value %[[JVP]]
+// COMPONENTS: %[[C_VJP:[0-9]+]] = copy_value %[[VJP]]
+// COMPONENTS: %[[DFI:[0-9]+]] = differentiable_function [parameters 0] [results 0] %[[C_ORIGINAL]] with_derivative {%[[C_JVP]], %[[C_VJP]]}
+// The verifier checks that the aggregate and the three owned component
+// parameters have independent, balanced lifetimes.
+// COMPONENTS-DAG: destroy_value %[[ORIGINAL]]
+// COMPONENTS-DAG: destroy_value %[[JVP]]
+// COMPONENTS-DAG: destroy_value %[[VJP]]
+// COMPONENTS-LABEL: } // end sil function
+sil [noinline] [ossa] @read_vjp : $@convention(thin) (Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> Double {
+bb0(%x : $Double, %function : @guaranteed $@differentiable(reverse) @callee_guaranteed (Double) -> Double):
+  %vjp = differentiable_function_extract [vjp] %function : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  %pair = apply %vjp(%x) : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  (%value, %pullback) = destructure_tuple %pair : $(Double, @callee_guaranteed (Double) -> Double)
+  destroy_value %pullback : $@callee_guaranteed (Double) -> Double
+  return %value : $Double
+}
+
+// All three components below are contextless values with ownership none, so
+// the aggregate also has ownership none. Such a value may be passed to two
+// consuming parameters. Its rebuilt owned counterpart needs an independent
+// owned value for each parameter; consuming the same rebuilt value twice is
+// invalid. The verifier run checks both copies' lifetimes after specialization.
+sil [ossa] @duplicate_owned_root : $@convention(thin) (Double) -> (Double, Double) {
+bb0(%x : $Double):
+  %original_ref = function_ref @primal : $@convention(thin) (Double) -> Double
+  %a_ref = function_ref @derivative_a : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %b_ref = function_ref @derivative_b : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %original = thin_to_thick_function %original_ref : $@convention(thin) (Double) -> Double to $@callee_guaranteed (Double) -> Double
+  %a = thin_to_thick_function %a_ref : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double) to $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %b = thin_to_thick_function %b_ref : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double) to $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %function = differentiable_function [parameters 0] [results 0] %original : $@callee_guaranteed (Double) -> Double with_derivative {%a : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), %b : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)}
+  %consumer = function_ref @take_two_owned : $@convention(thin) (Double, @owned @differentiable(reverse) @callee_guaranteed (Double) -> Double, @owned @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> (Double, Double)
+  %result = apply %consumer(%x, %function, %function) : $@convention(thin) (Double, @owned @differentiable(reverse) @callee_guaranteed (Double) -> Double, @owned @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> (Double, Double)
+  return %result : $(Double, Double)
+}
+
+// Exactly one component triple is added for the repeated root.
+// TWO-OWNED-LABEL: sil shared [noinline] [ossa] @$s14take_two_owned{{[^ ]*}}Tf1naC1_n :
+// TWO-OWNED-SAME: $@convention(thin) (Double, @owned @callee_guaranteed (Double) -> Double, @owned @callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), @owned @callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)) -> (Double, Double) {
+// TWO-OWNED: %[[ROOT:[0-9]+]] = differentiable_function
+// TWO-OWNED: %[[FIRST:[0-9]+]] = copy_value %[[ROOT]]
+// TWO-OWNED: %[[SECOND:[0-9]+]] = copy_value %[[ROOT]]
+// TWO-OWNED: destroy_value %[[FIRST]]
+// TWO-OWNED: destroy_value %[[SECOND]]
+// TWO-OWNED: destroy_value %[[ROOT]]
+// TWO-OWNED: return
+// TWO-OWNED-LABEL: } // end sil function
+sil [noinline] [ossa] @take_two_owned : $@convention(thin) (Double, @owned @differentiable(reverse) @callee_guaranteed (Double) -> Double, @owned @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> (Double, Double) {
+bb0(%x : $Double, %first : @owned $@differentiable(reverse) @callee_guaranteed (Double) -> Double, %second : @owned $@differentiable(reverse) @callee_guaranteed (Double) -> Double):
+  %first_borrow = begin_borrow %first : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  %value1 = apply %first_borrow(%x) : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  end_borrow %first_borrow : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  destroy_value %first : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  %second_borrow = begin_borrow %second : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  %value2 = apply %second_borrow(%x) : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  end_borrow %second_borrow : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  destroy_value %second : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  %result = tuple (%value1 : $Double, %value2 : $Double)
+  return %result : $(Double, Double)
+}
+
+sil [ossa] @duplicate_guaranteed_root : $@convention(thin) (Double) -> (Double, Double) {
+bb0(%x : $Double):
+  %original_ref = function_ref @primal : $@convention(thin) (Double) -> Double
+  %a_ref = function_ref @derivative_a : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %b_ref = function_ref @derivative_b : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %original = thin_to_thick_function %original_ref : $@convention(thin) (Double) -> Double to $@callee_guaranteed (Double) -> Double
+  %a = thin_to_thick_function %a_ref : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double) to $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %b = thin_to_thick_function %b_ref : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double) to $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %function = differentiable_function [parameters 0] [results 0] %original : $@callee_guaranteed (Double) -> Double with_derivative {%a : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), %b : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)}
+  %consumer = function_ref @take_two_guaranteed : $@convention(thin) (Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> (Double, Double)
+  %result = apply %consumer(%x, %function, %function) : $@convention(thin) (Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> (Double, Double)
+  return %result : $(Double, Double)
+}
+
+// The two guaranteed parameters borrow the same local owner, with two complete
+// borrow scopes and one final destruction of that owner.
+// TWO-GUARANTEED-LABEL: sil shared [noinline] [ossa] @$s19take_two_guaranteed{{[^ ]*}}Tf1naC1_n :
+// TWO-GUARANTEED-SAME: $@convention(thin) (Double, @owned @callee_guaranteed (Double) -> Double, @owned @callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), @owned @callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)) -> (Double, Double) {
+// TWO-GUARANTEED: %[[ROOT:[0-9]+]] = differentiable_function
+// TWO-GUARANTEED: %[[FIRST:[0-9]+]] = begin_borrow %[[ROOT]]
+// TWO-GUARANTEED: %[[SECOND:[0-9]+]] = begin_borrow %[[ROOT]]
+// TWO-GUARANTEED-DAG: end_borrow %[[FIRST]]
+// TWO-GUARANTEED-DAG: end_borrow %[[SECOND]]
+// TWO-GUARANTEED: destroy_value %[[ROOT]]
+// TWO-GUARANTEED: return
+// TWO-GUARANTEED-LABEL: } // end sil function
+sil [noinline] [ossa] @take_two_guaranteed : $@convention(thin) (Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> (Double, Double) {
+bb0(%x : $Double, %first : @guaranteed $@differentiable(reverse) @callee_guaranteed (Double) -> Double, %second : @guaranteed $@differentiable(reverse) @callee_guaranteed (Double) -> Double):
+  %value1 = apply %first(%x) : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  %value2 = apply %second(%x) : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  %result = tuple (%value1 : $Double, %value2 : $Double)
+  return %result : $(Double, Double)
+}
+
+sil [ossa] @mixed_root : $@convention(thin) (Double) -> (Double, Double) {
+bb0(%x : $Double):
+  %original_ref = function_ref @primal : $@convention(thin) (Double) -> Double
+  %a_ref = function_ref @derivative_a : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %b_ref = function_ref @derivative_b : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %original = thin_to_thick_function %original_ref : $@convention(thin) (Double) -> Double to $@callee_guaranteed (Double) -> Double
+  %a = thin_to_thick_function %a_ref : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double) to $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %b = thin_to_thick_function %b_ref : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double) to $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %function = differentiable_function [parameters 0] [results 0] %original : $@callee_guaranteed (Double) -> Double with_derivative {%a : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), %b : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)}
+  %consumer = function_ref @take_mixed : $@convention(thin) (Double, @owned @differentiable(reverse) @callee_guaranteed (Double) -> Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> (Double, Double)
+  %result = apply %consumer(%x, %function, %function) : $@convention(thin) (Double, @owned @differentiable(reverse) @callee_guaranteed (Double) -> Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> (Double, Double)
+  return %result : $(Double, Double)
+}
+
+// Consuming one parameter must not consume the owner still needed by the other
+// parameter's borrow. This catches mapping both formals directly to ROOT.
+// MIXED-LABEL: sil shared [noinline] [ossa] @$s10take_mixed{{[^ ]*}}Tf1naC1_n :
+// MIXED-SAME: $@convention(thin) (Double, @owned @callee_guaranteed (Double) -> Double, @owned @callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), @owned @callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)) -> (Double, Double) {
+// MIXED: %[[ROOT:[0-9]+]] = differentiable_function
+// MIXED: %[[OWNED:[0-9]+]] = copy_value %[[ROOT]]
+// MIXED: %[[GUARANTEED:[0-9]+]] = begin_borrow %[[ROOT]]
+// MIXED: destroy_value %[[OWNED]]
+// MIXED: apply %[[GUARANTEED]]
+// MIXED: end_borrow %[[GUARANTEED]]
+// MIXED: destroy_value %[[ROOT]]
+// MIXED: return
+// MIXED-LABEL: } // end sil function
+sil [noinline] [ossa] @take_mixed : $@convention(thin) (Double, @owned @differentiable(reverse) @callee_guaranteed (Double) -> Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> (Double, Double) {
+bb0(%x : $Double, %owned : @owned $@differentiable(reverse) @callee_guaranteed (Double) -> Double, %guaranteed : @guaranteed $@differentiable(reverse) @callee_guaranteed (Double) -> Double):
+  %borrow = begin_borrow %owned : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  %value1 = apply %borrow(%x) : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  end_borrow %borrow : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  destroy_value %owned : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  %value2 = apply %guaranteed(%x) : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  %result = tuple (%value1 : $Double, %value2 : $Double)
+  return %result : $(Double, Double)
+}
+
+// Merely returning the bundle gives no opportunity to specialize an invocation
+// inside the callee. Keep this call unspecialized even though the argument's
+// three components are known and its ownership is none.
+// RETURN-ONLY-LABEL: sil [ossa] @return_only_caller :
+// RETURN-ONLY: %[[ROOT:[0-9]+]] = differentiable_function
+// RETURN-ONLY: %[[CALLEE:[0-9]+]] = function_ref @return_bundle :
+// RETURN-ONLY: %[[RETURNED:[0-9]+]] = apply %[[CALLEE]](%[[ROOT]])
+// RETURN-ONLY: return %[[RETURNED]]
+// RETURN-ONLY-LABEL: } // end sil function
+sil [ossa] @return_only_caller : $@convention(thin) () -> @owned @differentiable(reverse) @callee_guaranteed (Double) -> Double {
+bb0:
+  %original_ref = function_ref @primal : $@convention(thin) (Double) -> Double
+  %a_ref = function_ref @derivative_a : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %b_ref = function_ref @derivative_b : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %original = thin_to_thick_function %original_ref : $@convention(thin) (Double) -> Double to $@callee_guaranteed (Double) -> Double
+  %a = thin_to_thick_function %a_ref : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double) to $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %b = thin_to_thick_function %b_ref : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double) to $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %function = differentiable_function [parameters 0] [results 0] %original : $@callee_guaranteed (Double) -> Double with_derivative {%a : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), %b : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)}
+  %consumer = function_ref @return_bundle : $@convention(thin) (@owned @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> @owned @differentiable(reverse) @callee_guaranteed (Double) -> Double
+  %returned = apply %consumer(%function) : $@convention(thin) (@owned @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> @owned @differentiable(reverse) @callee_guaranteed (Double) -> Double
+  return %returned : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+}
+
+sil [noinline] [ossa] @return_bundle : $@convention(thin) (@owned @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> @owned @differentiable(reverse) @callee_guaranteed (Double) -> Double {
+bb0(%function : @owned $@differentiable(reverse) @callee_guaranteed (Double) -> Double):
+  return %function : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+}
+
+// An ownership-none convert_function outside the aggregate must be rebuilt
+// with the ownership of its new operand. An identity conversion isolates this
+// ownership case from component type conversions and reabstraction thunks.
+sil [ossa] @converted_root : $@convention(thin) (Double) -> Double {
+bb0(%x : $Double):
+  %original_ref = function_ref @primal : $@convention(thin) (Double) -> Double
+  %a_ref = function_ref @derivative_a : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %b_ref = function_ref @derivative_b : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %original = thin_to_thick_function %original_ref : $@convention(thin) (Double) -> Double to $@callee_guaranteed (Double) -> Double
+  %a = thin_to_thick_function %a_ref : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double) to $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %b = thin_to_thick_function %b_ref : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double) to $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %function = differentiable_function [parameters 0] [results 0] %original : $@callee_guaranteed (Double) -> Double with_derivative {%a : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), %b : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)}
+  %converted = convert_function %function : $@differentiable(reverse) @callee_guaranteed (Double) -> Double to $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  %consumer = function_ref @apply_converted : $@convention(thin) (Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> Double
+  %result = apply %consumer(%x, %converted) : $@convention(thin) (Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> Double
+  return %result : $Double
+}
+
+// OUTER-CONVERT-LABEL: sil shared [noinline] [ossa] @$s15apply_converted{{[^ ]*}}Tf1na_n :
+// OUTER-CONVERT: %[[ROOT:[0-9]+]] = differentiable_function
+// OUTER-CONVERT: %[[INPUT:[0-9]+]] = copy_value %[[ROOT]]
+// OUTER-CONVERT: %[[CONVERTED:[0-9]+]] = convert_function %[[INPUT]] to $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+// OUTER-CONVERT: %[[BORROW:[0-9]+]] = begin_borrow %[[CONVERTED]]
+// OUTER-CONVERT: apply %[[BORROW]]
+// OUTER-CONVERT: end_borrow %[[BORROW]]
+// OUTER-CONVERT: destroy_value %[[CONVERTED]]
+// OUTER-CONVERT: destroy_value %[[ROOT]]
+// OUTER-CONVERT: return
+// OUTER-CONVERT-LABEL: } // end sil function
+sil [noinline] [ossa] @apply_converted : $@convention(thin) (Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> Double {
+bb0(%x : $Double, %function : @guaranteed $@differentiable(reverse) @callee_guaranteed (Double) -> Double):
+  %result = apply %function(%x) : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+  return %result : $Double
+}
+
+sil @should_repeat : $@convention(thin) () -> Builtin.Int1
+
+// The component copies are created before the original bundle, but the new
+// consuming call is in a loop that can be bypassed. makeAvailable must supply
+// a fresh owned triple per iteration and clean up the retained copies on exits.
+// The verifier checks these lifetimes; require that the call was specialized so
+// this cannot pass by leaving the original guaranteed bundle argument intact.
+// CONTROL-FLOW-LABEL: sil [ossa] @loop_root :
+// CONTROL-FLOW: cond_br
+// CONTROL-FLOW: function_ref @$s8read_vjp{{[^ ]*}}Tf1
+// CONTROL-FLOW: apply
+// CONTROL-FLOW: cond_br
+// CONTROL-FLOW: return
+// CONTROL-FLOW-LABEL: } // end sil function
+sil [ossa] @loop_root : $@convention(thin) (Builtin.Int1, Double) -> Double {
+bb0(%enter : $Builtin.Int1, %x : $Double):
+  %original_ref = function_ref @primal : $@convention(thin) (Double) -> Double
+  %a_ref = function_ref @derivative_a : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %b_ref = function_ref @derivative_b : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %original = thin_to_thick_function %original_ref : $@convention(thin) (Double) -> Double to $@callee_guaranteed (Double) -> Double
+  %a = thin_to_thick_function %a_ref : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double) to $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %b = thin_to_thick_function %b_ref : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double) to $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
+  %function = differentiable_function [parameters 0] [results 0] %original : $@callee_guaranteed (Double) -> Double with_derivative {%a : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), %b : $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)}
+  cond_br %enter, bb1, bb2
+
+// Split entry, bypass, backedge and loop-exit edges: OSSA forbids critical edges.
+bb1:
+  br bb3
+
+bb2:
+  br bb6
+
+bb3:
+  %consumer = function_ref @read_vjp : $@convention(thin) (Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> Double
+  %value = apply %consumer(%x, %function) : $@convention(thin) (Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> Double
+  %repeat_ref = function_ref @should_repeat : $@convention(thin) () -> Builtin.Int1
+  %again = apply %repeat_ref() : $@convention(thin) () -> Builtin.Int1
+  cond_br %again, bb4, bb5
+
+bb4:
+  br bb3
+
+bb5:
+  br bb6
+
+bb6:
+  return %x : $Double
+}
