@@ -1,0 +1,160 @@
+diff --git a/SimplifyDifferentiableFunction.swift b/SimplifyDifferentiableFunction.swift
+index 00000000000..00000000000 100644
+--- a/SimplifyDifferentiableFunction.swift
++++ b/SimplifyDifferentiableFunction.swift
+@@ -45,12 +45,13 @@ extension DifferentiableFunctionInst : SILCombineSimplifiable {
+   ///   end_of_lifetime %3
+   /// ```
+   func simplify(_ context: SimplifyContext) {
+-    guard ownership == .owned,
+-          hasOnlyExtractUsesInBorrowScopes()
+-    else {
++    guard ownership == .owned else {
+       return
+     }
+ 
+-    for use in uses {
+-      switch use.instruction {
+-      case let beginBorrow as BeginBorrowInst:
+-        splitAndRemoveExtracts(beginBorrow: beginBorrow, context)
+-      case is DebugValueInst:
+-        break
+-      default:
+-        assert(use.endsLifetime)
++    if hasOnlyExtractUsesInBorrowScopes() {
++      for use in uses {
++        switch use.instruction {
++        case let beginBorrow as BeginBorrowInst:
++          splitAndRemoveExtracts(beginBorrow: beginBorrow, context)
++        case is DebugValueInst:
++          break
++        default:
++          assert(use.endsLifetime)
++        }
+       }
+     }
++
++    splitAndRemoveNoEscapeDependentExtracts(context)
+   }
+ 
+   private func hasOnlyExtractUsesInBorrowScopes() -> Bool {
+@@ -91,7 +92,11 @@ extension DifferentiableFunctionInst : SILCombineSimplifiable {
+     return hasExtract
+   }
+ 
+-  private func processExtract(differentiableFunctionExtract: DifferentiableFunctionExtractInst, beginBorrow: BeginBorrowInst, _ context: SimplifyContext) {
++  private func processExtract(
++    differentiableFunctionExtract: DifferentiableFunctionExtractInst,
++    beginBorrow: BeginBorrowInst?,
++    lifetimeEndInstructions: [Instruction] = [],
++    _ context: SimplifyContext
++  ) {
+     guard let extractee = self.getExtractee(extractee: differentiableFunctionExtract.extractee)
+     else {
+       return
+@@ -122,11 +127,18 @@ extension DifferentiableFunctionInst : SILCombineSimplifiable {
+       }
+ 
+     case .guaranteed:
+-      let beginBuilder = Builder(before: beginBorrow, context)
++      let borrowScopeStart: Instruction
++      if let beginBorrow {
++        borrowScopeStart = beginBorrow
++      } else {
++        // The copy is created immediately before `self`, so beginning its
++        // borrow here dominates every lifetime-ending use of `self`.
++        borrowScopeStart = self
++      }
++
++      let beginBuilder = Builder(before: borrowScopeStart, context)
+       let borrowedField = beginBuilder.createBeginBorrow(
+         of: effectiveExtractee,
+-        isLexical: beginBorrow.isLexical,
+-        hasPointerEscape: beginBorrow.hasPointerEscape)
++        isLexical: beginBorrow?.isLexical ?? false,
++        hasPointerEscape: beginBorrow?.hasPointerEscape ?? false)
+ 
+       if differentiableFunctionExtract.type != effectiveExtractee.type {
+         let convertBuilder = Builder(before: differentiableFunctionExtract, context)
+@@ -138,13 +150,25 @@ extension DifferentiableFunctionInst : SILCombineSimplifiable {
+       } else {
+         differentiableFunctionExtract.replace(with: borrowedField, context)
+       }
+-      for endBorrow in beginBorrow.endInstructions {
+-        let endBuilder = Builder(before: endBorrow, context)
+-        endBuilder.createEndBorrow(of: borrowedField)
+-        if needsDestroy {
+-          endBuilder.createDestroyValue(operand: effectiveExtractee)
++
++      if let beginBorrow {
++        for endBorrow in beginBorrow.endInstructions {
++          let endBuilder = Builder(before: endBorrow, context)
++          endBuilder.createEndBorrow(of: borrowedField)
++          if needsDestroy {
++            endBuilder.createDestroyValue(operand: effectiveExtractee)
++          }
++        }
++      } else {
++        for lifetimeEnd in lifetimeEndInstructions {
++          let endBuilder = Builder(before: lifetimeEnd, context)
++          endBuilder.createEndBorrow(of: borrowedField)
++          if needsDestroy {
++            endBuilder.createDestroyValue(operand: effectiveExtractee)
++          }
+         }
+       }
+ 
+     case .owned, .unowned:
+       fatalError("wrong ownership of differentiable_function_extract")
+     }
+   }
+ 
++  private func splitAndRemoveNoEscapeDependentExtracts(
++    _ context: SimplifyContext
++  ) {
++    let lifetimeEndInstructions = uses
++      .filter { $0.endsLifetime }
++      .map { $0.instruction }
++
++    // Without an observable lifetime end, there is nowhere to end the
++    // borrows and destroy the copied fields.
++    guard !lifetimeEndInstructions.isEmpty else {
++      return
++    }
++
++    // Snapshot the extracts before replacing them, because replacement
++    // mutates the mark_dependence use lists.
++    var extracts: [DifferentiableFunctionExtractInst] = []
++
++    for conversion in uses.users(ofType: ConvertEscapeToNoEscapeInst.self) {
++      guard conversion.operand == self else {
++        continue
++      }
++
++      for dependence in conversion.uses.users(ofType: MarkDependenceInst.self) {
++        guard dependence.value == conversion,
++              dependence.base == self
++        else {
++          continue
++        }
++
++        for extract in dependence.uses.users(
++          ofType: DifferentiableFunctionExtractInst.self
++        ) {
++          extracts.append(extract)
++        }
++      }
++    }
++
++    for extract in extracts {
++      processExtract(
++        differentiableFunctionExtract: extract,
++        beginBorrow: nil,
++        lifetimeEndInstructions: lifetimeEndInstructions,
++        context)
++    }
++  }
++
+   private func splitAndRemoveExtracts(beginBorrow: BeginBorrowInst, _ context: SimplifyContext) {
+     for differentiableFunctionExtract in beginBorrow.uses.users(ofType: DifferentiableFunctionExtractInst.self) {
+       processExtract(

@@ -13,7 +13,7 @@
 import AST
 import SIL
 
-private let verbose = false
+private let verbose = true
 
 private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
   if verbose {
@@ -64,6 +64,12 @@ let closureSpecialization = FunctionPass(name: "closure-specialization") {
 func runClosureSpecialization(function: Function, context: FunctionPassContext) {
   guard function.hasOwnership else {
     return
+  }
+
+  for inst in function.instructions {
+    if let apply = inst as? FullApplySite {
+      trySpecializeDifferentiableFunction(apply: apply, context)
+    }
   }
 
   var remainingSpecializationRounds = 5
@@ -258,6 +264,29 @@ private func trySpecialize(apply: ApplySite, _ context: FunctionPassContext) -> 
   return true
 }
 
+private func trySpecializeDifferentiableFunction(apply: ApplySite, _ context: FunctionPassContext) -> Bool {
+  guard isCalleeSpecializable(of: apply),
+        let specialization = analyzeDifferentiableFunctionArguments(of: apply, context)
+  else {
+    return false
+  }
+
+  let specializedParameters = specialization.getSpecializedParameters()
+
+  // A function cannot have more than one "isolated" parameter.
+  guard numberOfIsolatedParameters(specializedParameters) <= 1 else {
+    return false
+  }
+
+  let specializedFunction = specialization.getOrCreateSpecializedFunction(specializedParameters, context)
+
+  specialization.rewriteApply(for: specializedFunction, context)
+
+  //specialization.deleteDeadDifferentiableFunctions(context)
+
+  return true
+}
+
 private func isCalleeSpecializable(of apply: ApplySite) -> Bool {
   if let callee = apply.referencedFunction,
      callee.isDefinition,
@@ -321,6 +350,92 @@ private func analyzeArguments(of apply: ApplySite, _ context: FunctionPassContex
   }
   return SpecializationInfo(apply: apply, closureArguments: argumentsToSpecialize, rootClosures: rootClosures,
                             capturedDependencies: capturedDependencies)
+}
+
+private func analyzeDifferentiableFunctionArguments(of apply: ApplySite, _ context: FunctionPassContext) -> DifferentiableFunctionSpecializationInfo? {
+  var argumentsToSpecialize = [(Operand, DifferentiableFunctionInst)]()
+  var differentiableFunctions = [DifferentiableFunctionInst]()
+
+  for argOp in apply.argumentOperands {
+    var visited = ValueSet(context)
+    defer { visited.deinitialize() }
+    if let differentiableFunction = findSpecializableDifferentiableFunction(of: argOp.value, &visited),
+       isDifferentiableFunctionApplied(apply.calleeArgument(of: argOp, in: apply.referencedFunction!)!)
+    {
+      argumentsToSpecialize.append((argOp, differentiableFunction))
+      differentiableFunctions.append(differentiableFunction)
+    }
+  }
+  if argumentsToSpecialize.isEmpty {
+    return nil
+  }
+  return DifferentiableFunctionSpecializationInfo(apply: apply, differentiableFunctionArguments: argumentsToSpecialize, differentiableFunctions: differentiableFunctions)
+}
+
+// Walks down the use-def chain of a function argument, recursively, to find a rootClosure.
+private func findSpecializableComponentClosure(of value: Value, _ visited: inout ValueSet,
+                                      _ capturedDependencies: inout [CapturedDependency]) -> Closure? {
+  visited.insert(value)
+
+  let specializationLevelLimit = 2
+
+  switch value {
+  case is ConvertFunctionInst,
+       is ConvertEscapeToNoEscapeInst,
+       is MoveValueInst,
+       is CopyValueInst:
+    return findSpecializableComponentClosure(of: (value as! UnaryInstruction).operand.value, &visited, &capturedDependencies)
+
+  case let mdi as MarkDependenceInst:
+    guard mdi.value.type.isNoEscapeFunction, mdi.value.type.isThickFunction else {
+      return nil
+    }
+    guard let operandClosure = findSpecializableComponentClosure(of: mdi.value, &visited, &capturedDependencies) else {
+      return nil
+    }
+    // A base not in the closure's use-def chain must be a root-closure capture; record it for `uniqueCaptureArguments`.
+    if !visited.contains(mdi.base) {
+      guard let rootClosure = operandClosure as? PartialApplyInst,
+            rootClosure.arguments.contains(where: { $0 == mdi.base })
+      else {
+        return nil
+      }
+      capturedDependencies.append((closure: rootClosure, markDependence: mdi))
+    }
+    return operandClosure
+
+  case let partialApply as PartialApplyInst:
+    // Don't specialize for re-abstractions via a partial_apply, but treat such re-abstractions like
+    // closure "conversions". E.g.
+    // ```
+    //   %1 = partial_apply             // root closure
+    //   %2 = function_ref @thunk
+    //   %3 = partial_apply %2(%1)      // re-abstraction
+    //   apply %f(%3)
+    // ```
+    if partialApply.isPartialApplyOfThunk {
+      // Keep the recorded dependencies only if the thunk's argument provides the root closure;
+      // otherwise the thunk's partial_apply itself is tried as the root, below.
+      var argumentDependencies = [CapturedDependency]()
+      if let argumentClosure = findSpecializableComponentClosure(of: partialApply.arguments[0], &visited,
+                                                        &argumentDependencies) {
+        capturedDependencies.append(contentsOf: argumentDependencies)
+        return argumentClosure
+      }
+    }
+    return nil
+
+  case let tttfi as ThinToThickFunctionInst:
+    guard let callee = tttfi.referencedFunction,
+          callee.specializationLevel <= specializationLevelLimit
+    else {
+      return nil
+    }
+    return tttfi
+
+  default:
+    return nil
+  }
 }
 
 // Walks down the use-def chain of a function argument, recursively, to find a rootClosure.
@@ -411,6 +526,57 @@ private func findSpecializableClosure(of value: Value, _ visited: inout ValueSet
       return nil
     }
     return tttfi
+
+  default:
+    return nil
+  }
+}
+
+private func findSpecializableDifferentiableFunction(of value: Value, _ visited: inout ValueSet) -> DifferentiableFunctionInst? {
+  visited.insert(value)
+
+  switch value {
+  case is ConvertFunctionInst,
+       is ConvertEscapeToNoEscapeInst,
+       is MoveValueInst,
+       is CopyValueInst:
+    return findSpecializableDifferentiableFunction(of: (value as! UnaryInstruction).operand.value, &visited)
+
+  case let differentiableFunction as DifferentiableFunctionInst:
+    log("findSpecializableDifferentiableFunction 00")
+    log("\(differentiableFunction)")
+    log("findSpecializableDifferentiableFunction 01")
+
+    let original = differentiableFunction.getExtractee(extractee: DifferentiableFunctionTypeComponent.original)
+    let jvp = differentiableFunction.getExtractee(extractee: DifferentiableFunctionTypeComponent.jvp)
+    let vjp = differentiableFunction.getExtractee(extractee: DifferentiableFunctionTypeComponent.vjp)
+
+    if original == nil || jvp == nil || vjp == nil {
+      return nil
+    }
+    
+    // // TODO: allow some components missing
+    // func isFunctionKnownStatically(_ component: Value?) -> Bool {
+    //   func getPreviousInstruction(_ inst: Instruction) -> SingleValueInstruction? {
+
+    //   }
+    //   guard let tttfi = component?.definingInstruction as? ThinToThickFunctionInst,
+    //         tttfi.referencedFunction != nil else {
+    //     return false
+    //   }
+    //   return true
+    // }
+
+    var capturedDeps = [CapturedDependency]()
+
+    if findSpecializableComponentClosure(of: original!, &visited, &capturedDeps) != nil &&
+       findSpecializableComponentClosure(of: jvp!, &visited, &capturedDeps) != nil &&
+       findSpecializableComponentClosure(of: vjp!, &visited, &capturedDeps) != nil {
+      log("findSpecializableDifferentiableFunction 90")
+      return differentiableFunction
+    }
+    log("findSpecializableDifferentiableFunction 91")
+    return nil
 
   default:
     return nil
@@ -808,6 +974,255 @@ private struct SpecializationInfo {
   private func isClosureArgument(calleeArgument: FunctionArgument) -> Bool {
     closureArguments.contains { apply.calleeArgument(of: $0.0, in: callee) == calleeArgument }
   }
+}
+
+private struct DifferentiableFunctionSpecializationInfo {
+  let apply: ApplySite
+  let differentiableFunctionArguments: [(differentiableFunctionArgument: Operand, differentiableFunction: DifferentiableFunctionInst)]
+  let differentiableFunctions: [DifferentiableFunctionInst]
+
+  var callee: Function { apply.referencedFunction! }
+
+  private typealias Cloner = SIL.Cloner<FunctionPassContext>
+
+  func getOrCreateSpecializedFunction(_ specializedParameters: [ParameterInfo],
+                                      _ context: FunctionPassContext
+  ) -> Function {
+    let specializedFunctionName = getSpecializedFunctionName(context)
+
+    if let existingSpecializedFunction = context.lookupFunction(name: specializedFunctionName) {
+      return existingSpecializedFunction
+    }
+
+    let specializedFunction =
+      context.createSpecializedFunctionDeclaration(
+        from: callee, withName: specializedFunctionName,
+        withParams: specializedParameters,
+        // The specialized function is always a thin function. This is important because we add additional
+        // parameters after the Self parameter of witness methods. In this case the new function is not a
+        // method anymore.
+        withRepresentation: .thin, makeBare: true)
+
+    context.buildSpecializedFunction(
+      specializedFunction: specializedFunction,
+      buildFn: { (specializedFunction, specializedContext) in
+        var cloner = Cloner(cloneToEmptyFunction: specializedFunction, specializedContext)
+        defer { cloner.deinitialize() }
+
+        cloneAndSpecializeFunctionBody(using: &cloner)
+        // Cloning a whole function, even if it contains an `unreachable`, doesn't require lifetime completion.
+        specializedContext.setNeedCompleteLifetimes(to: false)
+      })
+
+    context.notifyNewFunction(function: specializedFunction, derivedFrom: callee)
+
+    return specializedFunction
+  }
+
+  private func getSpecializedFunctionName(_ context: FunctionPassContext) -> String {
+    // var visited = Dictionary<DifferentiableFunctionInst, Int>()
+
+    // let argumentManglings = differentiableFunctionArguments.map { (argOp, differentiableFunction) in
+    //   let argIdx = apply.calleeArgumentIndex(of: argOp)!
+    //   if let prevArgIdx = visited[differentiableFunction] {
+    //     return (argIdx, FunctionPassContext.ClosureArgumentMangling.previousArgumentIndex(prevArgIdx))
+    //   } else {
+    //     visited[differentiableFunction] = argIdx
+    //     return (argIdx, FunctionPassContext.ClosureArgumentMangling.closure(differentiableFunction))
+    //   }
+    // }
+    // return context.mangle(withClosureArguments: argumentManglings, from: callee)
+    return "\(callee.name)_MY_SPEC_FOR_DIFF"
+  }
+
+  func getSpecializedParameters() -> [ParameterInfo] {
+    var specializedParamInfoList: [ParameterInfo] = []
+
+    // Start by adding all original parameters except for the closure parameters.
+    let firstParamIndex = callee.argumentConventions.firstParameterIndex
+    for (index, paramInfo) in callee.convention.parameters.enumerated() {
+      let argIndex = index + firstParamIndex
+      if !differentiableFunctionArguments.contains(where: { apply.calleeArgumentIndex(of: $0.0) == argIndex}) {
+        specializedParamInfoList.append(paramInfo)
+      }
+    }
+
+    // for differentiableFunction in differentiableFunctions {
+    //   let original = differentiableFunction.getExtractee(extractee: DifferentiableFunctionTypeComponent.original)!
+    //   let jvp = differentiableFunction.getExtractee(extractee: DifferentiableFunctionTypeComponent.jvp)!
+    //   let vjp = differentiableFunction.getExtractee(extractee: DifferentiableFunctionTypeComponent.vjp)!
+      
+    //   func getParamInfo(_ value: Value) -> ParameterInfo {
+    //     ParameterInfo(type: value.type.canonicalType, convention: ArgumentConvention.directOwned, options: 0, hasLoweredAddresses: false)
+    //   }
+      
+    //   //let newParamInfo = paramInfo.withSpecializedConvention(for: partialApply, in: callee)
+    //   specializedParamInfoList.append(getParamInfo(original))
+    //   specializedParamInfoList.append(getParamInfo(jvp))
+    //   specializedParamInfoList.append(getParamInfo(vjp))
+    // }
+
+    // TODO!!!!
+
+    // // Now, append parameters captured by each of the root closures.
+    // for differentiableFunction in differentiableFunctions {
+    //   let closureConvention = partialApply.functionConvention
+    //   let unappliedArgumentCount = partialApply.unappliedArgumentCount - closureConvention.indirectSILResultCount
+
+    //   for paramInfo in closureConvention.parameters[unappliedArgumentCount...] {
+    //     let newParamInfo = paramInfo.withSpecializedConvention(for: partialApply, in: callee)
+    //     specializedParamInfoList.append(newParamInfo)
+    //   }
+    // }
+
+    return specializedParamInfoList
+  }
+
+  private func cloneAndSpecializeFunctionBody(using cloner: inout Cloner) {
+    addFunctionArgumentsWithoutComponents(using: &cloner)
+
+    // for differentiableFunction in differentiableFunctions {
+    //   addFunctionArgumentsForComponents(of: differentiableFunction, using: &cloner)
+    // }
+
+    let clonedDifferentiableFunctions = cloneDifferentiableFunctions(using: &cloner)
+
+    cloner.cloneFunctionBody(from: callee)
+
+    addMissingDestroysAtFunctionExits(for: clonedDifferentiableFunctions, cloner.context)
+
+    runClosureSpecialization(function: cloner.targetFunction, context: cloner.context)
+  }
+
+  private func addFunctionArgumentsWithoutComponents(using cloner: inout Cloner) {
+    let clonedEntryBlock = cloner.getOrCreateEntryBlock()
+
+    for originalArg in callee.arguments where !isDifferentiableFunctionArgument(calleeArgument: originalArg) {
+      let argType = originalArg.type.getLoweredType(in: cloner.targetFunction)
+      let clonedArg = clonedEntryBlock.addFunctionArgument(type: argType, cloner.context)
+      clonedArg.copyFlags(from: originalArg, cloner.context)
+      cloner.recordFoldedValue(originalArg, mappedTo: clonedArg)
+    }
+  }
+
+  // private func addFunctionArgumentsForComponents(of differentiableFunction: DifferentiableFunctionInst, using cloner: inout Cloner) {
+  //   let original = differentiableFunction.getExtractee(extractee: DifferentiableFunctionTypeComponent.original)!
+  //   let jvp = differentiableFunction.getExtractee(extractee: DifferentiableFunctionTypeComponent.jvp)!
+  //   let vjp = differentiableFunction.getExtractee(extractee: DifferentiableFunctionTypeComponent.vjp)!
+    
+  //   func addComponent(_ component: Value) {
+  //     let capturedArg = cloner.targetFunction.entryBlock.addFunctionArgument(
+  //       type: component.type.getLoweredType(in: cloner.targetFunction),
+  //       cloner.context)
+  //     if !cloner.isCloned(value: component) {
+  //       cloner.recordFoldedValue(component, mappedTo: capturedArg)
+  //     }
+  //   }
+
+  //   addComponent(original)
+  //   addComponent(jvp)
+  //   addComponent(vjp)
+  // }
+
+  private func cloneDifferentiableFunctions(using cloner: inout Cloner) -> [Value] {
+    return differentiableFunctionArguments.map { (closureArgOp, _) in
+      let clonedArg = cloner.cloneRecursively(value: closureArgOp.value)
+
+      let originalArg = apply.calleeArgument(of: closureArgOp, in: callee)!
+
+      let clonedValue: Value
+      if clonedArg.ownership == .owned && apply.convention(of: closureArgOp) == .directGuaranteed {
+        let block = cloner.targetFunction.entryBlock
+        let builder = Builder(atEndOf: block, location: block.instructions.last!.location, cloner.context)
+        clonedValue = builder.createBeginBorrow(of: clonedArg)
+      } else {
+        clonedValue = clonedArg
+      }
+      cloner.recordFoldedValue(originalArg, mappedTo: clonedValue)
+
+      return clonedValue
+    }
+  }
+
+  private func insertCompensatingDestroysForOwnedComponents(_ context: FunctionPassContext) {
+    let builder = Builder(before: apply, context)
+    for (argOp, _) in differentiableFunctionArguments where argOp.endsLifetime {
+      builder.createDestroyValue(operand: argOp.value)
+    }
+  }
+
+  func rewriteApply(for specializedFunction: Function, _ context: FunctionPassContext) {
+    insertCompensatingDestroysForOwnedComponents(context)
+
+    let newApplyArgs = getNewApplyArguments(context)
+
+    apply.replace(withCallTo: specializedFunction, arguments: newApplyArgs, context)
+  }
+
+  private func getNewApplyArguments(_ context: FunctionPassContext) -> [Value] {
+    // let newCapturedArguments = differentiableFunctions.flatMap { differentiableFunction in
+    //   let original = differentiableFunction.getExtractee(extractee: DifferentiableFunctionTypeComponent.original)!
+    //   let jvp = differentiableFunction.getExtractee(extractee: DifferentiableFunctionTypeComponent.jvp)!
+    //   let vjp = differentiableFunction.getExtractee(extractee: DifferentiableFunctionTypeComponent.vjp)!
+    //   return [original, jvp, vjp]
+    // // TODO!!!!!!!
+    //   // differentiableFunction.arguments.map { capturedArg in
+    //   //   if partialApply.isOnStack || capturedArg.ownership == .none {
+    //   //     // Non-escaping closures don't consume their captures. Therefore we pass them also as "guaranteed"
+    //   //     // arguments to the specialized function.
+    //   //     // Note that because the non-escaping closure was passed to the original function, this guarantees
+    //   //     // that the lifetime of the captured arguments also extend to at least the apply of the function.
+    //   //     capturedArg
+    //   //   } else {
+    //   //     // Escaping closures consume their captures. Therefore we pass them as "owned" arguments to the
+    //   //     // specialized function.
+    //   //     capturedArg.copy(at: partialApply, andMakeAvailableIn: apply.parentBlock, context)
+    //   //   }
+    //   // }
+    // }
+    // return nonClosureArguments.values + newCapturedArguments
+    return nonClosureArguments.values + []
+  }
+
+  // func deleteDeadDifferentiableFunctions(_ context: FunctionPassContext) {
+  //   for  (_, differentiableFunction) in differentiableFunctionArguments where !differentiableFunction.isDeleted {
+  //     if context.tryDeleteDeadClosure(closure: differentiableFunction) {
+  //       context.notifyInvalidatedStackNesting()
+  //     }
+  //   }
+  // }
+
+  private var nonClosureArguments: LazyFilterSequence<OperandArray> {
+    apply.argumentOperands.lazy.filter{ argOp in !differentiableFunctionArguments.contains{ $0.0 == argOp } }
+  }
+
+  private func isDifferentiableFunctionArgument(calleeArgument: FunctionArgument) -> Bool {
+    differentiableFunctionArguments.contains { apply.calleeArgument(of: $0.0, in: callee) == calleeArgument }
+  }
+}
+
+private func isDifferentiableFunctionApplied(_ differentiableFunction: Value) -> Bool {
+  // for use in differentiableFunction.uses.ignoreDebugUses {
+  //   switch use.instruction {
+  //   case let differentiableFunctionExtract as DifferentiableFunctionExtractInst:
+  //     continue
+  //     // if isClosureApplied(differentiableFunctionExtract) {
+  //     //   return true
+  //     // }
+  //   default:
+  //     log("isDifferentiableFunctionApplied FALSE 00")
+  //     log("\(differentiableFunction)")
+  //     log("isDifferentiableFunctionApplied FALSE 01")
+  //     log("\(use)")
+  //     log("isDifferentiableFunctionApplied FALSE 02")
+  //     log("\(use.instruction)")
+  //     log("isDifferentiableFunctionApplied FALSE 03")
+  //     log("\(use.instruction.parentFunction)")
+  //     log("isDifferentiableFunctionApplied FALSE 04")
+  //     return false
+  //   }
+  // }
+  return true
 }
 
 private func isClosureApplied(_ closure: Value) -> Bool {

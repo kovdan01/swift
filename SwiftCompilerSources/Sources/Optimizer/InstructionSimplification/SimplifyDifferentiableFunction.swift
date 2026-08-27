@@ -54,22 +54,47 @@ extension DifferentiableFunctionInst : SILCombineSimplifiable {
   ///   end_of_lifetime %3
   /// ```
   func simplify(_ context: SimplifyContext) {
-    guard ownership == .owned,
-          hasOnlyExtractUsesInBorrowScopes()
-    else {
+    print("[DFEOPT] simplify")
+    print("[DFEOPT] instruction: \(self)")
+    print("[DFEOPT] ownership: \(ownership)")
+
+    for use in uses {
+      print(
+        "[DFEOPT] direct use: \(use.instruction), " +
+        "endsLifetime=\(use.endsLifetime)")
+    }
+
+    if ownership == .none {
+      print("[DFEOPT] taking non-OSSA noescape/dependence path")
+      splitAndRemoveNoEscapeDependentExtracts(context)
       return
     }
 
-    for use in uses {
-      switch use.instruction {
-      case let beginBorrow as BeginBorrowInst:
-        splitAndRemoveExtracts(beginBorrow: beginBorrow, context)
-      case is DebugValueInst:
-        break
-      default:
-        assert(use.endsLifetime)
-      }
+    guard ownership == .owned else {
+      print("[DFEOPT] reject: unsupported ownership")
+      return
     }
+
+    let hasBorrowScopedExtracts = hasOnlyExtractUsesInBorrowScopes()
+    print("[DFEOPT] borrow-scoped pattern: \(hasBorrowScopedExtracts)")
+
+    if hasBorrowScopedExtracts {
+      print("[DFEOPT] taking existing borrow-scoped path")
+      for use in uses {
+        switch use.instruction {
+        case let beginBorrow as BeginBorrowInst:
+          splitAndRemoveExtracts(beginBorrow: beginBorrow, context)
+        case is DebugValueInst:
+          break
+        default:
+          assert(use.endsLifetime)
+        }
+      }
+      return
+    }
+
+    print("[DFEOPT] taking noescape/dependence path")
+    splitAndRemoveNoEscapeDependentExtracts(context)
   }
 
   private func hasOnlyExtractUsesInBorrowScopes() -> Bool {
@@ -106,12 +131,21 @@ extension DifferentiableFunctionInst : SILCombineSimplifiable {
     return hasExtract
   }
 
-  private func processExtract(differentiableFunctionExtract: DifferentiableFunctionExtractInst, beginBorrow: BeginBorrowInst, _ context: SimplifyContext) {
-    guard let extractee = self.getExtractee(extractee: differentiableFunctionExtract.extractee)
-    else {
+  private func processExtract(
+      differentiableFunctionExtract: DifferentiableFunctionExtractInst,
+      beginBorrow: BeginBorrowInst?,
+      lifetimeEndInstructions: [Instruction] = [],
+      _ context: SimplifyContext
+    ) {
+    guard let extractee = self.getExtractee(
+      extractee: differentiableFunctionExtract.extractee
+    ) else {
+      print("[DFEOPT] reject: getExtractee failed")
+      print("[DFEOPT] extract: \(differentiableFunctionExtract)")
       return
     }
 
+    print("[DFEOPT] matched extractee: \(extractee)")
     // If the extractee has non-trivial ownership, it is consumed by the differentiable_function instruction.
     // We must copy it before the consumption point so the copy remains live afterward.
     let effectiveExtractee: Value
@@ -127,22 +161,53 @@ extension DifferentiableFunctionInst : SILCombineSimplifiable {
 
     switch differentiableFunctionExtract.ownership {
     case .none:
-      if differentiableFunctionExtract.type != effectiveExtractee.type {
-        let convertBuilder = Builder(before: differentiableFunctionExtract, context)
-        let newField = convertBuilder.createConvertFunction(
-          originalFunction: effectiveExtractee, resultType: differentiableFunctionExtract.type,
-          withoutActuallyEscaping: false)
+      if differentiableFunctionExtract.type == effectiveExtractee.type {
+        print("[DFEOPT] direct replacement; types are equal")
+        differentiableFunctionExtract.replace(with: effectiveExtractee, context)
+      } else if beginBorrow == nil {
+        // The matched extract operates on the noescape result of:
+        //
+        //   convert_escape_to_noescape %differentiable_function
+        //
+        // Therefore, its component also has a noescape result type. A
+        // convert_function cannot change escapeness.
+        print("[DFEOPT] emitting convert_escape_to_noescape")
+        print("[DFEOPT] source type: \(effectiveExtractee.type)")
+        print("[DFEOPT] result type: \(differentiableFunctionExtract.type)")
+
+        let convertBuilder = Builder(
+          before: differentiableFunctionExtract, context)
+        let newField = convertBuilder.createConvertEscapeToNoEscape(
+          originalFunction: effectiveExtractee,
+          resultType: differentiableFunctionExtract.type,
+          isLifetimeGuaranteed: true)
+
+        print("[DFEOPT] created replacement: \(newField)")
         differentiableFunctionExtract.replace(with: newField, context)
       } else {
-        differentiableFunctionExtract.replace(with: effectiveExtractee, context)
+        // Existing borrow-scoped optimization. Escapeness is unchanged here.
+        print("[DFEOPT] emitting convert_function")
+        print("[DFEOPT] source type: \(effectiveExtractee.type)")
+        print("[DFEOPT] result type: \(differentiableFunctionExtract.type)")
+
+        let convertBuilder = Builder(
+          before: differentiableFunctionExtract, context)
+        let newField = convertBuilder.createConvertFunction(
+          originalFunction: effectiveExtractee,
+          resultType: differentiableFunctionExtract.type,
+          withoutActuallyEscaping: false)
+
+        print("[DFEOPT] created replacement: \(newField)")
+        differentiableFunctionExtract.replace(with: newField, context)
       }
 
     case .guaranteed:
-      let beginBuilder = Builder(before: beginBorrow, context)
+      let borrowScopeStart: Instruction = beginBorrow ?? self
+      let beginBuilder = Builder(before: borrowScopeStart, context)
       let borrowedField = beginBuilder.createBeginBorrow(
         of: effectiveExtractee,
-        isLexical: beginBorrow.isLexical,
-        hasPointerEscape: beginBorrow.hasPointerEscape)
+        isLexical: beginBorrow?.isLexical ?? false,
+        hasPointerEscape: beginBorrow?.hasPointerEscape ?? false)
 
       if differentiableFunctionExtract.type != effectiveExtractee.type {
         let convertBuilder = Builder(before: differentiableFunctionExtract, context)
@@ -153,16 +218,94 @@ extension DifferentiableFunctionInst : SILCombineSimplifiable {
       } else {
         differentiableFunctionExtract.replace(with: borrowedField, context)
       }
-      for endBorrow in beginBorrow.endInstructions {
-        let endBuilder = Builder(before: endBorrow, context)
-        endBuilder.createEndBorrow(of: borrowedField)
-        if needsDestroy {
-          endBuilder.createDestroyValue(operand: effectiveExtractee)
+
+      if let beginBorrow {
+        for endBorrow in beginBorrow.endInstructions {
+          let endBuilder = Builder(before: endBorrow, context)
+          endBuilder.createEndBorrow(of: borrowedField)
+          if needsDestroy {
+            endBuilder.createDestroyValue(operand: effectiveExtractee)
+          }
+        }
+      } else {
+        for lifetimeEnd in lifetimeEndInstructions {
+          let endBuilder = Builder(before: lifetimeEnd, context)
+          endBuilder.createEndBorrow(of: borrowedField)
+          if needsDestroy {
+            endBuilder.createDestroyValue(operand: effectiveExtractee)
+          }
         }
       }
 
     case .owned, .unowned:
       fatalError("wrong ownership of differentiable_function_extract")
+    }
+  }
+
+  private func splitAndRemoveNoEscapeDependentExtracts(
+    _ context: SimplifyContext
+  ) {
+    print("[DFEOPT] entered noescape/dependence matcher")
+
+    // This is non-OSSA SIL. Explicit release_value instructions manage the
+    // lifetime, and Operand.endsLifetime is not applicable.
+
+    // Snapshot before replacing extracts because replacement mutates use lists.
+    var extracts: [DifferentiableFunctionExtractInst] = []
+    var conversionCount = 0
+    var dependenceCount = 0
+
+    for conversion in uses.users(ofType: ConvertEscapeToNoEscapeInst.self) {
+      conversionCount += 1
+      print("[DFEOPT] conversion: \(conversion)")
+
+      for conversionUse in conversion.uses {
+        print("[DFEOPT] conversion use: \(conversionUse.instruction)")
+      }
+
+      for dependence in conversion.uses.users(ofType: MarkDependenceInst.self) {
+        dependenceCount += 1
+        print("[DFEOPT] dependence: \(dependence)")
+        print("[DFEOPT] value matches: \(dependence.value == conversion)")
+        print("[DFEOPT] base matches: \(dependence.base == self)")
+
+        guard dependence.value == conversion,
+              dependence.base == self
+        else {
+          print("[DFEOPT] reject: dependence operands do not match")
+          continue
+        }
+
+        for dependenceUse in dependence.uses {
+          print("[DFEOPT] dependence use: \(dependenceUse.instruction)")
+        }
+
+        let matchedExtracts = Array(
+          dependence.uses.users(
+            ofType: DifferentiableFunctionExtractInst.self))
+
+        print("[DFEOPT] extracts on dependence: \(matchedExtracts.count)")
+        extracts.append(contentsOf: matchedExtracts)
+      }
+    }
+
+    print("[DFEOPT] conversions found: \(conversionCount)")
+    print("[DFEOPT] dependences found: \(dependenceCount)")
+    print("[DFEOPT] total extracts found: \(extracts.count)")
+
+    for extract in extracts {
+      print("[DFEOPT] processing extract: \(extract)")
+      print("[DFEOPT] extract ownership: \(extract.ownership)")
+
+      guard extract.ownership == .none else {
+        print("[DFEOPT] reject extract: expected non-OSSA ownership")
+        continue
+      }
+
+      processExtract(
+        differentiableFunctionExtract: extract,
+        beginBorrow: nil,
+        context)
     }
   }
 
