@@ -988,7 +988,10 @@ private extension PartialApplyInst {
   var hasOnlyInoutIndirectArguments: Bool {
     self.argumentOperands
       .filter { !$0.value.type.isObject }
-      .allSatisfy { self.convention(of: $0)!.isInout }
+      .allSatisfy {
+        let conv = self.convention(of: $0)!
+        return conv.isInout || (self.isOnStack && conv == .indirectInGuaranteed)
+      }
   }
 
   var allArgumentsCanBeCopied: Bool {
