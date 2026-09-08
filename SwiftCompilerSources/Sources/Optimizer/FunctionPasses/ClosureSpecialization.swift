@@ -507,7 +507,12 @@ private func findSpecializableComponentClosure(of value: Value, _ visited: inout
     guard let callee = tttfi.referencedFunction,
           callee.specializationLevel <= specializationLevelLimit
     else {
-      return nil
+      guard let cfi = tttfi.callee as? ConvertFunctionInst,
+            let fn = cfi.fromFunction as? FunctionRefInst,
+            fn.referencedFunction.specializationLevel <= specializationLevelLimit else {
+        return nil
+      }
+      return tttfi
     }
     return tttfi
 
@@ -602,7 +607,12 @@ private func findSpecializableClosure(of value: Value, _ visited: inout ValueSet
     guard let callee = tttfi.referencedFunction,
           callee.specializationLevel <= specializationLevelLimit
     else {
-      return nil
+      guard let cfi = tttfi.callee as? ConvertFunctionInst,
+            let fn = cfi.fromFunction as? FunctionRefInst,
+            fn.referencedFunction.specializationLevel <= specializationLevelLimit else {
+        return nil
+      }
+      return tttfi
     }
     return tttfi
 
@@ -1674,8 +1684,15 @@ private func getBTEPayloadArgOfPbBBInfo(_ bb: BasicBlock, vjp: Function)
 private extension Instruction {
   var asSupportedClosure: SingleValueInstruction? {
     switch self {
-    case let tttf as ThinToThickFunctionInst where tttf.callee is FunctionRefInst:
-      return tttf
+    case let tttfi as ThinToThickFunctionInst:
+      guard let callee = tttfi.referencedFunction else {
+        guard let cfi = tttfi.callee as? ConvertFunctionInst,
+              let fn = cfi.fromFunction as? FunctionRefInst else {
+          return nil
+        }
+        return tttfi
+      }
+      return tttfi
     // TODO: figure out what to do with non-inout indirect arguments
     // https://forums.swift.org/t/non-inout-indirect-types-not-supported-in-closure-specialization-optimization/70826
     case let pai as PartialApplyInst
