@@ -1,0 +1,80 @@
+// RUN: %target-sil-opt -sil-print-types -enable-sil-verify-all -closure-specialization %s > %t
+// RUN: %FileCheck %s --check-prefix=CALLER < %t
+// RUN: %FileCheck %s --check-prefix=CALLEE < %t
+//
+// An on-stack partial_apply may capture an @in_guaranteed address.
+// Specialization must forward the original address with that convention
+// and replace the indirect closure invocation with a direct body call.
+//
+// Swift source:
+// public protocol P { func value() -> Int }
+// @inline(never)
+// public func invoke(_ body: () -> Int) -> Int { body() }
+// public func reproduce(_ p: any P) -> Int { invoke { p.value() } }
+//
+// To regenerate the input:
+// swiftc -O -emit-sil -module-name Repro -Xfrontend -sil-verify-all \
+//   -Xllvm -sil-print-types -Xllvm -sil-print-before=closure-specialization \
+//   repro.swift -o /dev/null 2> before-closure-specialization.log
+//
+// Reduced from the original-function snapshots of ClosureSpecialization
+// in the supplied compiler dump, not from AutodiffClosureSpecialization.
+// Debug instructions, comments, and printed effect summaries are omitted.
+// Do not include the already-generated specialized invoke from the dump.
+
+sil_stage canonical
+import Builtin
+import Swift
+
+public protocol P {
+  func value() -> Int
+}
+
+sil [noinline] [ossa] @$s5Repro6invokeyS2iyXEF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> Int) -> Int {
+bb0(%0 : @guaranteed $@noescape @callee_guaranteed () -> Int):
+  %2 = apply %0() : $@noescape @callee_guaranteed () -> Int
+  return %2 : $Int
+}
+
+// Check the rewritten caller independently of function printing order.
+// Match the original address, not a copied existential or a closure value.
+// CALLER-LABEL: sil [ossa] @$s5Repro9reproduceySiAA1P_pF : $@convention(thin) (@in_guaranteed any P) -> Int {
+// CALLER: bb0([[ADDR:%[0-9]+]] : $*any P):
+// CALLER-NOT: {{copy_addr|destroy_addr}}
+// CALLER: [[SPEC:%[0-9]+]] = function_ref @$s5Repro6invokeyS2iyXEF{{[^ ]+}} : $@convention(thin) (@in_guaranteed any P) -> Int
+// CALLER-NOT: {{copy_addr|destroy_addr}}
+// CALLER: [[RESULT:%[0-9]+]] = apply [[SPEC]]([[ADDR]]) : $@convention(thin) (@in_guaranteed any P) -> Int
+// CALLER-NOT: {{copy_addr|destroy_addr}}
+// CALLER: return [[RESULT]] : $Int
+// CALLER-NEXT: }
+sil [ossa] @$s5Repro9reproduceySiAA1P_pF : $@convention(thin) (@in_guaranteed any P) -> Int {
+bb0(%0 : $*any P):
+  %2 = function_ref @$s5Repro9reproduceySiAA1P_pFSiyXEfU_ : $@convention(thin) (@in_guaranteed any P) -> Int
+  %3 = partial_apply [callee_guaranteed] [on_stack] %2(%0) : $@convention(thin) (@in_guaranteed any P) -> Int
+  %4 = mark_dependence [nonescaping] %3 : $@noescape @callee_guaranteed () -> Int on %0 : $*any P
+  %5 = function_ref @$s5Repro6invokeyS2iyXEF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> Int) -> Int
+  %6 = apply %5(%4) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> Int) -> Int
+  destroy_value %4 : $@noescape @callee_guaranteed () -> Int
+  return %6 : $Int
+}
+
+sil private [ossa] @$s5Repro9reproduceySiAA1P_pFSiyXEfU_ : $@convention(thin) (@in_guaranteed any P) -> Int {
+bb0(%0 : @closureCapture $*any P):
+  %1 = open_existential_addr immutable_access %0 : $*any P to $*@opened(1, any P) Self
+  %2 = witness_method $@opened(1, any P) Self, #P.value : <Self where Self : P> (Self) -> () -> Int, %1 : $*@opened(1, any P) Self : $@convention(witness_method: P) <τ_0_0 where τ_0_0 : P> (@in_guaranteed τ_0_0) -> Int
+  %3 = apply %2<@opened(1, any P) Self>(%1) : $@convention(witness_method: P) <τ_0_0 where τ_0_0 : P> (@in_guaranteed τ_0_0) -> Int
+  return %3 : $Int
+}
+
+// The newly generated specialization must call the original closure body
+// directly with its @in_guaranteed parameter. Do not require elimination
+// of the reconstructed closure context, mark_dependence, or borrow scope.
+// CALLEE-LABEL: sil shared [noinline] [ossa] @$s5Repro6invokeyS2iyXEF{{[^ ]+}} : $@convention(thin) (@in_guaranteed any P) -> Int {
+// CALLEE: bb0([[ADDR:%[0-9]+]] : $*any P):
+// CALLEE-NOT: {{copy_addr|destroy_addr}}
+// CALLEE: [[BODY:%[0-9]+]] = function_ref @$s5Repro9reproduceySiAA1P_pFSiyXEfU_ : $@convention(thin) (@in_guaranteed any P) -> Int
+// CALLEE-NOT: {{copy_addr|destroy_addr}}
+// CALLEE: [[RESULT:%[0-9]+]] = apply [[BODY]]([[ADDR]]) : $@convention(thin) (@in_guaranteed any P) -> Int
+// CALLEE-NOT: {{copy_addr|destroy_addr}}
+// CALLEE: return [[RESULT]] : $Int
+// CALLEE-NEXT: }
