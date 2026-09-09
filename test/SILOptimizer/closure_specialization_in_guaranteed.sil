@@ -1,0 +1,241 @@
+// RUN: %target-sil-opt -sil-print-types -enable-sil-verify-all -closure-specialization %s | %FileCheck %s
+//
+// Positive checks use the consumer name and specialized signature,
+// not a complete hard-coded specialization mangling. Run these checks with the patched
+// compiler: only the input SIL has been verified with Swift 6.2.1 here.
+
+sil_stage canonical
+import Builtin
+import Swift
+
+class C {}
+
+// The extra call in invoke_twice_C checks that a borrowed capture remains
+// usable on subsequent invocations.
+sil [noinline] [ossa] @invoke_Int : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> Int) -> Int {
+bb0(%body : @guaranteed $@noescape @callee_guaranteed () -> Int):
+  %result = apply %body() : $@noescape @callee_guaranteed () -> Int
+  return %result : $Int
+}
+
+sil [noinline] [ossa] @invoke_twice_C : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> @owned C) -> @owned C {
+bb0(%body : @guaranteed $@noescape @callee_guaranteed () -> @owned C):
+  %first = apply %body() : $@noescape @callee_guaranteed () -> @owned C
+  destroy_value %first : $C
+  %second = apply %body() : $@noescape @callee_guaranteed () -> @owned C
+  return %second : $C
+}
+
+sil [noinline] [ossa] @invoke_throwing_C : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> (@owned C, @error any Error)) -> (@owned C, @error any Error) {
+bb0(%body : @guaranteed $@noescape @callee_guaranteed () -> (@owned C, @error any Error)):
+  try_apply %body() : $@noescape @callee_guaranteed () -> (@owned C, @error any Error), normal bb1, error bb2
+bb1(%result : @owned $C):
+  return %result : $C
+bb2(%error : @owned $any Error):
+  throw %error : $any Error
+}
+
+sil [ossa] @read_Int : $@convention(thin) (@in_guaranteed Int) -> Int {
+bb0(%addr : $*Int):
+  %value = load [trivial] %addr : $*Int
+  return %value : $Int
+}
+
+sil [ossa] @read_C : $@convention(thin) (@in_guaranteed C) -> @owned C {
+bb0(%addr : $*C):
+  %value = load [copy] %addr : $*C
+  return %value : $C
+}
+
+// Keep the body external so that a later optimization cannot trivially prove
+// that this call never throws.
+sil @read_throwing_C : $@convention(thin) (@in_guaranteed C) -> (@owned C, @error any Error)
+
+// 1. Smallest positive example: no substitutions and no dependence wrapper.
+// CHECK-LABEL: sil [ossa] @stack_Int :
+// CHECK: bb0([[ADDR:%[0-9]+]] : $*Int):
+// CHECK-NOT: partial_apply
+// CHECK: [[SPEC:%[0-9]+]] = function_ref @$s{{[0-9]+}}invoke_Int{{[^ ]*}} : $@convention(thin) (@in_guaranteed Int) -> Int
+// CHECK: [[RESULT:%[0-9]+]] = apply [[SPEC]]([[ADDR]]) : $@convention(thin) (@in_guaranteed Int) -> Int
+// CHECK-NOT: destroy_addr
+// CHECK-NOT: partial_apply
+// CHECK: return [[RESULT]] : $Int
+sil [ossa] @stack_Int : $@convention(thin) (@in_guaranteed Int) -> Int {
+bb0(%addr : $*Int):
+  %fn = function_ref @read_Int : $@convention(thin) (@in_guaranteed Int) -> Int
+  %closure = partial_apply [callee_guaranteed] [on_stack] %fn(%addr) : $@convention(thin) (@in_guaranteed Int) -> Int
+  %use = function_ref @invoke_Int : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> Int) -> Int
+  %result = apply %use(%closure) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> Int) -> Int
+  destroy_value %closure : $@noescape @callee_guaranteed () -> Int
+  return %result : $Int
+}
+
+// 2. A nontrivial pointee and locally owned storage. The specialization must
+// borrow the slot; it must neither take nor independently destroy its value.
+// CHECK-LABEL: sil [ossa] @stack_local_C :
+// CHECK: bb0([[VALUE:%[0-9]+]] : @owned $C):
+// CHECK: [[SLOT:%[0-9]+]] = alloc_stack $C
+// CHECK: store [[VALUE]] to [init] [[SLOT]] : $*C
+// CHECK-NOT: copy_addr
+// CHECK-NOT: destroy_addr
+// CHECK-NOT: partial_apply
+// CHECK: [[SPEC:%[0-9]+]] = function_ref @$s{{[0-9]+}}invoke_twice_C{{[^ ]*}} : $@convention(thin) (@in_guaranteed C) -> @owned C
+// CHECK: [[RESULT:%[0-9]+]] = apply [[SPEC]]([[SLOT]]) : $@convention(thin) (@in_guaranteed C) -> @owned C
+// CHECK-NEXT: destroy_addr [[SLOT]] : $*C
+// CHECK-NEXT: dealloc_stack [[SLOT]] : $*C
+// CHECK-NEXT: return [[RESULT]] : $C
+sil [ossa] @stack_local_C : $@convention(thin) (@owned C) -> @owned C {
+bb0(%value : @owned $C):
+  %slot = alloc_stack $C
+  store %value to [init] %slot : $*C
+  %fn = function_ref @read_C : $@convention(thin) (@in_guaranteed C) -> @owned C
+  %closure = partial_apply [callee_guaranteed] [on_stack] %fn(%slot) : $@convention(thin) (@in_guaranteed C) -> @owned C
+  %use = function_ref @invoke_twice_C : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> @owned C) -> @owned C
+  %result = apply %use(%closure) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> @owned C) -> @owned C
+  destroy_value %closure : $@noescape @callee_guaranteed () -> @owned C
+  destroy_addr %slot : $*C
+  dealloc_stack %slot : $*C
+  return %result : $C
+}
+
+// 3. The dependence wrapper emitted for the existential Swift reproducer.
+// The captured address is also the dependence base and must be remapped.
+// CHECK-LABEL: sil [ossa] @stack_dependence_C :
+// CHECK: bb0([[ADDR:%[0-9]+]] : $*C):
+// CHECK-NOT: partial_apply
+// CHECK-NOT: mark_dependence
+// CHECK: [[SPEC:%[0-9]+]] = function_ref @$s{{[0-9]+}}invoke_twice_C{{[^ ]*}} : $@convention(thin) (@in_guaranteed C) -> @owned C
+// CHECK: [[RESULT:%[0-9]+]] = apply [[SPEC]]([[ADDR]]) : $@convention(thin) (@in_guaranteed C) -> @owned C
+// CHECK-NOT: destroy_addr
+// CHECK-NOT: partial_apply
+// CHECK-NOT: mark_dependence
+// CHECK: return [[RESULT]] : $C
+sil [ossa] @stack_dependence_C : $@convention(thin) (@in_guaranteed C) -> @owned C {
+bb0(%addr : $*C):
+  %fn = function_ref @read_C : $@convention(thin) (@in_guaranteed C) -> @owned C
+  %closure = partial_apply [callee_guaranteed] [on_stack] %fn(%addr) : $@convention(thin) (@in_guaranteed C) -> @owned C
+  %dependent = mark_dependence [nonescaping] %closure on %addr
+  %use = function_ref @invoke_twice_C : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> @owned C) -> @owned C
+  %result = apply %use(%dependent) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> @owned C) -> @owned C
+  destroy_value %dependent : $@noescape @callee_guaranteed () -> @owned C
+  return %result : $C
+}
+
+// 4. Nontrivial local storage must be destroyed once on either successor of
+// the rewritten try_apply, never before the call.
+// CHECK-LABEL: sil [ossa] @stack_throwing_C :
+// CHECK: [[SLOT:%[0-9]+]] = alloc_stack $C
+// CHECK: store {{%[0-9]+}} to [init] [[SLOT]] : $*C
+// CHECK-NOT: destroy_addr
+// CHECK-NOT: partial_apply
+// CHECK: [[SPEC:%[0-9]+]] = function_ref @$s{{[0-9]+}}invoke_throwing_C{{[^ ]*}} : $@convention(thin) (@in_guaranteed C) -> (@owned C, @error any Error)
+// CHECK: try_apply [[SPEC]]([[SLOT]]) : $@convention(thin) (@in_guaranteed C) -> (@owned C, @error any Error), normal [[NORMAL:bb[0-9]+]], error [[ERROR:bb[0-9]+]]
+// CHECK: [[NORMAL]]([[RESULT:%[0-9]+]] : @owned $C):
+// CHECK-NEXT: destroy_addr [[SLOT]] : $*C
+// CHECK-NEXT: dealloc_stack [[SLOT]] : $*C
+// CHECK-NEXT: return [[RESULT]] : $C
+// CHECK: [[ERROR]]([[ERR:%[0-9]+]] : @owned $any Error):
+// CHECK-NEXT: destroy_addr [[SLOT]] : $*C
+// CHECK-NEXT: dealloc_stack [[SLOT]] : $*C
+// CHECK-NEXT: throw [[ERR]] : $any Error
+sil [ossa] @stack_throwing_C : $@convention(thin) (@owned C) -> (@owned C, @error any Error) {
+bb0(%value : @owned $C):
+  %slot = alloc_stack $C
+  store %value to [init] %slot : $*C
+  %fn = function_ref @read_throwing_C : $@convention(thin) (@in_guaranteed C) -> (@owned C, @error any Error)
+  %closure = partial_apply [callee_guaranteed] [on_stack] %fn(%slot) : $@convention(thin) (@in_guaranteed C) -> (@owned C, @error any Error)
+  %use = function_ref @invoke_throwing_C : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> (@owned C, @error any Error)) -> (@owned C, @error any Error)
+  try_apply %use(%closure) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> (@owned C, @error any Error)) -> (@owned C, @error any Error), normal bb1, error bb2
+bb1(%result : @owned $C):
+  destroy_value %closure : $@noescape @callee_guaranteed () -> (@owned C, @error any Error)
+  destroy_addr %slot : $*C
+  dealloc_stack %slot : $*C
+  return %result : $C
+bb2(%error : @owned $any Error):
+  destroy_value %closure : $@noescape @callee_guaranteed () -> (@owned C, @error any Error)
+  destroy_addr %slot : $*C
+  dealloc_stack %slot : $*C
+  throw %error : $any Error
+}
+
+// 5. A heap root stays rejected, even when the actual consumer receives a
+// noescape conversion. The heap context consumes the slot's initial value.
+// CHECK-LABEL: sil [ossa] @heap_in_guaranteed_C :
+// CHECK: [[SLOT:%[0-9]+]] = alloc_stack $C
+// CHECK: [[ROOT:%[0-9]+]] = partial_apply [callee_guaranteed] {{%[0-9]+}}([[SLOT]]) : $@convention(thin) (@in_guaranteed C) -> @owned C
+// CHECK: [[NOESC:%[0-9]+]] = convert_escape_to_noescape {{.*}}[[ROOT]] : $@callee_guaranteed () -> @owned C to $@noescape @callee_guaranteed () -> @owned C
+// CHECK: [[USE:%[0-9]+]] = function_ref @invoke_twice_C :
+// CHECK: [[RESULT:%[0-9]+]] = apply [[USE]]([[NOESC]]) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> @owned C) -> @owned C
+// CHECK: destroy_value [[ROOT]]
+// CHECK-NOT: destroy_addr
+// CHECK: dealloc_stack [[SLOT]] : $*C
+// CHECK: return [[RESULT]] : $C
+sil [ossa] @heap_in_guaranteed_C : $@convention(thin) (@owned C) -> @owned C {
+bb0(%value : @owned $C):
+  %slot = alloc_stack $C
+  store %value to [init] %slot : $*C
+  %fn = function_ref @read_C : $@convention(thin) (@in_guaranteed C) -> @owned C
+  %root = partial_apply [callee_guaranteed] %fn(%slot) : $@convention(thin) (@in_guaranteed C) -> @owned C
+  %noescape = convert_escape_to_noescape %root : $@callee_guaranteed () -> @owned C to $@noescape @callee_guaranteed () -> @owned C
+  %use = function_ref @invoke_twice_C : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> @owned C) -> @owned C
+  %result = apply %use(%noescape) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> @owned C) -> @owned C
+  destroy_value %noescape : $@noescape @callee_guaranteed () -> @owned C
+  destroy_value %root : $@callee_guaranteed () -> @owned C
+  dealloc_stack %slot : $*C
+  return %result : $C
+}
+
+sil @read_C_Int : $@convention(thin) (@in_guaranteed C) -> Int
+
+sil [noinline] [ossa] @yield_Int : $@yield_once @convention(thin) (@guaranteed @noescape @callee_guaranteed () -> Int) -> @yields Int {
+bb0(%body : @guaranteed $@noescape @callee_guaranteed () -> Int):
+  %first = apply %body() : $@noescape @callee_guaranteed () -> Int
+  yield %first : $Int, resume bb1, unwind bb2
+bb1:
+  %second = apply %body() : $@noescape @callee_guaranteed () -> Int
+  %unit = tuple ()
+  return %unit : $()
+bb2:
+  unwind
+}
+
+// 6. The borrow spans the coroutine, including suspension: it does not end
+// at begin_apply. Keep destruction after end_apply/abort_apply.
+// CHECK-LABEL: sil [ossa] @stack_coroutine_C :
+// CHECK: [[SLOT:%[0-9]+]] = alloc_stack $C
+// CHECK-NOT: destroy_addr
+// CHECK-NOT: partial_apply
+// CHECK: [[SPEC:%[0-9]+]] = function_ref @$s{{[0-9]+}}yield_Int{{[^ ]*}} : $@yield_once @convention(thin) (@in_guaranteed C) -> @yields Int
+// CHECK: ([[VALUE:%[0-9]+]], [[TOKEN:%[0-9]+]]) = begin_apply [[SPEC]]([[SLOT]]) : $@yield_once @convention(thin) (@in_guaranteed C) -> @yields Int
+// CHECK: cond_br {{%[0-9]+}}, [[NORMAL:bb[0-9]+]], [[ABORT:bb[0-9]+]]
+// CHECK: [[NORMAL]]:
+// CHECK-NEXT: end_apply [[TOKEN]]
+// CHECK-NEXT: br [[JOIN:bb[0-9]+]]
+// CHECK: [[ABORT]]:
+// CHECK-NEXT: abort_apply [[TOKEN]]
+// CHECK-NEXT: br [[JOIN]]
+// CHECK: [[JOIN]]:
+// CHECK-NEXT: destroy_addr [[SLOT]] : $*C
+// CHECK-NEXT: dealloc_stack [[SLOT]] : $*C
+// CHECK-NEXT: return [[VALUE]] : $Int
+sil [ossa] @stack_coroutine_C : $@convention(thin) (@owned C, Builtin.Int1) -> Int {
+bb0(%value : @owned $C, %normal : $Builtin.Int1):
+  %slot = alloc_stack $C
+  store %value to [init] %slot : $*C
+  %fn = function_ref @read_C_Int : $@convention(thin) (@in_guaranteed C) -> Int
+  %closure = partial_apply [callee_guaranteed] [on_stack] %fn(%slot) : $@convention(thin) (@in_guaranteed C) -> Int
+  %use = function_ref @yield_Int : $@yield_once @convention(thin) (@guaranteed @noescape @callee_guaranteed () -> Int) -> @yields Int
+  (%result, %token) = begin_apply %use(%closure) : $@yield_once @convention(thin) (@guaranteed @noescape @callee_guaranteed () -> Int) -> @yields Int
+  cond_br %normal, bb1, bb2
+bb1:
+  end_apply %token as $()
+  br bb3
+bb2:
+  abort_apply %token
+  br bb3
+bb3:
+  destroy_value %closure : $@noescape @callee_guaranteed () -> Int
+  destroy_addr %slot : $*C
+  dealloc_stack %slot : $*C
+  return %result : $Int
+}

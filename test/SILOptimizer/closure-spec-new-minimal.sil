@@ -1,0 +1,41 @@
+// RUN: %target-sil-opt -sil-print-types -enable-sil-verify-all -closure-specialization %s | %FileCheck %s
+//
+// Positive checks use the consumer name and specialized signature,
+// not a complete hard-coded specialization mangling. Run these checks with the patched
+// compiler: only the input SIL has been verified with Swift 6.2.1 here.
+
+sil_stage canonical
+import Builtin
+import Swift
+
+sil [noinline] [ossa] @invoke_Int : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> Int) -> Int {
+bb0(%body : @guaranteed $@noescape @callee_guaranteed () -> Int):
+  %result = apply %body() : $@noescape @callee_guaranteed () -> Int
+  return %result : $Int
+}
+
+sil [ossa] @read_Int : $@convention(thin) (@in_guaranteed Int) -> Int {
+bb0(%addr : $*Int):
+  %value = load [trivial] %addr : $*Int
+  return %value : $Int
+}
+
+// 1. Smallest positive example: no substitutions and no dependence wrapper.
+// CHECK-LABEL: sil [ossa] @stack_Int :
+// CHECK: bb0([[ADDR:%[0-9]+]] : $*Int):
+// CHECK-NOT: partial_apply
+// CHECK: [[SPEC:%[0-9]+]] = function_ref @$s{{[0-9]+}}invoke_Int{{[^ ]*}} : $@convention(thin) (@in_guaranteed Int) -> Int
+// CHECK: [[RESULT:%[0-9]+]] = apply [[SPEC]]([[ADDR]]) : $@convention(thin) (@in_guaranteed Int) -> Int
+// CHECK-NOT: destroy_addr
+// CHECK-NOT: partial_apply
+// CHECK: return [[RESULT]] : $Int
+sil [ossa] @stack_Int : $@convention(thin) (@in_guaranteed Int) -> Int {
+bb0(%addr : $*Int):
+  %fn = function_ref @read_Int : $@convention(thin) (@in_guaranteed Int) -> Int
+  %closure = partial_apply [callee_guaranteed] [on_stack] %fn(%addr) : $@convention(thin) (@in_guaranteed Int) -> Int
+  %use = function_ref @invoke_Int : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> Int) -> Int
+  %result = apply %use(%closure) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed () -> Int) -> Int
+  destroy_value %closure : $@noescape @callee_guaranteed () -> Int
+  return %result : $Int
+}
+
