@@ -61,7 +61,8 @@ DifferentiableActivityCollection::DifferentiableActivityCollection(
 
 DifferentiableActivityInfo::DifferentiableActivityInfo(
     DifferentiableActivityCollection &parent, GenericSignature derivGenSig)
-    : parent(parent), derivativeGenericSignature(derivGenSig) {
+    : parent(parent), derivativeGenericSignature(derivGenSig),
+      asyncLets(parent.function) {
   analyze(parent.domInfo, parent.postDomInfo);
 }
 
@@ -121,6 +122,17 @@ void DifferentiableActivityInfo::setVariedAndPropagateToUsers(
     return;
   // Set the value as varied.
   variedValueSets[independentVariableIndex].insert(value);
+  if (isExperimentalAsyncAutoDiffEnabled()) {
+    // A captured argument affects the eventual scalar result, even though the
+    // ordinary SSA use chain ends at a closure passed to a runtime builtin.
+    for (const auto &access : asyncLets.getAccesses()) {
+      if (!access->isSupported() ||
+          !llvm::is_contained(access->captures, value))
+        continue;
+      for (auto *read : access->reads)
+        setVariedAndPropagateToUsers(read, independentVariableIndex);
+    }
+  }
   // Propagate variedness to users.
   for (auto *use : value->getUses())
     propagateVaried(use, independentVariableIndex);
@@ -129,6 +141,8 @@ void DifferentiableActivityInfo::setVariedAndPropagateToUsers(
 void DifferentiableActivityInfo::propagateVaried(
     Operand *operand, unsigned independentVariableIndex) {
   auto *inst = operand->getUser();
+  if (isExperimentalAsyncAutoDiffEnabled() && asyncLets.isTransport(inst))
+    return;
   // Propagate variedness for the given operand.
   // General rule: mark results as varied and recursively propagate variedness
   // to users of results.
@@ -304,6 +318,14 @@ void DifferentiableActivityInfo::setUsefulAndPropagateToOperands(
   // Skip already-useful values to prevent infinite recursion.
   if (isUseful(value, dependentVariableIndex))
     return;
+  if (isExperimentalAsyncAutoDiffEnabled()) {
+    if (auto *access = asyncLets.getRead(value->getDefiningInstruction())) {
+      setUseful(value, dependentVariableIndex);
+      for (auto capture : access->captures)
+        setUsefulAndPropagateToOperands(capture, dependentVariableIndex);
+      return;
+    }
+  }
   if (value->getType().isAddress() ||
       value->getType().getClassOrBoundGenericClass()) {
     propagateUsefulThroughAddress(value, dependentVariableIndex);
@@ -340,6 +362,8 @@ void DifferentiableActivityInfo::setUsefulAndPropagateToOperands(
 
 void DifferentiableActivityInfo::propagateUseful(
     SILInstruction *inst, unsigned dependentVariableIndex) {
+  if (isExperimentalAsyncAutoDiffEnabled() && asyncLets.isTransport(inst))
+    return;
   // Propagate usefulness for the given instruction: mark operands as useful and
   // recursively propagate usefulness to defining instructions of operands.
   auto i = dependentVariableIndex;

@@ -1803,6 +1803,12 @@ void JVPCloner::Implementation::prepareForDifferentialGeneration() {
 }
 
 bool JVPCloner::Implementation::run() {
+  for (const auto &access : activityInfo.getAsyncLets().getAccesses()) {
+    context.emitNondifferentiabilityError(
+        access->start, invoker, diag::autodiff_async_let_unsupported,
+        StringRef("only reverse-mode async-let differentiation is supported"));
+    return true;
+  }
   PrettyStackTraceSILFunction trace("generating JVP and differential for",
                                     original);
   LLVM_DEBUG(getADDebugStream() << "Cloning original @" << original->getName()

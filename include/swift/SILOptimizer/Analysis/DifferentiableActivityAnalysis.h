@@ -52,6 +52,7 @@
 #include "swift/SIL/SILFunction.h"
 #include "swift/SIL/SILValue.h"
 #include "swift/SILOptimizer/Analysis/Analysis.h"
+#include "swift/SILOptimizer/Analysis/AsyncLetActivity.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 
@@ -107,6 +108,9 @@ using Activity = OptionSet<ActivityFlags>;
 /// value is "varied", "useful" or "active" against certain differentiation
 /// indices.
 class DifferentiableActivityInfo {
+  /// Validated logical dataflow across compiler-generated async-let transport.
+  AsyncLetActivity asyncLets;
+
 private:
   DifferentiableActivityCollection &parent;
 
@@ -180,6 +184,8 @@ public:
   explicit DifferentiableActivityInfo(
       DifferentiableActivityCollection &parent,
       GenericSignature derivativeGenericSignature);
+
+  const AsyncLetActivity &getAsyncLets() const { return asyncLets; }
 
   /// Returns true if the given value is varied for the given independent
   /// variable index.
