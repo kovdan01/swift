@@ -19,6 +19,7 @@ endif()
 add_swift_target_library(swift_Differentiation ${SWIFT_STDLIB_LIBRARY_BUILD_TYPES} IS_STDLIB
   Differentiable.swift
   DifferentialOperators.swift
+  AsyncDifferentialOperators.swift
   DifferentiationUtilities.swift
   AnyDifferentiable.swift
   ArrayDifferentiation.swift
