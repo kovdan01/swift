@@ -18,6 +18,9 @@
 //===----------------------------------------------------------------------===//
 
 import Swift
+// Stdlib builds disable the implicit concurrency import. SILGen needs Actor
+// from this module even for an async function with a nonisolated prologue.
+import _Concurrency
 
 /// Evaluates an async function and returns its value and synchronous pullback.
 @_alwaysEmitIntoClient
