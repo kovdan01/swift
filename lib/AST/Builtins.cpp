@@ -1433,15 +1433,21 @@ static ValueDecl *getGetObjCTypeEncodingOperation(ASTContext &Context,
   return builder.build(Id);
 }
 
-static ValueDecl *getAutoDiffApplyDerivativeFunction(
-    ASTContext &Context, Identifier Id, AutoDiffDerivativeFunctionKind kind,
-    unsigned arity, bool throws) {
+static ValueDecl *
+getAutoDiffApplyDerivativeFunction(ASTContext &Context, Identifier Id,
+                                   AutoDiffDerivativeFunctionKind kind,
+                                   unsigned arity, bool throws, bool isAsync) {
   assert(arity >= 1);
+  assert(!isAsync || (!throws && kind == AutoDiffDerivativeFunctionKind::VJP));
+  // Async variants make both the input function and the builtin async; the
+  // derivative type computation leaves the returned linear map synchronous.
   // JVP:
-  //   <...T...(arity), R, E: Error> (@differentiable(_forward) (...T) throws(E) -> R, ...T)
+  //   <...T...(arity), R, E: Error> (@differentiable(_forward) (...T) throws(E)
+  //   -> R, ...T)
   //       throws(E) -> (R, (...T.TangentVector) -> R.TangentVector)
   // VJP:
-  //   <...T...(arity), R, E: Error> (@differentiable(reverse) (...T) throws(E) -> R, ...T)
+  //   <...T...(arity), R, E: Error> (@differentiable(reverse) (...T) throws(E)
+  //   -> R, ...T)
   //       throws(E) -> (R, (R.TangentVector) -> ...T.TangentVector)
   unsigned numGenericParams =
     1 + /* result */
@@ -1476,7 +1482,9 @@ static ValueDecl *getAutoDiffApplyDerivativeFunction(
                 // TODO: Use `kind.getMinimalDifferentiabilityKind()`.
                 .withDifferentiabilityKind(DifferentiabilityKind::Reverse)
                 .withNoEscape()
-                .withThrows(throws, throws? fnThrownTypeGen.build(builder) : Type())
+                .withAsync(isAsync)
+                .withThrows(throws,
+                            throws ? fnThrownTypeGen.build(builder) : Type())
                 .build();
         SmallVector<FunctionType::Param, 2> params;
         for (auto &paramGen : fnParamGens)
@@ -1504,6 +1512,8 @@ static ValueDecl *getAutoDiffApplyDerivativeFunction(
   for (auto argGen : fnParamGens)
     builder.addParameter(argGen);
   builder.setResult(resultGen);
+  if (isAsync)
+    builder.setAsync();
   if (throws) {
     builder.setThrows();
     builder.setThrownError(fnThrownTypeGen);
@@ -3129,11 +3139,12 @@ ValueDecl *swift::getBuiltinValueDecl(ASTContext &Context, Identifier Id) {
   if (OperationName.starts_with("applyDerivative_")) {
     AutoDiffDerivativeFunctionKind kind;
     unsigned arity;
-    bool throws;
-    if (!autodiff::getBuiltinApplyDerivativeConfig(
-            OperationName, kind, arity, throws))
+    bool throws, isAsync;
+    if (!autodiff::getBuiltinApplyDerivativeConfig(OperationName, kind, arity,
+                                                   throws, isAsync))
       return nullptr;
-    return getAutoDiffApplyDerivativeFunction(Context, Id, kind, arity, throws);
+    return getAutoDiffApplyDerivativeFunction(Context, Id, kind, arity, throws,
+                                              isAsync);
   }
   if (OperationName.starts_with("applyTranspose_")) {
     unsigned arity;

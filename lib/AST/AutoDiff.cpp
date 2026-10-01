@@ -421,6 +421,18 @@ static void parseAutoDiffBuiltinCommonConfig(
 bool autodiff::getBuiltinApplyDerivativeConfig(
     StringRef operationName, AutoDiffDerivativeFunctionKind &kind,
     unsigned &arity, bool &throws) {
+  bool isAsync;
+  return getBuiltinApplyDerivativeConfig(operationName, kind, arity, throws,
+                                         isAsync) &&
+         !isAsync;
+}
+
+bool autodiff::getBuiltinApplyDerivativeConfig(
+    StringRef operationName, AutoDiffDerivativeFunctionKind &kind,
+    unsigned &arity, bool &throws, bool &isAsync) {
+  // The suffix follows the existing arity/throws suffixes. Reject unsupported
+  // async effects below instead of silently constructing a synchronous type.
+  isAsync = operationName.consume_back("_async");
   constexpr char prefix[] = "applyDerivative";
   if (!operationName.starts_with(prefix))
     return false;
@@ -432,8 +444,12 @@ bool autodiff::getBuiltinApplyDerivativeConfig(
     kind = AutoDiffDerivativeFunctionKind::JVP;
   else if (operationName.starts_with(vjpPrefix))
     kind = AutoDiffDerivativeFunctionKind::VJP;
+  else
+    return false;
   operationName = operationName.drop_front(sizeof(jvpPrefix) - 1);
   parseAutoDiffBuiltinCommonConfig(operationName, arity, throws);
+  if (isAsync && (kind != AutoDiffDerivativeFunctionKind::VJP || throws))
+    return false;
   return operationName.empty();
 }
 

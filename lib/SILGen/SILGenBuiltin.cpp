@@ -1284,15 +1284,16 @@ static ManagedValue emitBuiltinTypeTrait(SILGenFunction &SGF,
 }
 
 static ManagedValue emitBuiltinAutoDiffApplyDerivativeFunction(
-    AutoDiffDerivativeFunctionKind kind, unsigned arity, SILGenFunction &SGF,
-    SILLocation loc, SubstitutionMap substitutions, ArrayRef<ManagedValue> args,
-    SGFContext C) {
+    AutoDiffDerivativeFunctionKind kind, unsigned arity, bool isAsync,
+    SILGenFunction &SGF, SILLocation loc, SubstitutionMap substitutions,
+    ArrayRef<ManagedValue> args, SGFContext C) {
   auto origFnVal = args[0];
   SmallVector<SILValue, 2> origFnArgVals;
   for (auto& arg : args.drop_front(1))
     origFnArgVals.push_back(arg.getValue());
 
   auto origFnType = origFnVal.getType().castTo<SILFunctionType>();
+  assert(origFnType->isAsync() == isAsync);
   auto origFnUnsubstType = origFnType->getUnsubstitutedType(SGF.getModule());
   if (origFnType != origFnUnsubstType) {
     origFnVal = SGF.B.createConvertFunction(
@@ -1316,7 +1317,10 @@ static ManagedValue emitBuiltinAutoDiffApplyDerivativeFunction(
         loc, derivativeFn,
         SILType::getPrimitiveObjectType(derivativeFnUnsubstType),
         /*withoutActuallyEscaping*/ false);
+    derivativeType = derivativeFn->getType();
+    derivativeFnType = derivativeType.castTo<SILFunctionType>();
   }
+  assert(derivativeFnType->isAsync() == isAsync);
 
   // We don't need to destroy the original function or retain the
   // `derivativeFn`, because they are noescape.
@@ -1347,8 +1351,13 @@ static ManagedValue emitBuiltinAutoDiffApplyDerivativeFunction(
     SGF.B.createStore(loc, differential,
                       SGF.B.createTupleElementAddr(loc, indResBuffer, 1),
                       StoreOwnershipQualifier::Init);
-    return SGF.manageBufferForExprResult(
+    auto result = SGF.manageBufferForExprResult(
         indResBuffer, SGF.getTypeLowering(indResBuffer->getType()), C);
+    // emitApplyWithRethrow emits the apply, not the caller's executor recovery.
+    // Preserve ownership of the returned value and PB across this hop.
+    if (isAsync)
+      ExecutorBreadcrumb(/*mustReturnToExecutor=*/true).emit(SGF, loc);
+    return result;
   }
 
   // Do the apply for the direct result case.
@@ -1357,7 +1366,10 @@ static ManagedValue emitBuiltinAutoDiffApplyDerivativeFunction(
 
   derivativeFn = SILValue();
 
-  return SGF.emitManagedRValueWithCleanup(resultTuple);
+  auto result = SGF.emitManagedRValueWithCleanup(resultTuple);
+  if (isAsync)
+    ExecutorBreadcrumb(/*mustReturnToExecutor=*/true).emit(SGF, loc);
+  return result;
 }
 
 static ManagedValue emitBuiltinAutoDiffApplyTransposeFunction(
@@ -1420,12 +1432,13 @@ static ManagedValue emitBuiltinApplyDerivative(
   const auto builtinName = builtinDecl->getBaseIdentifier().str();
   AutoDiffDerivativeFunctionKind kind;
   unsigned arity;
-  bool throws;
+  bool throws, isAsync;
   auto successfullyParsed = autodiff::getBuiltinApplyDerivativeConfig(
-      builtinName, kind, arity, throws);
+      builtinName, kind, arity, throws, isAsync);
   assert(successfullyParsed);
-  return emitBuiltinAutoDiffApplyDerivativeFunction(kind, arity, SGF, loc,
-                                                    substitutions, args, C);
+  (void)successfullyParsed;
+  return emitBuiltinAutoDiffApplyDerivativeFunction(
+      kind, arity, isAsync, SGF, loc, substitutions, args, C);
 }
 
 static ManagedValue emitBuiltinApplyTranspose(
