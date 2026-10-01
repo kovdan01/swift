@@ -31,6 +31,7 @@
 #include "swift/SIL/FormalLinkage.h"
 #include "swift/SIL/PrettyStackTrace.h"
 #include "swift/SIL/SILBuilder.h"
+#include "swift/SILOptimizer/Analysis/AsyncLetActivity.h"
 #include "swift/SILOptimizer/Analysis/DominanceAnalysis.h"
 #include "swift/SILOptimizer/Differentiation/ADContext.h"
 #include "swift/SILOptimizer/Differentiation/JVPCloner.h"
@@ -801,8 +802,35 @@ DifferentiationTransformer::emitDerivativeFunctionReference(
       witnessKind = DifferentiabilityWitnessFunctionKind::VJP;
       break;
     }
-    auto *derivativeFnRef = builder.createDifferentiabilityWitnessFunction(
-        loc, witnessKind, minimalWitness);
+    SILValue derivativeFnRef;
+    if (isExperimentalAsyncAutoDiffEnabled() && originalFnTy->isAsync()) {
+      // Use the ordinary async-function reference/call ABI for statically known
+      // derivatives. Do not depend on an async function descriptor being
+      // recoverable from an opaque differentiability-witness entry.
+      if (!minimalWitness->isDefinition()) {
+        context.emitNondifferentiabilityError(
+            original, invoker, diag::autodiff_async_derivative_unsupported,
+            StringRef("a local derivative definition is required"));
+        return std::nullopt;
+      }
+      auto *derivative = minimalWitness->getDerivative(kind);
+      if (!derivative) {
+        if (canonicalizeDifferentiabilityWitness(minimalWitness, invoker,
+                                                 parentFn->getSerializedKind()))
+          return std::nullopt;
+        derivative = minimalWitness->getDerivative(kind);
+      }
+      if (!derivative) {
+        context.emitNondifferentiabilityError(
+            original, invoker, diag::autodiff_async_derivative_unsupported,
+            StringRef("derivative synthesis did not produce a function"));
+        return std::nullopt;
+      }
+      derivativeFnRef = builder.createFunctionRef(loc, derivative);
+    } else {
+      derivativeFnRef = builder.createDifferentiabilityWitnessFunction(
+          loc, witnessKind, minimalWitness);
+    }
     auto convertedRef = reapplyFunctionConversion(
         context, derivativeFnRef, originalFRI, original, builder, loc,
         newBuffersToDealloc, desiredConfig.parameterIndices,
