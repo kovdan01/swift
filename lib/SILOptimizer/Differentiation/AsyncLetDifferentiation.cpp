@@ -150,6 +150,31 @@ SILFunction *createHelper(ADContext &context, SILFunction &source,
   return f;
 }
 
+// The numerical helper has no error result, unlike its task-entry wrapper.
+// TypeSubstCloner remaps the wrapper's debug scopes to the helper, but it does
+// not know that we removed the error result from the signature. Drop only the
+// now-inapplicable error-slot record. Keep ordinary capture debug information
+// and any records belonging to genuinely inlined functions.
+static void removeErrorResultDebugValues(SILFunction &body) {
+  assert(!body.getLoweredFunctionType()->hasErrorResult());
+  for (auto &block : body) {
+    for (auto &inst : llvm::make_early_inc_range(block)) {
+      auto *debug = dyn_cast<DebugValueInst>(&inst);
+      if (!debug)
+        continue;
+      auto varInfo = debug->getVarInfo();
+      if (!varInfo || varInfo->Name != "$error" || !varInfo->Scope ||
+          varInfo->Scope->getInlinedFunction() != &body)
+        continue;
+      LLVM_DEBUG(llvm::dbgs()
+                 << "[async-let-differentiation] removing obsolete $error "
+                    "debug record from nonthrowing helper @"
+                 << body.getName() << '\n');
+      debug->eraseFromParent();
+    }
+  }
+}
+
 // These helpers deliberately operate only on the already-validated scalar
 // async-let domain. They are NOT general Swift function reabstraction.
 static bool appendScalarLeafTypes(SILType type,
@@ -521,6 +546,11 @@ SILFunction *AsyncLetVJPEmitter::createTaskEntry(const AsyncLetAccess &a,
   auto *body =
       createHelper(context, *a.initializer, baseName + ".body", bodyType);
   BasicTypeSubstCloner(a.initializer, body).cloneFunction();
+  removeErrorResultDebugValues(*body);
+#ifndef NDEBUG
+  // Catch helper-construction errors here, before they propagate into its VJP.
+  body->verify();
+#endif
 
   SILResultInfo result(payloadType.getASTType(), ResultConvention::Indirect);
   auto entryType = SILFunctionType::get(

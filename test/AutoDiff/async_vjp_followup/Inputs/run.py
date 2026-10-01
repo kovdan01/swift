@@ -19,6 +19,8 @@ import sys
 import time
 import traceback
 
+from check_helper_debug import check_helpers
+
 HERE = Path(__file__).resolve().parent
 TESTS = HERE.parent
 ROOT = Path(__file__).resolve().parents[4]
@@ -100,8 +102,10 @@ def check_tasks(before, after):
     entries = [s for s in functions if s.startswith('__swift_async_ad_') and s.endswith('.entry')]
     if len(entries) != 2:
         raise RuntimeError(f'Expected two generated task entries, got {len(entries)}')
+    helper_debug = check_helpers(after)
     return dict(vjp=symbol, pullback=pb_symbol, augmented_children=2,
-                primal_preserved=True, synchronous_pullback=True)
+                primal_preserved=True, synchronous_pullback=True,
+                helper_debug=helper_debug)
 
 
 def finish_form(sil, form):
@@ -351,6 +355,8 @@ bb0:
     try: check_witness_ir(good.replace('vTu','v'))
     except RuntimeError: pass
     else: raise AssertionError('Bad async witness escaped checking')
+    from check_helper_debug import self_test as helper_debug_self_test
+    helper_debug_self_test()
     print('PASS runner parser/fixture self-tests (no compiler invoked)')
 
 
