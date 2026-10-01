@@ -1848,11 +1848,8 @@ public:
         assert(index < checkpoints.size());
         SILValue pb = checkpoints[index];
         auto directType = getAsyncLetDirectPullbackType(*access);
-        if (pb->getType().castTo<SILFunctionType>() != directType) {
-          SILOptFunctionBuilder functions(getContext().getTransform());
-          pb = reabstractFunction(builder, functions, loc, pb, directType,
-                                  [](SubstitutionMap subs) { return subs; });
-        }
+        pb = reabstractAsyncLetPullback(getContext(), builder, loc, pb,
+                                        directType);
         auto seed = materializeAdjointDirect(getAdjointValue(bb, li), loc);
         auto *call = builder.createApply(loc, pb, SubstitutionMap(), {seed});
         builder.emitDestroyValueOperation(loc, pb);
