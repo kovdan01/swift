@@ -25,6 +25,8 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace swift;
 using namespace swift::autodiff;
@@ -244,6 +246,9 @@ AsyncLetVJPEmitter::AsyncLetVJPEmitter(
           return activity.isActive(read, config);
         }))
       continue;
+    LLVM_DEBUG(llvm::dbgs() << "[async-let-differentiation] augmenting child @"
+                            << a->initializer->getName() << " in @"
+                            << vjp.getName() << '\n');
     State state;
     state.access = a.get();
     llvm::SmallVector<TupleTypeElt, 2> fields = {
@@ -346,6 +351,9 @@ SILFunction *AsyncLetVJPEmitter::createTaskEntry(const AsyncLetAccess &a,
                                   StoreOwnershipQualifier::Init);
   auto unit = builder.createTuple(loc, SILType::getEmptyTupleType(ctx), {});
   builder.createReturn(loc, unit);
+  LLVM_DEBUG(llvm::dbgs() << "[async-let-differentiation] numerical helper:\n"
+                          << *body << "task entry:\n"
+                          << *entry);
   return entry;
 }
 
@@ -415,6 +423,9 @@ bool AsyncLetVJPEmitter::clone(
                                        LoadOwnershipQualifier::Trivial);
       map(load, value);
       if (activity.isActive(load, config)) {
+        LLVM_DEBUG(llvm::dbgs() << "[async-let-differentiation] checkpoint for "
+                                   "result read:\n"
+                                << *load);
         SILValue pb = builder.emitLoadValueOperation(
             loc, state.pullbackAddress, LoadOwnershipQualifier::Copy);
         auto target = lowerCheckpointType(
