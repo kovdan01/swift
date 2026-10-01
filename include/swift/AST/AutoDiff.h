@@ -662,6 +662,15 @@ bool getBuiltinApplyDerivativeConfig(
     StringRef operationName, AutoDiffDerivativeFunctionKind &kind,
     unsigned &arity, bool &rethrows);
 
+/// Also recognize the nonthrowing reverse-only async variants, e.g.
+/// `Builtin.applyDerivative_vjp_arity2_async`. The async effect applies to the
+/// derivative invocation, never to its returned pullback. The four-argument
+/// overload above continues to accept only synchronous builtin names.
+bool getBuiltinApplyDerivativeConfig(StringRef operationName,
+                                     AutoDiffDerivativeFunctionKind &kind,
+                                     unsigned &arity, bool &rethrows,
+                                     bool &isAsync);
+
 /// Retrieve config from the function name of a variant of
 /// `Builtin.applyTranspose`, e.g. `Builtin.applyTranspose_arity2`.
 /// Returns true if the function name is parsed successfully.
