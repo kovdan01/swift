@@ -39,8 +39,19 @@ void IRGenModule::emitSILDifferentiabilityWitness(
          "Differentiability witness definition should have JVP");
   assert(dw->getVJP() &&
          "Differentiability witness definition should have VJP");
-  diffWitnessContents.add(getAddrOfSILFunction(dw->getJVP(), NotForDefinition));
-  diffWitnessContents.add(getAddrOfSILFunction(dw->getVJP(), NotForDefinition));
+  // A first-class async function value points at an async function pointer
+  // descriptor, not at the implementation's entry address. Witness extraction
+  // uses the derivative's function type to interpret these fields, just as an
+  // ordinary function_ref does. Preserve code pointers for synchronous entries.
+  auto addDerivative = [&](SILFunction *derivative) {
+    if (derivative->isAsync())
+      diffWitnessContents.add(getAddrOfAsyncFunctionPointer(derivative));
+    else
+      diffWitnessContents.add(
+          getAddrOfSILFunction(derivative, NotForDefinition));
+  };
+  addDerivative(dw->getJVP());
+  addDerivative(dw->getVJP());
   getAddrOfDifferentiabilityWitness(
       dw, diffWitnessContents.finishAndCreateFuture());
 }
