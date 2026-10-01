@@ -1,0 +1,134 @@
+[
+  {
+    "name": "doWor5k",
+    "scalar": "Float",
+    "gradient_arity": 2,
+    "async": true,
+    "tasks": 2,
+    "augmented_tasks": 2,
+    "value": "a + b + a*b",
+    "da": "1 + b",
+    "db": "1 + a"
+  },
+  {
+    "name": "synchronous",
+    "scalar": "Float",
+    "gradient_arity": 2,
+    "async": false,
+    "tasks": 0,
+    "augmented_tasks": 0,
+    "value": "a + b + a*b",
+    "da": "1 + b",
+    "db": "1 + a"
+  },
+  {
+    "name": "directCalls",
+    "scalar": "Float",
+    "gradient_arity": 2,
+    "async": true,
+    "tasks": 0,
+    "augmented_tasks": 0,
+    "value": "a*b + a",
+    "da": "b + 1",
+    "db": "a"
+  },
+  {
+    "name": "repeatedRead",
+    "scalar": "Float",
+    "gradient_arity": 2,
+    "async": true,
+    "tasks": 1,
+    "augmented_tasks": 1,
+    "value": "2*a*b",
+    "da": "2*b",
+    "db": "2*a"
+  },
+  {
+    "name": "repeatedCapture",
+    "scalar": "Float",
+    "gradient_arity": 2,
+    "async": true,
+    "tasks": 1,
+    "augmented_tasks": 1,
+    "value": "a*a + b",
+    "da": "2*a",
+    "db": "1"
+  },
+  {
+    "name": "nonlinearUse",
+    "scalar": "Float",
+    "gradient_arity": 2,
+    "async": true,
+    "tasks": 1,
+    "augmented_tasks": 1,
+    "value": "(a*b)*(a*b)",
+    "da": "2*a*b*b",
+    "db": "2*a*a*b"
+  },
+  {
+    "name": "intermediateCapture",
+    "scalar": "Float",
+    "gradient_arity": 2,
+    "async": true,
+    "tasks": 1,
+    "augmented_tasks": 1,
+    "value": "(a+b)*b",
+    "da": "b",
+    "db": "a + 2*b"
+  },
+  {
+    "name": "nestedCalls",
+    "scalar": "Float",
+    "gradient_arity": 2,
+    "async": true,
+    "tasks": 1,
+    "augmented_tasks": 1,
+    "value": "a*b + a",
+    "da": "b + 1",
+    "db": "a"
+  },
+  {
+    "name": "selectedParameter",
+    "scalar": "Float",
+    "gradient_arity": 1,
+    "async": true,
+    "tasks": 2,
+    "augmented_tasks": 2,
+    "value": "a + b + a*b",
+    "da": "1 + b",
+    "db": null
+  },
+  {
+    "name": "inactiveChild",
+    "scalar": "Float",
+    "gradient_arity": 1,
+    "async": true,
+    "tasks": 1,
+    "augmented_tasks": 0,
+    "value": "a*b*b",
+    "da": "b*b",
+    "db": null
+  },
+  {
+    "name": "unusedChild",
+    "scalar": "Float",
+    "gradient_arity": 2,
+    "async": true,
+    "tasks": 1,
+    "augmented_tasks": 0,
+    "value": "a + b",
+    "da": "1",
+    "db": "1"
+  },
+  {
+    "name": "doublePrecision",
+    "scalar": "Double",
+    "gradient_arity": 2,
+    "async": true,
+    "tasks": 2,
+    "augmented_tasks": 2,
+    "value": "a + b + a*b",
+    "da": "1 + b",
+    "db": "1 + a"
+  }
+]
