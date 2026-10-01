@@ -200,6 +200,16 @@ public:
     generatedFunctions.push_back(function);
   }
 
+  /// Whether this transform owns a newly synthesized function. This is also
+  /// used by the restricted async residual validator to reject pre-existing,
+  /// opaque derivative implementations rather than infer safety from primals.
+  bool isGeneratedFunction(SILFunction *function) const {
+    for (auto *generated : generatedFunctions)
+      if (generated == function)
+        return true;
+    return false;
+  }
+
   void recordGeneratedFunctionReference(SILValue functionRef) {
     generatedFunctionReferences.push_back(functionRef);
   }

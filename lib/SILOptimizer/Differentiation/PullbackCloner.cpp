@@ -22,6 +22,7 @@
 #include "swift/SILOptimizer/Analysis/DifferentiableActivityAnalysis.h"
 #include "swift/SILOptimizer/Differentiation/ADContext.h"
 #include "swift/SILOptimizer/Differentiation/AdjointValue.h"
+#include "swift/SILOptimizer/Differentiation/AsyncLetDifferentiation.h"
 #include "swift/SILOptimizer/Differentiation/DifferentiationInvoker.h"
 #include "swift/SILOptimizer/Differentiation/LinearMapInfo.h"
 #include "swift/SILOptimizer/Differentiation/TangentBuilder.h"
@@ -1837,7 +1838,40 @@ public:
     }
     }
   }
-  void visitLoadInst(LoadInst *li) { visitLoadOperation(li); }
+  void visitLoadInst(LoadInst *li) {
+    if (isExperimentalAsyncAutoDiffEnabled()) {
+      if (auto *access = getActivityInfo().getAsyncLets().getRead(li)) {
+        auto *bb = li->getParent();
+        auto loc = li->getLoc();
+        auto index = getPullbackInfo().lookUpAsyncLetPullbackIndex(li);
+        auto checkpoints = pullbackTupleElements.lookup(bb);
+        assert(index < checkpoints.size());
+        SILValue pb = checkpoints[index];
+        auto directType = getAsyncLetDirectPullbackType(*access);
+        if (pb->getType().castTo<SILFunctionType>() != directType) {
+          SILOptFunctionBuilder functions(getContext().getTransform());
+          pb = reabstractFunction(builder, functions, loc, pb, directType,
+                                  [](SubstitutionMap subs) { return subs; });
+        }
+        auto seed = materializeAdjointDirect(getAdjointValue(bb, li), loc);
+        auto *call = builder.createApply(loc, pb, SubstitutionMap(), {seed});
+        builder.emitDestroyValueOperation(loc, pb);
+        SmallVector<SILValue, 4> gradients;
+        extractAllElements(call, builder, gradients);
+        assert(gradients.size() == access->captures.size());
+        for (unsigned i = 0; i != gradients.size(); ++i) {
+          auto capture = access->captures[i];
+          if (getActivityInfo().isActive(capture, getConfig()))
+            addAdjointValue(bb, capture, makeConcreteAdjointValue(gradients[i]),
+                            loc);
+        }
+        // Do not create an adjoint for the runtime result buffer or task.
+        // Repeated reads reuse a saved linear map, not the primal computation.
+        return;
+      }
+    }
+    visitLoadOperation(li);
+  }
   void visitLoadBorrowInst(LoadBorrowInst *lbi) { visitLoadOperation(lbi); }
 
   /// Handle `store` or `store_borrow` instruction.
