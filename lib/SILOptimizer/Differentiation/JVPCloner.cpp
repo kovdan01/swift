@@ -1803,9 +1803,10 @@ void JVPCloner::Implementation::prepareForDifferentialGeneration() {
 }
 
 bool JVPCloner::Implementation::run() {
-  for (const auto &access : activityInfo.getAsyncLets().getAccesses()) {
+  if (!activityInfo.getAsyncLets().getAccesses().empty()) {
     context.emitNondifferentiabilityError(
-        access->start, invoker, diag::autodiff_async_let_unsupported,
+        activityInfo.getAsyncLets().getAccesses().front()->start, invoker,
+        diag::autodiff_async_let_unsupported,
         StringRef("only reverse-mode async-let differentiation is supported"));
     return true;
   }
