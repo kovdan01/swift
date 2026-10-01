@@ -26,6 +26,15 @@ class LinearMapInfo;
 FunctionType *getAsyncLetPullbackASTType(const AsyncLetAccess &access);
 CanSILFunctionType getAsyncLetDirectPullbackType(const AsyncLetAccess &access);
 
+/// Adapt an owned synchronous scalar PB to a different seed/result ABI.
+/// Unlike the general AD thunk helper, this supports flattening/packing result
+/// tuples when the number of formal results changes. Only the validated
+/// nongeneric Float/Double async-let domain is supported. The returned closure
+/// owns the original PB and borrows it on every invocation.
+SILValue reabstractAsyncLetPullback(ADContext &context, SILBuilder &builder,
+                                    SILLocation loc, SILValue function,
+                                    CanSILFunctionType target);
+
 /// Returns true after issuing a diagnostic for an unsupported async-let region.
 bool diagnoseUnsupportedAsyncLets(ADContext &context,
                                   const DifferentiableActivityInfo &activity,

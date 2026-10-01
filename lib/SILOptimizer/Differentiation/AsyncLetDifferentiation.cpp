@@ -20,12 +20,12 @@
 #include "swift/SILOptimizer/Differentiation/ADContext.h"
 #include "swift/SILOptimizer/Differentiation/Common.h"
 #include "swift/SILOptimizer/Differentiation/LinearMapInfo.h"
-#include "swift/SILOptimizer/Differentiation/Thunk.h"
 #include "swift/SILOptimizer/Utils/SILOptFunctionBuilder.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace swift;
@@ -150,13 +150,87 @@ SILFunction *createHelper(ADContext &context, SILFunction &source,
   return f;
 }
 
-SILValue reabstract(ADContext &context, SILBuilder &builder, SILLocation loc,
-                    SILValue function, CanSILFunctionType target) {
-  if (function->getType().castTo<SILFunctionType>() == target)
-    return function;
-  SILOptFunctionBuilder functions(context.getTransform());
-  return reabstractFunction(builder, functions, loc, function, target,
-                            [](SubstitutionMap subs) { return subs; });
+// These helpers deliberately operate only on the already-validated scalar
+// async-let domain. They are NOT general Swift function reabstraction.
+static bool appendScalarLeafTypes(SILType type,
+                                  SmallVectorImpl<SILType> &leaves) {
+  type = type.getObjectType();
+  if (auto tuple = type.getAs<TupleType>()) {
+    for (unsigned i = 0; i != tuple->getNumElements(); ++i)
+      if (!appendScalarLeafTypes(type.getTupleElementType(i), leaves))
+        return false;
+    return true;
+  }
+  if (!isAsyncAutoDiffScalar(type))
+    return false;
+  leaves.push_back(type);
+  return true;
+}
+
+static bool isScalarPullback(CanSILFunctionType type,
+                             SmallVectorImpl<SILType> &resultLeaves) {
+  if (type->isAsync() || type->hasErrorResult() || type->isCoroutine() ||
+      type->getSubstGenericSignature() || type->getCombinedSubstitutions() ||
+      type->getRepresentation() != SILFunctionTypeRepresentation::Thick ||
+      type->getExtInfo().isNoEscape() || type->getNumParameters() != 1 ||
+      type->getCalleeConvention() != ParameterConvention::Direct_Guaranteed)
+    return false;
+  auto seed = type->getParameters().front();
+  if (!isAsyncAutoDiffScalar(
+          seed.getSILStorageInterfaceType().getObjectType()) ||
+      (seed.getConvention() != ParameterConvention::Direct_Unowned &&
+       seed.getConvention() != ParameterConvention::Indirect_In_Guaranteed))
+    return false;
+  for (auto result : type->getResults()) {
+    if (result.getConvention() != ResultConvention::Indirect &&
+        result.getConvention() != ResultConvention::Unowned &&
+        result.getConvention() != ResultConvention::Owned)
+      return false;
+    if (!appendScalarLeafTypes(result.getSILStorageInterfaceType(),
+                               resultLeaves))
+      return false;
+  }
+  return true;
+}
+
+// Flatten the value of ONE formal result. A formal result may itself be a
+// tuple, independently of the tuple used to represent multiple direct results.
+static void appendScalarResultValues(SILBuilder &builder, SILLocation loc,
+                                     SILValue value,
+                                     SmallVectorImpl<SILValue> &leaves) {
+  if (auto tuple = value->getType().getAs<TupleType>()) {
+    for (unsigned i = 0; i != tuple->getNumElements(); ++i) {
+      SILValue element;
+      if (value->getType().isAddress())
+        element = builder.createTupleElementAddr(loc, value, i);
+      else
+        element = builder.createTupleExtract(loc, value, i);
+      appendScalarResultValues(builder, loc, element, leaves);
+    }
+    return;
+  }
+  assert(isAsyncAutoDiffScalar(value->getType().getObjectType()));
+  if (value->getType().isAddress())
+    value = builder.createLoad(loc, value, LoadOwnershipQualifier::Trivial);
+  leaves.push_back(value);
+}
+
+// Rebuild the value of ONE destination formal result from ordered scalar
+// leaves. In particular, (Float, Float) can become one indirect tuple result.
+static SILValue buildScalarResult(SILBuilder &builder, SILLocation loc,
+                                  SILType type, ArrayRef<SILValue> &leaves) {
+  type = type.getObjectType();
+  if (auto tuple = type.getAs<TupleType>()) {
+    SmallVector<SILValue, 4> elements;
+    for (unsigned i = 0; i != tuple->getNumElements(); ++i)
+      elements.push_back(
+          buildScalarResult(builder, loc, type.getTupleElementType(i), leaves));
+    return builder.createTuple(loc, type, elements);
+  }
+  assert(!leaves.empty() && leaves.front()->getType() == type);
+  auto value = leaves.front();
+  leaves = leaves.drop_front();
+  return value;
 }
 
 SILType lowerCheckpointType(SILFunction &f, Type type) {
@@ -166,6 +240,166 @@ SILType lowerCheckpointType(SILFunction &f, Type type) {
   return f.getLoweredType(pattern, type);
 }
 } // namespace
+
+SILValue swift::autodiff::reabstractAsyncLetPullback(
+    ADContext &context, SILBuilder &builder, SILLocation loc, SILValue function,
+    CanSILFunctionType target) {
+  auto original = function->getType().castTo<SILFunctionType>();
+  if (original == target)
+    return function;
+
+  auto &module = context.getModule();
+  auto fromType = original->getUnsubstitutedType(module);
+  auto toType = target->getUnsubstitutedType(module);
+  LLVM_DEBUG(llvm::dbgs() << "[async-let-differentiation] pullback transport\n"
+                          << "  from: " << fromType << '\n'
+                          << "  to:   " << toType << '\n'
+                          << "  formal results: " << fromType->getNumResults()
+                          << " -> " << toType->getNumResults() << '\n');
+
+  if (original != fromType)
+    function = builder.createConvertFunction(
+        loc, function, SILType::getPrimitiveObjectType(fromType), false);
+  if (fromType == toType) {
+    if (toType != target)
+      function = builder.createConvertFunction(
+          loc, function, SILType::getPrimitiveObjectType(target), false);
+    return function;
+  }
+
+  // The generic AD reabstraction helper zips formal results one-to-one. That
+  // cannot convert two formal Float results to ONE @out (Float, Float) result.
+  // Compare the flattened numerical leaves instead, then pack/unpack them.
+  SmallVector<SILType, 4> fromLeaves, toLeaves;
+  if (!isScalarPullback(fromType, fromLeaves) ||
+      !isScalarPullback(toType, toLeaves) || fromLeaves != toLeaves ||
+      fromType->getParameters()
+              .front()
+              .getSILStorageInterfaceType()
+              .getObjectType() != toType->getParameters()
+                                      .front()
+                                      .getSILStorageInterfaceType()
+                                      .getObjectType())
+    llvm::report_fatal_error(
+        "unsupported async-let scalar pullback reabstraction");
+
+  auto &caller = builder.getFunction();
+  assert(caller.hasLoweredAddresses() &&
+         "async-let pullback transport is emitted after address lowering");
+  auto &ctx = context.getASTContext();
+  SmallVector<SILParameterInfo, 2> parameters;
+  parameters.append(toType->getParameters().begin(),
+                    toType->getParameters().end());
+  // Each invocation borrows the captured PB. partial_apply owns the capture,
+  // so invoking the adapted PB does not consume its saved derivative state.
+  parameters.emplace_back(fromType, ParameterConvention::Direct_Guaranteed);
+  auto thunkType = SILFunctionType::get(
+      nullptr,
+      toType->getExtInfo().withRepresentation(
+          SILFunctionTypeRepresentation::Thin),
+      SILCoroutineKind::None, ParameterConvention::Direct_Unowned, parameters,
+      {}, toType->getResults(), std::nullopt, {}, {}, ctx);
+
+  // Private, deterministic per-caller names avoid colliding with a generic
+  // reabstraction thunk created elsewhere for the same two types.
+  auto stem =
+      (Twine("__swift_async_ad_pb_reabstraction_") + caller.getName() + "_")
+          .str();
+  unsigned ordinal = 0;
+  auto name = (Twine(stem) + Twine(ordinal)).str();
+  while (module.lookUpFunction(name))
+    name = (Twine(stem) + Twine(++ordinal)).str();
+  SILOptFunctionBuilder functions(context.getTransform());
+  auto *thunk = functions.createFunction(
+      SILLinkage::Private, ctx.getIdentifier(name).str(), thunkType,
+      ActorIsolation::forUnspecified(), /*genericEnv*/ nullptr,
+      caller.getLocation(), IsBare, IsNotTransparent, IsNotSerialized,
+      IsNotDynamic, IsNotDistributed, IsNotRuntimeAccessible);
+  thunk->setDebugScope(new (module) SILDebugScope(caller.getLocation(), thunk));
+  thunk->setHasLoweredAddresses(caller.hasLoweredAddresses());
+  thunk->setThunk(IsReabstractionThunk);
+  context.recordGeneratedFunction(thunk);
+  thunk->createBasicBlock();
+  createEntryArguments(thunk);
+  SILBuilder body(thunk->getEntryBlock(), thunk->getDebugScope());
+
+  SmallVector<AllocStackInst *, 4> temporaries;
+  SmallVector<SILValue, 4> indirectResults;
+  SmallVector<SILValue, 8> arguments;
+  for (auto result : fromType->getResults()) {
+    if (!result.isFormalIndirect())
+      continue;
+    auto *buffer = body.createAllocStack(
+        loc, result.getSILStorageInterfaceType().getObjectType());
+    temporaries.push_back(buffer);
+    indirectResults.push_back(buffer);
+    arguments.push_back(buffer);
+  }
+
+  auto inputs = thunk->getArgumentsWithoutIndirectResults();
+  SILValue seed = inputs.front();
+  auto seedType =
+      fromType->getParameters().front().getSILStorageInterfaceType();
+  if (seedType.isAddress() && seed->getType().isObject()) {
+    auto *buffer = body.createAllocStack(loc, seedType.getObjectType());
+    temporaries.push_back(buffer);
+    body.createStore(loc, seed, buffer, StoreOwnershipQualifier::Trivial);
+    seed = buffer;
+  } else if (seedType.isObject() && seed->getType().isAddress()) {
+    seed = body.createLoad(loc, seed, LoadOwnershipQualifier::Trivial);
+  }
+  arguments.push_back(seed);
+  auto *call =
+      body.createApply(loc, inputs.back(), SubstitutionMap(), arguments);
+
+  // Keep formal-result ordering even if direct and indirect results are mixed.
+  SmallVector<SILValue, 4> values;
+  unsigned directIndex = 0, indirectIndex = 0;
+  for (auto result : fromType->getResults()) {
+    SILValue value;
+    if (result.isFormalIndirect()) {
+      value = indirectResults[indirectIndex++];
+    } else if (fromType->getNumDirectFormalResults() == 1) {
+      value = call;
+      ++directIndex;
+    } else {
+      value = body.createTupleExtract(loc, call, directIndex++);
+    }
+    appendScalarResultValues(body, loc, value, values);
+  }
+  assert(values.size() == toLeaves.size());
+
+  ArrayRef<SILValue> remaining(values);
+  SmallVector<SILValue, 4> directResults;
+  auto indirect = thunk->getIndirectResults().begin();
+  for (auto result : toType->getResults()) {
+    auto value = buildScalarResult(
+        body, loc, result.getSILStorageInterfaceType(), remaining);
+    if (result.isFormalIndirect()) {
+      assert(indirect != thunk->getIndirectResults().end());
+      body.createStore(loc, value, *indirect++,
+                       StoreOwnershipQualifier::Trivial);
+    } else {
+      directResults.push_back(value);
+    }
+  }
+  assert(remaining.empty() && indirect == thunk->getIndirectResults().end());
+  // Every temporary contains only scalar/tuple data. No residual buffer escapes
+  // an invocation, and there is no owned payload to destroy inside these slots.
+  for (auto *temporary : llvm::reverse(temporaries))
+    body.createDeallocStack(loc, temporary);
+  body.createReturn(loc, joinElements(directResults, body, loc));
+  LLVM_DEBUG(llvm::dbgs() << *thunk);
+
+  auto *ref = builder.createFunctionRef(loc, thunk);
+  context.recordGeneratedFunctionReference(ref);
+  function = builder.createPartialApply(loc, ref, SubstitutionMap(), {function},
+                                        toType->getCalleeConvention());
+  if (toType != target)
+    function = builder.createConvertFunction(
+        loc, function, SILType::getPrimitiveObjectType(target), false);
+  return function;
+}
 
 FunctionType *
 swift::autodiff::getAsyncLetPullbackASTType(const AsyncLetAccess &a) {
@@ -346,7 +580,7 @@ SILFunction *AsyncLetVJPEmitter::createTaskEntry(const AsyncLetAccess &a,
   // PB with an indirect seed. Adapt it to the generic field-1 storage ABI.
   auto pbType =
       pullbackAddress->getType().getObjectType().castTo<SILFunctionType>();
-  auto pb = reabstract(context, builder, loc, call, pbType);
+  auto pb = reabstractAsyncLetPullback(context, builder, loc, call, pbType);
   builder.emitStoreValueOperation(loc, pb, pullbackAddress,
                                   StoreOwnershipQualifier::Init);
   auto unit = builder.createTuple(loc, SILType::getEmptyTupleType(ctx), {});
@@ -431,7 +665,7 @@ bool AsyncLetVJPEmitter::clone(
         auto target = lowerCheckpointType(
                           vjp, linearMaps.lookUpAsyncLetPullbackType(load))
                           .castTo<SILFunctionType>();
-        pb = reabstract(context, builder, loc, pb, target);
+        pb = reabstractAsyncLetPullback(context, builder, loc, pb, target);
         savePullback(pb);
       }
       return true;
