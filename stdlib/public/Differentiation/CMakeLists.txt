@@ -16,10 +16,20 @@ else()
 set(swiftDifferentiationSIMDFiles)
 endif()
 
+# Keep synchronous differentiation available in concurrency-disabled builds.
+# When enabled, both the import and this dependency are required: the former
+# supplies Actor to SILGen and the latter orders the target-module build.
+set(swiftDifferentiationAsyncSources)
+set(swiftDifferentiationAsyncModuleDependencies)
+if(SWIFT_ENABLE_EXPERIMENTAL_CONCURRENCY)
+  set(swiftDifferentiationAsyncSources AsyncDifferentialOperators.swift)
+  set(swiftDifferentiationAsyncModuleDependencies _Concurrency)
+endif()
+
 add_swift_target_library(swift_Differentiation ${SWIFT_STDLIB_LIBRARY_BUILD_TYPES} IS_STDLIB
   Differentiable.swift
   DifferentialOperators.swift
-  AsyncDifferentialOperators.swift
+  ${swiftDifferentiationAsyncSources}
   DifferentiationUtilities.swift
   AnyDifferentiable.swift
   ArrayDifferentiation.swift
@@ -34,6 +44,7 @@ add_swift_target_library(swift_Differentiation ${SWIFT_STDLIB_LIBRARY_BUILD_TYPE
     TgmathDerivatives.swift.gyb
     ${swiftDifferentiationSIMDFiles}
 
+  SWIFT_MODULE_DEPENDS ${swiftDifferentiationAsyncModuleDependencies}
   SWIFT_MODULE_DEPENDS_ANDROID Android
   SWIFT_MODULE_DEPENDS_LINUX Glibc
   SWIFT_MODULE_DEPENDS_LINUX_STATIC Musl

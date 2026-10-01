@@ -234,6 +234,39 @@ class Runner:
                 b, a = self.emit_sil(f'finish-{form}-{self.opt}', fixture, parse_sil=True)
                 self.results[f'finish-{form}-{self.opt}'] = check_tasks(b, a)
 
+    def stdlib(self):
+        label = 'stdlib-' + self.opt
+        directory = ROOT / 'stdlib/public/Differentiation'
+        sources = [directory / 'Differentiable.swift',
+                   directory / 'AsyncDifferentialOperators.swift']
+        self.results[label + '.sources'] = {
+            str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sources}
+        flags = ['-parse-as-library', '-parse-stdlib',
+                 '-disable-implicit-concurrency-module-import',
+                 '-enable-library-evolution',
+                 '-enable-upcoming-feature', 'MemberImportVisibility',
+                 '-module-name', '_Differentiation', '-' + self.opt,
+                 *self.a.frontend_arg]
+        sil = self.out / (label + '.silgen.sil')
+        self.command(label + '.silgen',
+                     [self.a.frontend, '-emit-silgen', *flags, *sources,
+                      '-o', sil])
+        text = sil.read_text()
+        count = text.count('differentiable_function_extract [vjp]')
+        if count < 3:
+            raise RuntimeError('Expected all three generic async VJP builtins')
+        self.command(label + '.module',
+                     [self.a.frontend, '-emit-module', *flags,
+                      '-experimental-skip-non-inlinable-function-bodies',
+                      *sources, '-o', self.out / (label + '.swiftmodule'),
+                      '-emit-module-interface-path',
+                      self.out / (label + '.swiftinterface')])
+        # Never add these intentionally incomplete _Differentiation modules to
+        # another test's import search path: numerical tests need the full stdlib.
+        self.results[label] = {'silgen': 'PASS', 'module': 'PASS',
+                               'async_vjp_extractions': count}
+
     def witness(self):
         label = 'witness-'+self.opt
         irpath = self.out/(label+'.ll')
@@ -283,11 +316,12 @@ class Runner:
         if self.a.repo:
             self.command('repository-revision', ['git','-C',self.a.repo,'rev-parse','HEAD'])
             self.command('repository-diff-stat', ['git','-C',self.a.repo,'diff','--stat'])
-        modes = ['finish','witness','leaf','tasks'] if self.a.mode=='all' else [self.a.mode]
+        modes = ['stdlib','finish','witness','leaf','tasks'] if self.a.mode=='all' else [self.a.mode]
         for opt in self.a.optimizations:
             self.opt = opt
             for mode in modes:
-                if mode=='finish': self.finish()
+                if mode=='stdlib': self.stdlib()
+                elif mode=='finish': self.finish()
                 elif mode=='witness': self.witness()
                 else: self.api(mode)
         (self.out/'results.json').write_text(json.dumps(self.results,indent=2)+'\n')
@@ -326,7 +360,7 @@ def main():
     p.add_argument('--swiftc', type=Path)
     p.add_argument('--out', type=Path, default=Path('async-ad-followup-results'))
     p.add_argument('--repo', type=Path, help='Record the patched checkout revision and diff stat')
-    p.add_argument('--mode', choices=['all','finish','witness','leaf','tasks'], default='all')
+    p.add_argument('--mode', choices=['all','stdlib','finish','witness','leaf','tasks'], default='all')
     p.add_argument('--api-mode', choices=['bootstrap','stdlib'], default='bootstrap')
     p.add_argument('--optimizations', nargs='+', choices=['Onone','O'], default=['Onone','O'])
     p.add_argument('--finish-forms', action='store_true', help='Also test both pre-AD cleanup lowerings')
