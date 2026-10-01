@@ -1694,6 +1694,13 @@ EnumInst *VJPCloner::Implementation::buildPredecessorEnumValue(
 }
 
 bool VJPCloner::Implementation::run() {
+  for (const auto &access : activityInfo.getAsyncLets().getAccesses()) {
+    context.emitNondifferentiabilityError(
+        access->start, invoker, diag::autodiff_async_let_unsupported,
+        StringRef("async-let VJP emission is not available in this patch"));
+    return true;
+  }
+
   PrettyStackTraceSILFunction trace("generating VJP for", original);
   LLVM_DEBUG(getADDebugStream() << "Cloning original @" << original->getName()
                                 << " to vjp @" << vjp->getName() << '\n');

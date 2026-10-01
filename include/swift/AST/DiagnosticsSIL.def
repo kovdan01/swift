@@ -625,6 +625,10 @@ ERROR(autodiff_conversion_to_linear_function_not_supported,none,
       "supported", ())
 ERROR(autodiff_function_not_differentiable_error,none,
       "function is not differentiable", ())
+NOTE(autodiff_async_let_unsupported,none,
+     "cannot differentiate this async let: %0", (StringRef))
+NOTE(autodiff_async_derivative_unsupported,none,
+     "cannot synthesize this async derivative reference: %0", (StringRef))
 ERROR(autodiff_expression_not_differentiable_error,none,
       "expression is not differentiable", ())
 NOTE(autodiff_expression_not_differentiable_note,none,
