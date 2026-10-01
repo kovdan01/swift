@@ -9,6 +9,8 @@
 // See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
+#define DEBUG_TYPE "async-let-activity"
+
 #include "swift/SILOptimizer/Analysis/AsyncLetActivity.h"
 #include "swift/AST/ASTContext.h"
 #include "swift/AST/Decl.h"
@@ -16,6 +18,8 @@
 #include "swift/SIL/SILModule.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace swift;
 
@@ -164,6 +168,21 @@ std::string recognize(AsyncLetAccess &a, SILFunction &f) {
       }
       continue;
     }
+    // At this pass boundary finish may still be a builtin. It carries the
+    // same (task, result-buffer) association as swift_asyncLet_finish, and
+    // must be validated before treating it as an opaque raw-pointer user.
+    if (auto *builtin = dyn_cast<BuiltinInst>(user)) {
+      if (builtin->getName().str() == "finishAsyncLet") {
+        auto finishArgs = builtin->getArguments();
+        if (finishArgs.size() != 2 || finishArgs[0] != a.start ||
+            finishArgs[1] != a.pointer)
+          return "unrecognized async-let finish builtin argument association";
+        if (a.finish)
+          return "multiple async-let finish operations are not supported";
+        a.finish = builtin;
+        continue;
+      }
+    }
     if (auto *apply = dyn_cast<ApplyInst>(user)) {
       auto name = getCalleeName(apply);
       auto callArgs = apply->getArguments();
@@ -174,11 +193,18 @@ std::string recognize(AsyncLetAccess &a, SILFunction &f) {
         a.gets.push_back(apply);
         continue;
       }
-      if (name == "swift_asyncLet_finish" && !a.finish) {
+      if (name == "swift_asyncLet_finish") {
+        if (a.finish)
+          return "multiple async-let finish operations are not supported";
         a.finish = apply;
         continue;
       }
     }
+    LLVM_DEBUG(llvm::dbgs()
+               << "[async-let-activity] unrecognized result-pointer "
+                  "user in @"
+               << f.getName() << ":\n"
+               << *user);
     return "unrecognized use of the async-let result pointer";
   }
   for (auto *use : a.start->getUses()) {
@@ -248,6 +274,16 @@ AsyncLetActivity::AsyncLetActivity(SILFunction &function) {
     }
   }
   for (auto &a : accesses) {
+    LLVM_DEBUG({
+      llvm::dbgs() << "[async-let-activity] @" << function.getName() << ": ";
+      if (!a->isSupported()) {
+        llvm::dbgs() << a->unsupportedReason << '\n';
+      } else {
+        llvm::dbgs() << "recognized " << a->captures.size() << " captures, "
+                     << a->reads.size() << " reads; finish:\n"
+                     << *a->finish;
+      }
+    });
     if (!a->isSupported())
       continue;
     for (auto *read : a->reads)
