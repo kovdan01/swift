@@ -22,6 +22,7 @@
 
 #include "swift/SILOptimizer/Analysis/DifferentiableActivityAnalysis.h"
 #include "swift/SILOptimizer/Differentiation/ADContext.h"
+#include "swift/SILOptimizer/Differentiation/AsyncLetDifferentiation.h"
 #include "swift/SILOptimizer/Differentiation/DifferentiationInvoker.h"
 #include "swift/SILOptimizer/Differentiation/LinearMapInfo.h"
 #include "swift/SILOptimizer/Differentiation/PullbackCloner.h"
@@ -97,6 +98,7 @@ class VJPCloner::Implementation final
   /// Mapping from original blocks to pullback values. Used to build pullback
   /// struct instances.
   llvm::DenseMap<SILBasicBlock *, SmallVector<SILValue, 8>> pullbackValues;
+  std::unique_ptr<AsyncLetVJPEmitter> asyncLets;
 
   ASTContext &getASTContext() const { return vjp->getASTContext(); }
   SILModule &getModule() const { return vjp->getModule(); }
@@ -225,6 +227,19 @@ public:
   void visit(SILInstruction *inst) {
     if (errorOccurred)
       return;
+    if (asyncLets) {
+      Builder.setCurrentDebugScope(getOpScope(inst->getDebugScope()));
+      if (asyncLets->clone(
+              inst, Builder,
+              [this](SILValue value) { return getOpValue(value); },
+              [this](SILValue original, SILValue cloned) {
+                mapValue(original, cloned);
+              },
+              [this, inst](SILValue pb) {
+                pullbackValues[inst->getParent()].push_back(pb);
+              }))
+        return;
+    }
     TypeSubstCloner::visit(inst);
   }
 
@@ -1694,12 +1709,11 @@ EnumInst *VJPCloner::Implementation::buildPredecessorEnumValue(
 }
 
 bool VJPCloner::Implementation::run() {
-  for (const auto &access : activityInfo.getAsyncLets().getAccesses()) {
-    context.emitNondifferentiabilityError(
-        access->start, invoker, diag::autodiff_async_let_unsupported,
-        StringRef("async-let VJP emission is not available in this patch"));
+  if (diagnoseUnsupportedAsyncLets(context, activityInfo, invoker))
     return true;
-  }
+  if (isExperimentalAsyncAutoDiffEnabled())
+    asyncLets = std::make_unique<AsyncLetVJPEmitter>(
+        context, *vjp, activityInfo, getConfig(), pullbackInfo);
 
   PrettyStackTraceSILFunction trace("generating VJP for", original);
   LLVM_DEBUG(getADDebugStream() << "Cloning original @" << original->getName()

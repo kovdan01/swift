@@ -1,6 +1,7 @@
 target_sources(swiftSILOptimizer PRIVATE
   ADContext.cpp
   AdjointValue.cpp
+  AsyncLetDifferentiation.cpp
   Common.cpp
   DifferentiationInvoker.cpp
   JVPCloner.cpp

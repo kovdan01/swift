@@ -20,6 +20,7 @@
 #include "swift/SIL/ApplySite.h"
 #include "swift/SILOptimizer/Analysis/ArraySemantic.h"
 #include "swift/SILOptimizer/Differentiation/ADContext.h"
+#include "swift/SILOptimizer/Differentiation/AsyncLetDifferentiation.h"
 
 #include "swift/AST/DeclContext.h"
 #include "swift/AST/ParameterList.h"
@@ -388,6 +389,18 @@ void LinearMapInfo::generateDifferentiationDataStructures(
       // special-case pullback generation. Linear map tuples should be empty.
     } else {
       for (auto &inst : *origBB) {
+        if (kind == AutoDiffLinearMapKind::Pullback &&
+            isExperimentalAsyncAutoDiffEnabled()) {
+          if (auto *access = activityInfo.getAsyncLets().getRead(&inst)) {
+            auto *load = cast<LoadInst>(&inst);
+            if (activityInfo.isActive(load, config)) {
+              asyncLetPullbackIndexMap[load] = linearTupleTypes.size();
+              linearTupleTypes.emplace_back(
+                  getAsyncLetPullbackASTType(*access));
+            }
+            continue;
+          }
+        }
         if (auto *ai = dyn_cast<ApplyInst>(&inst))
           // Skip array literal intrinsic applications since array literal
           // initialization is linear and handled separately.
@@ -509,6 +522,10 @@ static bool shouldDifferentiateInjectEnumAddr(
 ///    ending, or destroying on an active operand.
 /// 5. The instruction creates an SSA copy of an active operand.
 bool LinearMapInfo::shouldDifferentiateInstruction(SILInstruction *inst) {
+  if (kind == AutoDiffLinearMapKind::Pullback &&
+      isExperimentalAsyncAutoDiffEnabled() &&
+      activityInfo.getAsyncLets().getRead(inst))
+    return activityInfo.isActive(cast<LoadInst>(inst), config);
   // A full apply site with an active argument and an active result (direct or
   // indirect) should be differentiated.
   if (FullApplySite::isa(inst))
