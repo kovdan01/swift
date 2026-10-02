@@ -42,12 +42,13 @@ func threeDoubleCaptures(_ a: Double, _ b: Double, _ c: Double) async -> Double 
   return await r
 }
 
-// Match a real 2 -> 1 formal-result conversion, not just a successful compiler
-// exit. Both numerical values must be packed into the single indirect result.
-// CHECK: sil private {{.*}}@{{.*}}__swift_async_ad_pb_reabstraction_{{.*}} : $@convention(thin) (@in_guaranteed Float, @guaranteed @callee_guaranteed (@in_guaranteed Float) -> (Float, Float)) -> @out (Float, Float) {
+// The shared AutoDiff thunk now owns result regrouping; there is no private
+// async-only scalar adapter. Check the ABI and transfers, not its mangled name.
+// CHECK: sil shared {{.*}}[reabstraction_thunk]{{.*}} : $@convention(thin) (@in_guaranteed Float, @guaranteed @callee_guaranteed (@in_guaranteed Float) -> (Float, Float)) -> @out (Float, Float) {
 // CHECK: apply {{.*}} : $@callee_guaranteed (@in_guaranteed Float) -> (Float, Float)
-// CHECK: tuple_extract {{.*}}, 0
-// CHECK: tuple_extract {{.*}}, 1
-// CHECK: tuple (
+// CHECK: destructure_tuple
+// CHECK: tuple_element_addr {{.*}}, 0
+// CHECK: store {{.*}} to [trivial]
+// CHECK: tuple_element_addr {{.*}}, 1
 // CHECK: store {{.*}} to [trivial]
 // CHECK: return

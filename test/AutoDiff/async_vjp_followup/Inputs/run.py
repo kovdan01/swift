@@ -149,7 +149,15 @@ def finish_form(sil, form):
         result = re.sub(r'^(sil_stage [^\n]+\n)', r'\1\n' + imports,
                         result, count=1, flags=re.M)
     if form == 'runtime' and not re.search(r'^sil\s+[^\n]*@swift_asyncLet_finish\s*:', result, re.M):
-        result += '\nsil @swift_asyncLet_finish : $@convention(thin) @async (Builtin.RawPointer, Builtin.RawPointer) -> ()\n'
+        result += '\nsil [semantics \"asynclet.finish\"] @swift_asyncLet_finish : $@convention(thin) @async (Builtin.RawPointer, Builtin.RawPointer) -> ()\n'
+    if form == 'runtime':
+        def annotate_finish(m):
+            header = m[0]
+            if '[semantics "asynclet.finish"]' not in header:
+                header = header.replace('sil ', 'sil [semantics "asynclet.finish"] ', 1)
+            return header
+        result = re.sub(r'^sil\s+[^\n]*@swift_asyncLet_finish\s*:[^\n]*',
+                        annotate_finish, result, flags=re.M)
     if form == 'builtin':
         count = result.count('builtin "finishAsyncLet"')
     else:
