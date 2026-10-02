@@ -34,6 +34,7 @@
 #include "swift/SILOptimizer/Analysis/AsyncLetActivity.h"
 #include "swift/SILOptimizer/Analysis/DominanceAnalysis.h"
 #include "swift/SILOptimizer/Differentiation/ADContext.h"
+#include "swift/SILOptimizer/Differentiation/AsyncLetDifferentiation.h"
 #include "swift/SILOptimizer/Differentiation/JVPCloner.h"
 #include "swift/SILOptimizer/Differentiation/Thunk.h"
 #include "swift/SILOptimizer/Differentiation/VJPCloner.h"
@@ -1839,6 +1840,11 @@ void Differentiation::run() {
       continue;
     errorOccurred |= transformer.processLinearFunctionInst(lfi);
   }
+
+  // Inspect the actual retained pullbacks only after derivative selection and
+  // synthesis have completed. This includes normally resolved library VJPs.
+  if (!errorOccurred && isExperimentalAsyncAutoDiffEnabled())
+    errorOccurred |= diagnoseAsyncLetResidualTransfers(context);
 
   // If any error occurred while processing witnesses or
   // `differentiable_function` instructions, clean up.

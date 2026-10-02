@@ -220,9 +220,9 @@ bool swift::autodiff::diagnoseUnsupportedAsyncLets(
 AsyncLetVJPEmitter::AsyncLetVJPEmitter(
     ADContext &context, SILFunction &vjp,
     const DifferentiableActivityInfo &activity, const AutoDiffConfig &config,
-    LinearMapInfo &linearMaps)
+    LinearMapInfo &linearMaps, DifferentiationInvoker invoker)
     : context(context), vjp(vjp), activity(activity), config(config),
-      linearMaps(linearMaps) {
+      linearMaps(linearMaps), invoker(invoker) {
   for (auto &a : activity.getAsyncLets().getAccesses()) {
     assert(a->isSupported());
     if (!llvm::any_of(a->reads, [&](SILInstruction *read) {
@@ -332,8 +332,9 @@ SILFunction *AsyncLetVJPEmitter::createTaskEntry(const AsyncLetAccess &a,
   auto pbType =
       pullbackAddress->getType().getObjectType().castTo<SILFunctionType>();
   auto pb = reabstractAsyncLetPullback(context, builder, loc, call, pbType);
-  builder.emitStoreValueOperation(loc, pb, pullbackAddress,
-                                  StoreOwnershipQualifier::Init);
+  auto *store = builder.createStore(loc, pb, pullbackAddress,
+                                    StoreOwnershipQualifier::Init);
+  context.recordAsyncLetTransfer(store, a.start, invoker);
   auto unit = builder.createTuple(loc, SILType::getEmptyTupleType(ctx), {});
   builder.createReturn(loc, unit);
   LLVM_DEBUG(llvm::dbgs() << "[async-let-differentiation] numerical helper:\n"

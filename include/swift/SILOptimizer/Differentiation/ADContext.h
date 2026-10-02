@@ -200,14 +200,32 @@ public:
     generatedFunctions.push_back(function);
   }
 
-  /// Whether this transform owns a newly synthesized function. This is also
-  /// used by the restricted async residual validator to reject pre-existing,
-  /// opaque derivative implementations rather than infer safety from primals.
+  /// Whether this transform owns a newly synthesized function. The residual
+  /// checker uses this identity when inspecting the existing AD loop-context
+  /// allocations; it is not a blanket exemption for generated functions.
   bool isGeneratedFunction(SILFunction *function) const {
     for (auto *generated : generatedFunctions)
       if (generated == function)
         return true;
     return false;
+  }
+
+  struct AsyncLetTransfer {
+    StoreInst *store;
+    SILInstruction *source;
+    DifferentiationInvoker invoker;
+  };
+
+private:
+  SmallVector<AsyncLetTransfer, 4> asyncLetTransfers;
+
+public:
+  void recordAsyncLetTransfer(StoreInst *store, SILInstruction *source,
+                              DifferentiationInvoker invoker) {
+    asyncLetTransfers.push_back({store, source, invoker});
+  }
+  ArrayRef<AsyncLetTransfer> getAsyncLetTransfers() const {
+    return asyncLetTransfers;
   }
 
   void recordGeneratedFunctionReference(SILValue functionRef) {

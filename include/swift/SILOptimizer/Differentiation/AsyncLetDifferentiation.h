@@ -52,6 +52,10 @@ bool diagnoseUnsupportedAsyncLets(ADContext &context,
                                   const AutoDiffConfig &config,
                                   DifferentiationInvoker invoker);
 
+/// Run after the normal derivative worklists have resolved callees. Unknown
+/// residual provenance is diagnosed, not treated as a successful proof.
+bool diagnoseAsyncLetResidualTransfers(ADContext &context);
+
 class AsyncLetVJPEmitter {
   struct State {
     const AsyncLetAccess *access = nullptr;
@@ -65,6 +69,7 @@ class AsyncLetVJPEmitter {
   const DifferentiableActivityInfo &activity;
   const AutoDiffConfig &config;
   LinearMapInfo &linearMaps;
+  DifferentiationInvoker invoker;
   SmallVector<State, 4> states;
 
   SILFunction *createTaskEntry(const AsyncLetAccess &access,
@@ -73,7 +78,8 @@ class AsyncLetVJPEmitter {
 public:
   AsyncLetVJPEmitter(ADContext &context, SILFunction &vjp,
                      const DifferentiableActivityInfo &activity,
-                     const AutoDiffConfig &config, LinearMapInfo &linearMaps);
+                     const AutoDiffConfig &config, LinearMapInfo &linearMaps,
+                     DifferentiationInvoker invoker);
 
   /// Clone an intercepted instruction and record its normal SSA mapping.
   /// Returns false for an instruction that should use ordinary VJP cloning.

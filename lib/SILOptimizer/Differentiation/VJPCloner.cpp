@@ -1713,7 +1713,7 @@ bool VJPCloner::Implementation::run() {
     return true;
   if (isExperimentalAsyncAutoDiffEnabled())
     asyncLets = std::make_unique<AsyncLetVJPEmitter>(
-        context, *vjp, activityInfo, getConfig(), pullbackInfo);
+        context, *vjp, activityInfo, getConfig(), pullbackInfo, invoker);
 
   PrettyStackTraceSILFunction trace("generating VJP for", original);
   LLVM_DEBUG(getADDebugStream() << "Cloning original @" << original->getName()

@@ -100,7 +100,7 @@ std::string validateLifetime(const AsyncLetAccess &a, SILFunction &function) {
         allowed = Unallocated;
         next = Allocated;
       } else if (&inst == a.start) {
-        allowed = Allocated;
+        allowed = Allocated | Ended;
         next = Running;
       } else if (llvm::is_contained(a.gets, &inst)) {
         allowed = Running | Ready;
@@ -115,7 +115,7 @@ std::string validateLifetime(const AsyncLetAccess &a, SILFunction &function) {
         allowed = Finished;
         next = Ended;
       } else if (llvm::is_contained(a.deallocations, &inst)) {
-        allowed = Ended;
+        allowed = Allocated | Ended;
         next = Unallocated;
       } else if (isa<ReturnInst, ThrowInst>(&inst)) {
         allowed = Unallocated;
