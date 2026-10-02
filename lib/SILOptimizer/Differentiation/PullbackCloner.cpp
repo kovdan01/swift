@@ -1144,6 +1144,31 @@ public:
     pullbackBBMap[tai->getParent()].second = afterTryApplyPbBB;
   }
 
+  /// Accumulate a nested pullback result using the existing adjoint ownership
+  /// and buffer machinery. The caller still owns an indirect result buffer;
+  /// a direct result is consumed or registered as a block temporary here.
+  void accumulatePullbackResult(SILBasicBlock *bb, SILValue original,
+                                SILValue tangent, SILLocation loc) {
+    if (getTangentValueCategory(original) == SILValueCategory::Address) {
+      if (tangent->getType().isAddress()) {
+        addToAdjointBuffer(bb, original, tangent, loc);
+      } else {
+        auto *buffer = builder.createAllocStack(loc, tangent->getType());
+        builder.emitStoreValueOperation(loc, tangent, buffer,
+                                        StoreOwnershipQualifier::Init);
+        addToAdjointBuffer(bb, original, buffer, loc);
+        builder.emitDestroyAddrAndFold(loc, buffer);
+        builder.createDeallocStack(loc, buffer);
+      }
+      return;
+    }
+    if (tangent->getType().isAddress())
+      tangent = builder.emitLoadValueOperation(loc, tangent,
+                                               LoadOwnershipQualifier::Copy);
+    recordTemporary(tangent);
+    addAdjointValue(bb, original, makeConcreteAdjointValue(tangent), loc);
+  }
+
   void buildPullbackCall(FullApplySite fai, NestedApplyInfo &applyInfo,
                          SILValue pullback = SILValue()) {
     auto loc = fai->getLoc();
@@ -1277,21 +1302,7 @@ public:
       if (paramInfo.isAutoDiffSemanticResult())
         continue;
       auto tan = *allResultsIt++;
-      if (tan->getType().isAddress()) {
-        addToAdjointBuffer(bb, origArg, tan, loc);
-      } else {
-        if (origArg->getType().isAddress()) {
-          auto *tmpBuf = builder.createAllocStack(loc, tan->getType());
-          builder.emitStoreValueOperation(loc, tan, tmpBuf,
-                                          StoreOwnershipQualifier::Init);
-          addToAdjointBuffer(bb, origArg, tmpBuf, loc);
-          builder.emitDestroyAddrAndFold(loc, tmpBuf);
-          builder.createDeallocStack(loc, tmpBuf);
-        } else {
-          recordTemporary(tan);
-          addAdjointValue(bb, origArg, makeConcreteAdjointValue(tan), loc);
-        }
-      }
+      accumulatePullbackResult(bb, origArg, tan, loc);
     }
 
     // Propagate adjoints for yields

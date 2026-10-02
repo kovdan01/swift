@@ -129,6 +129,108 @@ static void forwardFunctionArgumentsConvertingOwnership(
   }
 }
 
+/// A formal result can contain a tuple independently of the tuple used for
+/// several direct SIL results. Reabstract the ordered leaves, preserving that
+/// distinction. Nominal types are leaves: their fields/layout are not examined.
+///
+/// Object leaves retain their result ownership. Address leaves are initialized
+/// and will be taken exactly once. This lets the same plan handle loadable,
+/// nontrivial and address-only tangent types without loading an address-only
+/// aggregate.
+class ReabstractionResultPlan {
+  SILBuilder &builder;
+  SILOptFunctionBuilder &functions;
+  SILLocation loc;
+  SmallVector<SILValue, 8> leaves;
+  unsigned next = 0;
+
+  SILValue takeLeaf(SILType expectedType) {
+    assert(next < leaves.size() && "result abstraction lost a component");
+    SILValue value = leaves[next++];
+    auto actual = value->getType().getObjectType();
+    if (actual != expectedType) {
+      // Function values can themselves require the ordinary AD reabstraction
+      // machinery. Do not reinterpret their closure contexts or code pointers.
+      assert(actual.is<SILFunctionType>() &&
+             expectedType.is<SILFunctionType>() &&
+             "result regrouping must preserve component types");
+      if (value->getType().isAddress())
+        value = builder.emitLoadValueOperation(loc, value,
+                                               LoadOwnershipQualifier::Take);
+      if (value->getOwnershipKind() == OwnershipKind::Unowned)
+        value = builder.emitCopyValueOperation(loc, value);
+      value = reabstractFunction(builder, functions, loc, value,
+                                 expectedType.castTo<SILFunctionType>(),
+                                 [](SubstitutionMap map) { return map; });
+    }
+    return value;
+  }
+
+public:
+  ReabstractionResultPlan(SILBuilder &builder, SILOptFunctionBuilder &functions,
+                          SILLocation loc)
+      : builder(builder), functions(functions), loc(loc) {}
+
+  void addFormalResult(SILValue value) {
+    if (auto tuple = value->getType().getAs<TupleType>()) {
+      if (value->getType().isAddress()) {
+        for (unsigned i = 0; i != tuple->getNumElements(); ++i)
+          addFormalResult(builder.createTupleElementAddr(loc, value, i));
+      } else {
+        // Destructure, rather than tuple_extract, so owned nontrivial leaves
+        // are forwarded exactly once and the original tuple is consumed.
+        SmallVector<SILValue, 4> elements;
+        extractAllElements(value, builder, elements);
+        for (auto element : elements)
+          addFormalResult(element);
+      }
+      return;
+    }
+    leaves.push_back(value);
+  }
+
+  SILValue emitDirectResult(SILType type, ResultConvention convention) {
+    type = type.getObjectType();
+    if (auto tuple = type.getAs<TupleType>()) {
+      SmallVector<SILValue, 4> elements;
+      for (unsigned i = 0; i != tuple->getNumElements(); ++i)
+        elements.push_back(
+            emitDirectResult(type.getTupleElementType(i), convention));
+      return builder.createTuple(loc, type, elements);
+    }
+    auto value = takeLeaf(type);
+    if (value->getType().isAddress())
+      return builder.emitLoadValueOperation(loc, value,
+                                            LoadOwnershipQualifier::Take);
+    if (convention == ResultConvention::Owned &&
+        value->getOwnershipKind() == OwnershipKind::Unowned)
+      value = builder.emitCopyValueOperation(loc, value);
+    return value;
+  }
+
+  void emitIndirectResult(SILValue destination) {
+    auto type = destination->getType().getObjectType();
+    if (auto tuple = type.getAs<TupleType>()) {
+      for (unsigned i = 0; i != tuple->getNumElements(); ++i)
+        emitIndirectResult(builder.createTupleElementAddr(loc, destination, i));
+      return;
+    }
+    auto value = takeLeaf(type);
+    if (value->getType().isAddress()) {
+      builder.createCopyAddr(loc, value, destination, IsTake, IsInitialization);
+    } else {
+      if (value->getOwnershipKind() == OwnershipKind::Unowned)
+        value = builder.emitCopyValueOperation(loc, value);
+      builder.emitStoreValueOperation(loc, value, destination,
+                                      StoreOwnershipQualifier::Init);
+    }
+  }
+
+  void finish() const {
+    assert(next == leaves.size() && "result abstraction discarded a component");
+  }
+};
+
 SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
                                            SILModule &module, SILLocation loc,
                                            SILFunction *caller,
@@ -173,6 +275,8 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
   SILBuilder builder(entry);
   createEntryArguments(thunk);
 
+  // These thunks are emitted in the caller's already-lowered address form.
+  thunk->setHasLoweredAddresses(caller->hasLoweredAddresses());
   SILAddressConventions silConv = SILAddressConventions::forFunction(*thunk);
   SILFunctionConventions fromConv(fromType, silConv);
   SILFunctionConventions toConv(toType, silConv);
@@ -199,31 +303,17 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
     return alloc;
   };
 
-  // Handle indirect results.
-  assert(fromType->getNumResults() == toType->getNumResults());
-  for (unsigned resIdx : range(toType->getNumResults())) {
-    auto fromRes = fromConv.getResults()[resIdx];
-    auto toRes = toConv.getResults()[resIdx];
-    // No abstraction mismatch.
-    if (fromRes.isFormalIndirect() == toRes.isFormalIndirect()) {
-      // If result types are indirect, directly pass as next argument.
-      if (toRes.isFormalIndirect())
-        useNextArgument();
+  // Result grouping need not be one-to-one. For example, two direct results
+  // can become one indirect tuple result. Give the source call its own result
+  // storage; the result plan below transfers every initialized component into
+  // the target result convention. These buffers are empty after that transfer.
+  for (auto result : fromConv.getResults()) {
+    if (!result.isFormalIndirect())
       continue;
-    }
-    // Convert indirect result to direct result.
-    if (fromRes.isFormalIndirect()) {
-      SILType resultTy =
-          fromConv.getSILType(fromRes, builder.getTypeExpansionContext());
-      assert(resultTy.isAddress());
-      auto *indRes = createAllocStack(resultTy);
-      arguments.push_back(indRes);
-      continue;
-    }
-    // Convert direct result to indirect result.
-    // Increment thunk argument iterator; reabstraction handled later.
-    ++toArgIter;
+    auto type = fromConv.getSILType(result, builder.getTypeExpansionContext());
+    arguments.push_back(createAllocStack(type));
   }
+  toArgIter += thunk->getIndirectResults().size();
 
   // Reabstract parameters.
   assert(toType->getNumParameters() == fromType->getNumParameters());
@@ -263,68 +353,33 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
   auto *fnArg = thunk->getArgumentsWithoutIndirectResults().back();
   auto *apply = builder.createApply(loc, fnArg, SubstitutionMap(), arguments);
 
-  // Get return elements.
-  SmallVector<SILValue, 4> results;
-  // Extract all direct results.
+  // Collect ONE value for each direct formal result before decomposing tuples.
+  // A sole direct formal result can itself be a tuple.
   SmallVector<SILValue, 4> directResults;
-  extractAllElements(apply, builder, directResults);
-
-  auto fromDirResultsIter = directResults.begin();
-  auto fromIndResultsIter = apply->getIndirectSILResults().begin();
-  auto toIndResultsIter = thunk->getIndirectResults().begin();
-  // Reabstract results.
-  for (unsigned resIdx : range(toType->getNumResults())) {
-    auto fromRes = fromConv.getResults()[resIdx];
-    auto toRes = toConv.getResults()[resIdx];
-    // Check function-typed results.
-    if (isa<SILFunctionType>(fromRes.getInterfaceType()) &&
-        isa<SILFunctionType>(toRes.getInterfaceType())) {
-      auto fromFnType = cast<SILFunctionType>(fromRes.getInterfaceType());
-      auto toFnType = cast<SILFunctionType>(toRes.getInterfaceType());
-      auto fromUnsubstFnType = fromFnType->getUnsubstitutedType(module);
-      auto toUnsubstFnType = toFnType->getUnsubstitutedType(module);
-      // If unsubstituted function types are not equal, perform reabstraction.
-      if (fromUnsubstFnType != toUnsubstFnType) {
-        auto fromFn = *fromDirResultsIter++;
-        auto newFromFn = reabstractFunction(
-            builder, fb, loc, fromFn, toFnType,
-            [](SubstitutionMap substMap) { return substMap; });
-        results.push_back(newFromFn);
-        continue;
-      }
-    }
-    // No abstraction mismatch.
-    if (fromRes.isFormalIndirect() == toRes.isFormalIndirect()) {
-      // If result types are direct, add call result as direct thunk result.
-      if (toRes.isFormalDirect())
-        results.push_back(*fromDirResultsIter++);
-      // If result types are indirect, increment indirect result iterators.
-      else {
-        ++fromIndResultsIter;
-        ++toIndResultsIter;
-      }
-      continue;
-    }
-    // Load direct results from indirect results.
-    if (fromRes.isFormalIndirect()) {
-      auto indRes = *fromIndResultsIter++;
-      auto load = builder.emitLoadValueOperation(loc, indRes,
-                                                 LoadOwnershipQualifier::Take);
-      results.push_back(load);
-      continue;
-    }
-    // Store direct results to indirect results.
-    assert(toRes.isFormalIndirect());
-#ifndef NDEBUG
-    SILType resultTy =
-        toConv.getSILType(toRes, builder.getTypeExpansionContext());
-    assert(resultTy.isAddress());
-#endif
-    auto indRes = *toIndResultsIter++;
-    auto dirRes = *fromDirResultsIter++;
-    builder.emitStoreValueOperation(loc, dirRes, indRes,
-                                    StoreOwnershipQualifier::Init);
+  if (fromType->getNumDirectFormalResults() == 1)
+    directResults.push_back(apply);
+  else if (fromType->getNumDirectFormalResults() != 0)
+    extractAllElements(apply, builder, directResults);
+  auto direct = directResults.begin();
+  auto indirect = apply->getIndirectSILResults().begin();
+  ReabstractionResultPlan resultPlan(builder, fb, loc);
+  for (auto result : fromConv.getResults()) {
+    SILValue value = result.isFormalIndirect() ? *indirect++ : *direct++;
+    resultPlan.addFormalResult(value);
   }
+
+  SmallVector<SILValue, 4> results;
+  auto destination = thunk->getIndirectResults().begin();
+  for (auto result : toConv.getResults()) {
+    if (result.isFormalIndirect()) {
+      resultPlan.emitIndirectResult(*destination++);
+    } else {
+      auto type = toConv.getSILType(result, builder.getTypeExpansionContext());
+      results.push_back(
+          resultPlan.emitDirectResult(type, result.getConvention()));
+    }
+  }
+  resultPlan.finish();
   auto retVal = joinElements(results, builder, loc);
 
   // Clean up local values.
