@@ -82,7 +82,7 @@ private:
   llvm::DenseMap<FullApplySite, unsigned> linearMapIndexMap;
 
   /// An active async-let result read checkpoints the child's saved capture PB.
-  llvm::DenseMap<LoadInst *, unsigned> asyncLetPullbackIndexMap;
+  llvm::DenseMap<SILInstruction *, unsigned> asyncLetPullbackIndexMap;
 
   /// Mapping from predecessor-successor basic block pairs in the original
   /// function to the corresponding branching trace enum case.
@@ -196,13 +196,13 @@ public:
     unsigned idx = lookUpLinearMapIndex(fas);
     return getLinearMapTupleType(fas->getParent())->getElement(idx).getType();
   }
-  unsigned lookUpAsyncLetPullbackIndex(LoadInst *load) const {
+  unsigned lookUpAsyncLetPullbackIndex(SILInstruction *load) const {
     auto entry = asyncLetPullbackIndexMap.find(load);
     assert(entry != asyncLetPullbackIndexMap.end() &&
            "No checkpoint for an active async-let read");
     return entry->second;
   }
-  Type lookUpAsyncLetPullbackType(LoadInst *load) const {
+  Type lookUpAsyncLetPullbackType(SILInstruction *load) const {
     unsigned index = lookUpAsyncLetPullbackIndex(load);
     return getLinearMapTupleType(load->getParent())
         ->getElement(index)

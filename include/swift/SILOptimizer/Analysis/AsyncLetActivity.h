@@ -22,27 +22,29 @@ namespace swift {
 
 bool isExperimentalAsyncAutoDiffEnabled();
 
-/// A semantic edge from the captured environment to each read of a child
-/// result. Task handles and raw pointers are transport, NOT differentiable
-/// values.
-///
-/// This first implementation deliberately accepts only the single-block,
-/// local-buffer lowering. An unrecognized start is retained with a diagnostic
-/// reason, rather than disappearing from activity analysis as an inactive
-/// value.
+/// The numerical value materialized by an async-let result read. Copying an
+/// address-only result initializes a destination rather than defining an SSA
+/// object. Task handles and the runtime's raw pointers are never cotangents.
+SILValue getAsyncLetReadValue(SILInstruction *read);
+
+/// A statically associated structured child and its typed result accesses.
+/// Cleanup sites can be mutually exclusive. The recognizer proves the lifetime
+/// protocol on the CFG; it does not impose an order on physical block layout.
 struct AsyncLetAccess {
   BuiltinInst *start = nullptr;
   PartialApplyInst *closure = nullptr;
+  FunctionRefInst *initializerRef = nullptr;
   SILFunction *initializer = nullptr;
   AllocStackInst *buffer = nullptr;
   AddressToPointerInst *pointer = nullptr;
-  SILInstruction *finish = nullptr;
-  BuiltinInst *end = nullptr;
-  DeallocStackInst *deallocation = nullptr;
+  SmallVector<SILInstruction *, 4> finishes;
+  SmallVector<BuiltinInst *, 4> ends;
+  SmallVector<DeallocStackInst *, 4> deallocations;
   SmallVector<SILValue, 4> captures;
-  SmallVector<LoadInst *, 4> reads;
+  SmallVector<SILInstruction *, 4> reads;
   SmallVector<PointerToAddressInst *, 4> addresses;
   SmallVector<ApplyInst *, 4> gets;
+  SmallVector<SILInstruction *, 8> closureConversions;
   SmallVector<SILInstruction *, 16> transport;
   std::string unsupportedReason;
 
@@ -52,7 +54,7 @@ struct AsyncLetAccess {
 
 class AsyncLetActivity {
   SmallVector<std::unique_ptr<AsyncLetAccess>, 4> accesses;
-  llvm::DenseMap<LoadInst *, const AsyncLetAccess *> reads;
+  llvm::DenseMap<SILInstruction *, const AsyncLetAccess *> reads;
   llvm::SmallPtrSet<SILInstruction *, 32> transport;
 
 public:
@@ -62,15 +64,10 @@ public:
   }
   bool empty() const { return accesses.empty(); }
   const AsyncLetAccess *getRead(SILInstruction *inst) const {
-    auto *load = dyn_cast_or_null<LoadInst>(inst);
-    return load ? reads.lookup(load) : nullptr;
+    return reads.lookup(inst);
   }
   bool isTransport(SILInstruction *inst) const { return transport.count(inst); }
 };
-
-/// Deliberately narrow initial transport domain. It does not assert that every
-/// Differentiable/Sendable primal has a Sendable tape.
-bool isAsyncAutoDiffScalar(SILType type);
 
 } // namespace swift
 #endif

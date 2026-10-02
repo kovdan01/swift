@@ -23,21 +23,33 @@ namespace autodiff {
 class ADContext;
 class LinearMapInfo;
 
-FunctionType *getAsyncLetPullbackASTType(const AsyncLetAccess &access);
-CanSILFunctionType getAsyncLetDirectPullbackType(const AsyncLetAccess &access);
+/// Indices are in the lifted initializer's explicit capture parameter list.
+/// Nondifferentiable and inactive captures remain primal inputs, not gradients.
+IndexSubset *
+getAsyncLetParameterIndices(const AsyncLetAccess &access,
+                            const DifferentiableActivityInfo &activity,
+                            const AutoDiffConfig &config);
+FunctionType *
+getAsyncLetPullbackASTType(const AsyncLetAccess &access,
+                           const DifferentiableActivityInfo &activity,
+                           const AutoDiffConfig &config);
 
-/// Adapt an owned synchronous scalar PB to a different seed/result ABI.
-/// Unlike the general AD thunk helper, this supports flattening/packing result
-/// tuples when the number of formal results changes. Only the validated
-/// nongeneric Float/Double async-let domain is supported. The returned closure
-/// owns the original PB and borrows it on every invocation.
+/// A private invocation convention with an indirect tangent seed and one
+/// indirect gradient result. The result may be a tuple of capture tangents.
+/// This is not a claim that tangent values are loadable or trivial.
+CanSILFunctionType
+getAsyncLetPullbackBufferType(const AsyncLetAccess &access,
+                              const DifferentiableActivityInfo &activity,
+                              const AutoDiffConfig &config);
+
+/// Use the shared AD thunk builder, including its result-regrouping support.
 SILValue reabstractAsyncLetPullback(ADContext &context, SILBuilder &builder,
                                     SILLocation loc, SILValue function,
                                     CanSILFunctionType target);
 
-/// Returns true after issuing a diagnostic for an unsupported async-let region.
 bool diagnoseUnsupportedAsyncLets(ADContext &context,
                                   const DifferentiableActivityInfo &activity,
+                                  const AutoDiffConfig &config,
                                   DifferentiationInvoker invoker);
 
 class AsyncLetVJPEmitter {
@@ -47,7 +59,6 @@ class AsyncLetVJPEmitter {
     SILType payloadType;
     SILFunction *entry = nullptr;
     SILValue buffer, valueAddress, pullbackAddress;
-    SILValue escapingClosure, noescapeClosure;
   };
   ADContext &context;
   SILFunction &vjp;

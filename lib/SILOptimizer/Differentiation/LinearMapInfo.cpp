@@ -392,11 +392,12 @@ void LinearMapInfo::generateDifferentiationDataStructures(
         if (kind == AutoDiffLinearMapKind::Pullback &&
             isExperimentalAsyncAutoDiffEnabled()) {
           if (auto *access = activityInfo.getAsyncLets().getRead(&inst)) {
-            auto *load = cast<LoadInst>(&inst);
-            if (activityInfo.isActive(load, config)) {
-              asyncLetPullbackIndexMap[load] = linearTupleTypes.size();
-              linearTupleTypes.emplace_back(
-                  getAsyncLetPullbackASTType(*access));
+            if (activityInfo.isActive(getAsyncLetReadValue(&inst), config)) {
+              if (auto *type = getAsyncLetPullbackASTType(*access, activityInfo,
+                                                          config)) {
+                asyncLetPullbackIndexMap[&inst] = linearTupleTypes.size();
+                linearTupleTypes.emplace_back(type);
+              }
             }
             continue;
           }
@@ -525,7 +526,7 @@ bool LinearMapInfo::shouldDifferentiateInstruction(SILInstruction *inst) {
   if (kind == AutoDiffLinearMapKind::Pullback &&
       isExperimentalAsyncAutoDiffEnabled() &&
       activityInfo.getAsyncLets().getRead(inst))
-    return activityInfo.isActive(cast<LoadInst>(inst), config);
+    return activityInfo.isActive(getAsyncLetReadValue(inst), config);
   // A full apply site with an active argument and an active result (direct or
   // indirect) should be differentiated.
   if (FullApplySite::isa(inst))

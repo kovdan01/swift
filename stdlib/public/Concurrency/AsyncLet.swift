@@ -26,16 +26,19 @@ public func _asyncLetStart<T>(
 /// Wait if necessary and then project the result value of an async let
 @available(SwiftStdlib 5.1, *)
 @_silgen_name("swift_asyncLet_get")
+@_semantics("asynclet.get")
 public func _asyncLet_get(_ asyncLet: Builtin.RawPointer, _ resultBuffer: Builtin.RawPointer) async
 
 /// Wait if necessary and then project the result value of an async let that throws
 @available(SwiftStdlib 5.1, *)
 @_silgen_name("swift_asyncLet_get_throwing")
+@_semantics("asynclet.get_throwing")
 public func _asyncLet_get_throwing(_ asyncLet: Builtin.RawPointer, _ resultBuffer: Builtin.RawPointer) async throws
 
 /// Wait if necessary and then tear down the async let task
 @available(SwiftStdlib 5.1, *)
 @_silgen_name("swift_asyncLet_finish")
+@_semantics("asynclet.finish")
 public func _asyncLet_finish(_ asyncLet: Builtin.RawPointer, _ resultBuffer: Builtin.RawPointer) async
 
 @_silgen_name("swift_asyncLet_extractTask")

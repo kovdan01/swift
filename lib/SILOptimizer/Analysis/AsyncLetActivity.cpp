@@ -13,9 +13,10 @@
 
 #include "swift/SILOptimizer/Analysis/AsyncLetActivity.h"
 #include "swift/AST/ASTContext.h"
-#include "swift/AST/Decl.h"
+#include "swift/AST/SemanticAttrs.h"
 #include "swift/SIL/SILFunction.h"
 #include "swift/SIL/SILModule.h"
+#include "swift/SILOptimizer/Analysis/DominanceAnalysis.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
@@ -33,25 +34,22 @@ bool swift::isExperimentalAsyncAutoDiffEnabled() {
   return EnableExperimentalAsyncAutoDiff;
 }
 
-bool swift::isAsyncAutoDiffScalar(SILType type) {
-  if (!type.isObject())
-    return false;
-  auto *decl = type.getASTType()->getStructOrBoundGenericStruct();
-  if (!decl || !decl->getModuleContext()->isStdlibModule())
-    return false;
-  return decl->getName().str() == "Float" || decl->getName().str() == "Double";
+SILValue swift::getAsyncLetReadValue(SILInstruction *read) {
+  if (auto *copy = dyn_cast<CopyAddrInst>(read))
+    return copy->getDest();
+  assert(isa<LoadInst, LoadBorrowInst>(read));
+  return cast<SingleValueInstruction>(read);
 }
 
 namespace {
-StringRef getCalleeName(ApplyInst *apply) {
-  auto *ref = dyn_cast<FunctionRefInst>(apply->getCallee());
-  return ref ? ref->getReferencedFunction()->getName() : StringRef();
+bool hasRuntimeSemantics(ApplyInst *apply, StringRef semantics) {
+  auto *callee = apply->getCalleeFunction();
+  return callee && callee->hasSemanticsAttr(semantics);
 }
 
-bool isDebug(SILInstruction *inst) { return isa<DebugValueInst>(inst); }
-
-/// Do NOT peer through partial_apply here: its operands are the environment.
-SILValue stripConversions(SILValue value, AsyncLetAccess &access) {
+/// Closure conversion is transport, not a numerical operation. The actual
+/// capture operands remain visible on partial_apply.
+SILValue stripConversions(SILValue value, AsyncLetAccess &a) {
   while (true) {
     auto *inst = value->getDefiningInstruction();
     SILValue operand;
@@ -67,20 +65,92 @@ SILValue stripConversions(SILValue value, AsyncLetAccess &access) {
       operand = i->getOperand();
     else
       return value;
-    access.transport.push_back(inst);
+    a.closureConversions.push_back(inst);
     value = operand;
   }
 }
 
+/// Compile-time lifetime verification, NOT an AD execution trace. Standard
+/// LinearMapInfo/PullbackCloner remain responsible for branches and loops.
+///
+/// A union at CFG joins represents all states that can reach that point. An
+/// operation must be valid for every incoming state. Thus waits on both arms
+/// can establish readiness at a join without any single wait dominating it.
+/// Loop backedges reuse the same transfer function; a loop-local child has to
+/// finish/end/deallocate before its allocation executes again.
+std::string validateLifetime(const AsyncLetAccess &a, SILFunction &function) {
+  enum : unsigned {
+    Unallocated = 1,
+    Allocated = 2,
+    Running = 4,
+    Ready = 8,
+    Finished = 16,
+    Ended = 32
+  };
+  llvm::DenseMap<SILBasicBlock *, unsigned> incoming;
+  SmallVector<SILBasicBlock *, 16> worklist;
+  incoming[function.getEntryBlock()] = Unallocated;
+  worklist.push_back(function.getEntryBlock());
+  while (!worklist.empty()) {
+    auto *block = worklist.pop_back_val();
+    unsigned state = incoming.lookup(block);
+    for (auto &inst : *block) {
+      unsigned allowed = 0, next = 0;
+      if (&inst == a.buffer) {
+        allowed = Unallocated;
+        next = Allocated;
+      } else if (&inst == a.start) {
+        allowed = Allocated;
+        next = Running;
+      } else if (llvm::is_contained(a.gets, &inst)) {
+        allowed = Running | Ready;
+        next = Ready;
+      } else if (llvm::is_contained(a.reads, &inst)) {
+        allowed = Ready;
+        next = Ready;
+      } else if (llvm::is_contained(a.finishes, &inst)) {
+        allowed = Running | Ready;
+        next = Finished;
+      } else if (llvm::is_contained(a.ends, &inst)) {
+        allowed = Finished;
+        next = Ended;
+      } else if (llvm::is_contained(a.deallocations, &inst)) {
+        allowed = Ended;
+        next = Unallocated;
+      } else if (isa<ReturnInst, ThrowInst>(&inst)) {
+        allowed = Unallocated;
+        next = Unallocated;
+      }
+      if (!allowed)
+        continue;
+      if (state & ~allowed) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "[async-let-activity] invalid lifetime state " << state
+                   << " at:\n"
+                   << inst);
+        return "an async-let read or cleanup is not valid on every incoming "
+               "control-flow path";
+      }
+      state = next;
+    }
+    for (auto *successor : block->getSuccessorBlocks()) {
+      unsigned joined = incoming.lookup(successor) | state;
+      if (joined != incoming.lookup(successor)) {
+        incoming[successor] = joined;
+        worklist.push_back(successor);
+      }
+    }
+  }
+  return {};
+}
+
 std::string recognize(AsyncLetAccess &a, SILFunction &f) {
-  if (f.size() != 1)
-    return "the initial implementation requires a single-block parent";
+  // These are representation/serialization restrictions, not numerical type
+  // restrictions. Substituted library calls inside a concrete child are fine.
   if (f.getLoweredFunctionType()->getSubstGenericSignature())
-    return "generic parents are not yet supported";
+    return "generic async-let parents require contextual helper specialization";
   if (f.isSerialized())
     return "serialized/inlinable async-let derivatives are not yet supported";
-  if (a.start->getName().str() != "startAsyncLetWithLocalBuffer")
-    return "only startAsyncLetWithLocalBuffer is implemented";
   auto args = a.start->getArguments();
   if (args.size() != 3)
     return "unexpected async-let start operands";
@@ -88,65 +158,67 @@ std::string recognize(AsyncLetAccess &a, SILFunction &f) {
   if (!a.pointer ||
       !(a.buffer = dyn_cast<AllocStackInst>(a.pointer->getOperand())))
     return "the task result must have a unique local stack buffer";
-  if (!isAsyncAutoDiffScalar(a.getValueType()))
-    return "the initial task-result domain is Float and Double";
 
   auto closure = stripConversions(args[1], a);
   a.closure = dyn_cast<PartialApplyInst>(closure);
   SILValue callee = closure;
   if (a.closure) {
     if (!a.closure->getSubstitutionMap().empty())
-      return "generic closure captures are not yet supported";
+      return "generic initializer specialization is not yet implemented";
     a.captures.append(a.closure->getArguments().begin(),
                       a.closure->getArguments().end());
-    a.transport.push_back(a.closure);
     callee = a.closure->getCallee();
   }
-  // A conversion/capture node shared with another invocation must not be
-  // hidden from activity analysis. Only this task and lifetime/debug uses are
-  // allowed to consume the compiler-created closure chain.
-  for (auto *node : a.transport)
-    for (auto result : node->getResults())
-      for (auto *use : result->getUses()) {
-        auto *user = use->getUser();
-        if (user == a.start || llvm::is_contained(a.transport, user) ||
-            isa<DestroyValueInst, EndBorrowInst, DebugValueInst>(user))
-          continue;
-        return "the initializer closure is shared with another use";
-      }
-  auto *ref = dyn_cast<FunctionRefInst>(callee);
-  if (!ref)
-    return "the initializer must be a statically known local function";
-  a.initializer = ref->getReferencedFunction();
+  a.initializerRef = dyn_cast<FunctionRefInst>(callee);
+  if (!a.initializerRef)
+    return "the initializer must resolve to a statically known function";
+  a.initializer = a.initializerRef->getReferencedFunction();
   if (a.initializer->isExternalDeclaration())
     return "the initializer body must be available for synthesis";
   auto type = a.initializer->getLoweredFunctionType()->getUnsubstitutedType(
       f.getModule());
   if (type->getSubstGenericSignature() || !type->isAsync() ||
-      type->getNumParameters() != a.captures.size() ||
+      type->isCoroutine() || type->getNumParameters() != a.captures.size() ||
       type->getNumResults() != 1 || type->getNumIndirectFormalResults() != 1 ||
       type->getSingleResult().getSILStorageInterfaceType().getObjectType() !=
           a.getValueType())
-    return "unsupported initializer signature or reabstraction thunk";
-  for (auto capture : a.captures)
-    if (!isAsyncAutoDiffScalar(capture->getType()))
-      return "the initial capture domain is by-value Float and Double";
-  for (auto param : type->getParameters())
-    if (param.isFormalIndirect())
-      return "indirect captures are not yet supported";
+    return "unsupported initializer result convention or reabstraction";
+  for (auto parameter : type->getParameters())
+    if (parameter.isAutoDiffSemanticResult())
+      return "mutable inout captures are not supported in an async-let helper";
   auto subs = a.start->getSubstitutions();
   if (subs.getReplacementTypes().size() != 1 || !subs.getConformances().empty())
     return "unsupported async-let builtin substitution requirements";
 
-  // Establish ALL users of the result storage; do not guess pointer aliasing.
+  // The augmented closure replaces the original closure at its construction,
+  // consuming each capture only once. Validate that the whole conversion chain
+  // is private to this child before changing its result type.
+  SmallVector<SILInstruction *, 8> chain(a.closureConversions.begin(),
+                                         a.closureConversions.end());
+  chain.push_back(a.closure ? static_cast<SILInstruction *>(a.closure)
+                            : a.initializerRef);
+  for (auto *node : chain)
+    for (auto result : node->getResults())
+      for (auto *use : result->getUses()) {
+        auto *user = use->getUser();
+        if (user == a.start || llvm::is_contained(chain, user) ||
+            isa<DestroyValueInst, EndBorrowInst, DebugValueInst>(user) ||
+            isBuiltinInst(user, BuiltinValueKind::EndAsyncLetLifetime))
+          continue;
+        return "the initializer closure is shared with another invocation";
+      }
+  DominanceInfo dominance(&f);
+  if (!dominance.dominates(a.buffer, chain.back()))
+    return "the async-let result allocation must dominate closure construction";
+
+  // Account for every storage use. Typed copies/borrows are numerical reads;
+  // raw pointers remain opaque transport and may not escape this association.
   for (auto *use : a.buffer->getUses()) {
     auto *user = use->getUser();
-    if (user == a.pointer || isDebug(user))
+    if (user == a.pointer || isa<DebugValueInst>(user))
       continue;
-    if (auto *dealloc = dyn_cast<DeallocStackInst>(user)) {
-      if (a.deallocation)
-        return "multiple result-buffer deallocations are not yet supported";
-      a.deallocation = dealloc;
+    if (auto *deallocation = dyn_cast<DeallocStackInst>(user)) {
+      a.deallocations.push_back(deallocation);
       continue;
     }
     return "unrecognized use of the async-let result allocation";
@@ -155,96 +227,88 @@ std::string recognize(AsyncLetAccess &a, SILFunction &f) {
     auto *user = use->getUser();
     if (user == a.start)
       continue;
-    if (auto *addr = dyn_cast<PointerToAddressInst>(user)) {
-      if (addr->getType() != a.buffer->getType())
+    if (auto *address = dyn_cast<PointerToAddressInst>(user)) {
+      if (address->getType() != a.buffer->getType())
         return "the async-let result pointer is reinterpreted";
-      a.addresses.push_back(addr);
-      for (auto *addressUse : addr->getUses()) {
-        auto *load = dyn_cast<LoadInst>(addressUse->getUser());
-        if (!load ||
-            load->getOwnershipQualifier() != LoadOwnershipQualifier::Trivial)
-          return "only trivial scalar result loads are implemented";
-        a.reads.push_back(load);
+      a.addresses.push_back(address);
+      for (auto *addressUse : address->getUses()) {
+        auto *read = addressUse->getUser();
+        if (auto *load = dyn_cast<LoadInst>(read)) {
+          if (load->getOwnershipQualifier() == LoadOwnershipQualifier::Take)
+            return "consuming async-let result access needs field-aware "
+                   "cleanup";
+        } else if (auto *copy = dyn_cast<CopyAddrInst>(read)) {
+          if (copy->getSrc() != address || copy->isTakeOfSrc())
+            return "the task result may only be copied, not overwritten or "
+                   "taken";
+          if (!copy->isInitializationOfDest())
+            return "async-let address materialization must initialize its "
+                   "target";
+        } else if (!isa<LoadBorrowInst>(read)) {
+          if (isa<DebugValueInst>(read))
+            continue;
+          return "unsupported projection or escape of the async-let result; "
+                 "materialize the complete value before projecting it";
+        }
+        a.reads.push_back(read);
       }
       continue;
     }
-    // At this pass boundary finish may still be a builtin. It carries the
-    // same (task, result-buffer) association as swift_asyncLet_finish, and
-    // must be validated before treating it as an opaque raw-pointer user.
-    if (auto *builtin = dyn_cast<BuiltinInst>(user)) {
-      if (builtin->getName().str() == "finishAsyncLet") {
-        auto finishArgs = builtin->getArguments();
-        if (finishArgs.size() != 2 || finishArgs[0] != a.start ||
-            finishArgs[1] != a.pointer)
-          return "unrecognized async-let finish builtin argument association";
-        if (a.finish)
-          return "multiple async-let finish operations are not supported";
-        a.finish = builtin;
-        continue;
-      }
+    if (auto *finish = isBuiltinInst(user, BuiltinValueKind::FinishAsyncLet)) {
+      auto operands = finish->getArguments();
+      if (operands.size() != 2 || operands[0] != a.start ||
+          operands[1] != a.pointer)
+        return "invalid async-let finish operand association";
+      a.finishes.push_back(finish);
+      continue;
     }
     if (auto *apply = dyn_cast<ApplyInst>(user)) {
-      auto name = getCalleeName(apply);
-      auto callArgs = apply->getArguments();
-      if (callArgs.size() != 2 || callArgs[0] != a.start ||
-          callArgs[1] != a.pointer)
-        return "unrecognized async-let runtime argument association";
-      if (name == "swift_asyncLet_get") {
+      auto operands = apply->getArguments();
+      if (operands.size() != 2 || operands[0] != a.start ||
+          operands[1] != a.pointer)
+        return "invalid async-let runtime operand association";
+      if (hasRuntimeSemantics(apply, semantics::ASYNC_LET_GET)) {
         a.gets.push_back(apply);
         continue;
       }
-      if (name == "swift_asyncLet_finish") {
-        if (a.finish)
-          return "multiple async-let finish operations are not supported";
-        a.finish = apply;
+      if (hasRuntimeSemantics(apply, semantics::ASYNC_LET_FINISH)) {
+        a.finishes.push_back(apply);
         continue;
       }
     }
-    LLVM_DEBUG(llvm::dbgs()
-               << "[async-let-activity] unrecognized result-pointer "
-                  "user in @"
-               << f.getName() << ":\n"
-               << *user);
-    return "unrecognized use of the async-let result pointer";
+    return "unrecognized async-let result-pointer use or missing runtime "
+           "semantics; use a matching rebuilt concurrency module";
   }
   for (auto *use : a.start->getUses()) {
     auto *user = use->getUser();
-    if (user == a.finish || llvm::is_contained(a.gets, user))
+    if (llvm::is_contained(a.finishes, user) ||
+        llvm::is_contained(a.gets, user))
       continue;
-    if (auto *builtin = dyn_cast<BuiltinInst>(user)) {
-      if (builtin->getName().str() == "endAsyncLetLifetime" &&
-          builtin->getArguments().size() == 1 && !a.end) {
-        a.end = builtin;
-        continue;
-      }
+    if (auto *end =
+            isBuiltinInst(user, BuiltinValueKind::EndAsyncLetLifetime)) {
+      auto operands = end->getArguments();
+      if (operands.empty() || operands[0] != a.start || operands.size() > 2)
+        return "invalid async-let lifetime-end operands";
+      if (operands.size() == 2 &&
+          !llvm::is_contained(chain, operands[1]->getDefiningInstruction()))
+        return "unexpected async-let closure lifetime operand";
+      a.ends.push_back(end);
+      continue;
     }
     return "unrecognized use of the async-let task handle";
   }
-  if (!a.finish || !a.end || !a.deallocation)
-    return "missing finish, lifetime end, or buffer deallocation";
+  if (a.finishes.empty() || a.ends.empty() || a.deallocations.empty())
+    return "missing async-let finish, lifetime end, or buffer deallocation";
+  if (auto reason = validateLifetime(a, f); !reason.empty())
+    return reason;
 
-  llvm::DenseMap<SILInstruction *, unsigned> order;
-  unsigned next = 0;
-  for (auto &inst : f.front())
-    order[&inst] = next++;
-  if (!(order[a.buffer] < order[a.start] && order[a.start] < order[a.finish] &&
-        order[a.finish] < order[a.end] && order[a.end] < order[a.deallocation]))
-    return "unsupported async-let lifetime ordering";
-  for (auto *get : a.gets)
-    if (!(order[a.start] < order[get] && order[get] < order[a.finish]))
-      return "unsupported async-let wait ordering";
-  for (auto *read : a.reads) {
-    if (order[read] >= order[a.finish] ||
-        !llvm::any_of(a.gets,
-                      [&](ApplyInst *get) { return order[get] < order[read]; }))
-      return "the result must be read after a wait and before finish";
-  }
+  a.transport.append(chain.begin(), chain.end());
   a.transport.push_back(a.buffer);
   a.transport.push_back(a.pointer);
   a.transport.push_back(a.start);
-  a.transport.push_back(a.finish);
-  a.transport.push_back(a.end);
-  a.transport.push_back(a.deallocation);
+  a.transport.append(a.finishes.begin(), a.finishes.end());
+  a.transport.append(a.ends.begin(), a.ends.end());
+  a.transport.append(a.deallocations.begin(), a.deallocations.end());
   a.transport.append(a.addresses.begin(), a.addresses.end());
   a.transport.append(a.gets.begin(), a.gets.end());
   return {};
@@ -252,24 +316,24 @@ std::string recognize(AsyncLetAccess &a, SILFunction &f) {
 } // namespace
 
 AsyncLetActivity::AsyncLetActivity(SILFunction &function) {
-  for (auto &bb : function)
-    for (auto &inst : bb)
-      if (auto *builtin = dyn_cast<BuiltinInst>(&inst))
-        if (builtin->getName().str().starts_with("startAsyncLet")) {
-          auto access = std::make_unique<AsyncLetAccess>();
-          access->start = builtin;
-          access->unsupportedReason = recognize(*access, function);
-          accesses.push_back(std::move(access));
-        }
+  for (auto &block : function)
+    for (auto &inst : block)
+      if (auto *start = isBuiltinInst(
+              &inst, BuiltinValueKind::StartAsyncLetWithLocalBuffer)) {
+        auto access = std::make_unique<AsyncLetAccess>();
+        access->start = start;
+        access->unsupportedReason = recognize(*access, function);
+        accesses.push_back(std::move(access));
+      }
 
-  // Shared result allocations would invalidate the one-task/one-payload model.
   llvm::DenseMap<AllocStackInst *, AsyncLetAccess *> buffers;
   for (auto &a : accesses) {
     if (!a->isSupported())
       continue;
     auto inserted = buffers.try_emplace(a->buffer, a.get());
     if (!inserted.second) {
-      a->unsupportedReason = "the result buffer is shared by multiple tasks";
+      a->unsupportedReason =
+          "the result allocation is shared by distinct tasks";
       inserted.first->second->unsupportedReason = a->unsupportedReason;
     }
   }
@@ -280,8 +344,8 @@ AsyncLetActivity::AsyncLetActivity(SILFunction &function) {
         llvm::dbgs() << a->unsupportedReason << '\n';
       } else {
         llvm::dbgs() << "recognized " << a->captures.size() << " captures, "
-                     << a->reads.size() << " reads; finish:\n"
-                     << *a->finish;
+                     << a->reads.size() << " reads, " << a->finishes.size()
+                     << " cleanup sites across the CFG\n";
       }
     });
     if (!a->isSupported())

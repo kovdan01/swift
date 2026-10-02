@@ -1709,7 +1709,7 @@ EnumInst *VJPCloner::Implementation::buildPredecessorEnumValue(
 }
 
 bool VJPCloner::Implementation::run() {
-  if (diagnoseUnsupportedAsyncLets(context, activityInfo, invoker))
+  if (diagnoseUnsupportedAsyncLets(context, activityInfo, getConfig(), invoker))
     return true;
   if (isExperimentalAsyncAutoDiffEnabled())
     asyncLets = std::make_unique<AsyncLetVJPEmitter>(

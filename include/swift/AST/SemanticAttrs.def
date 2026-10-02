@@ -42,6 +42,11 @@ SEMANTICS_ATTR(SWIFT_CONCURRENT_ASYNC, "swift.concurrent.async")
 SEMANTICS_ATTR(SWIFT_CONCURRENT_SAFE, "swift.concurrent.safe")
 SEMANTICS_ATTR(SWIFT_CONCURRENT, "swift.concurrent")
 
+// Runtime declarations that preserve the structured async-let association.
+SEMANTICS_ATTR(ASYNC_LET_GET, "asynclet.get")
+SEMANTICS_ATTR(ASYNC_LET_GET_THROWING, "asynclet.get_throwing")
+SEMANTICS_ATTR(ASYNC_LET_FINISH, "asynclet.finish")
+
 SEMANTICS_ATTR(ARRAY_APPEND_CONTENTS_OF, "array.append_contentsOf")
 SEMANTICS_ATTR(ARRAY_APPEND_ELEMENT, "array.append_element")
 SEMANTICS_ATTR(ARRAY_CHECK_INDEX, "array.check_index")

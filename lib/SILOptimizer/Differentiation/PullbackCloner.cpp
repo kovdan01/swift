@@ -1849,38 +1849,75 @@ public:
     }
     }
   }
-  void visitLoadInst(LoadInst *li) {
-    if (isExperimentalAsyncAutoDiffEnabled()) {
-      if (auto *access = getActivityInfo().getAsyncLets().getRead(li)) {
-        auto *bb = li->getParent();
-        auto loc = li->getLoc();
-        auto index = getPullbackInfo().lookUpAsyncLetPullbackIndex(li);
-        auto checkpoints = pullbackTupleElements.lookup(bb);
-        assert(index < checkpoints.size());
-        SILValue pb = checkpoints[index];
-        auto directType = getAsyncLetDirectPullbackType(*access);
-        pb = reabstractAsyncLetPullback(getContext(), builder, loc, pb,
-                                        directType);
-        auto seed = materializeAdjointDirect(getAdjointValue(bb, li), loc);
-        auto *call = builder.createApply(loc, pb, SubstitutionMap(), {seed});
-        builder.emitDestroyValueOperation(loc, pb);
-        SmallVector<SILValue, 4> gradients;
-        extractAllElements(call, builder, gradients);
-        assert(gradients.size() == access->captures.size());
-        for (unsigned i = 0; i != gradients.size(); ++i) {
-          auto capture = access->captures[i];
-          if (getActivityInfo().isActive(capture, getConfig()))
-            addAdjointValue(bb, capture, makeConcreteAdjointValue(gradients[i]),
-                            loc);
-        }
-        // Do not create an adjoint for the runtime result buffer or task.
-        // Repeated reads reuse a saved linear map, not the primal computation.
-        return;
-      }
+  bool visitAsyncLetRead(SILInstruction *read) {
+    if (!isExperimentalAsyncAutoDiffEnabled())
+      return false;
+    auto *access = getActivityInfo().getAsyncLets().getRead(read);
+    if (!access)
+      return false;
+    auto *bb = read->getParent();
+    auto loc = read->getLoc();
+    auto originalResult = getAsyncLetReadValue(read);
+    auto index = getPullbackInfo().lookUpAsyncLetPullbackIndex(read);
+    auto checkpoints = pullbackTupleElements.lookup(bb);
+    assert(index < checkpoints.size());
+    auto type =
+        getAsyncLetPullbackBufferType(*access, getActivityInfo(), getConfig());
+    SILValue pb = reabstractAsyncLetPullback(getContext(), builder, loc,
+                                             checkpoints[index], type);
+
+    // Use a guaranteed seed buffer, independently of primal/tangent equality
+    // and loadability. The seed is not consumed by the child pullback.
+    SILValue seed;
+    AllocStackInst *seedTemporary = nullptr;
+    if (getTangentValueCategory(originalResult) == SILValueCategory::Address) {
+      seed = getAdjointBuffer(bb, originalResult);
+    } else {
+      auto value =
+          materializeAdjointDirect(getAdjointValue(bb, originalResult), loc);
+      seedTemporary = builder.createAllocStack(loc, value->getType());
+      builder.emitStoreValueOperation(
+          loc, builder.emitCopyValueOperation(loc, value), seedTemporary,
+          StoreOwnershipQualifier::Init);
+      seed = seedTemporary;
     }
-    visitLoadOperation(li);
+    auto resultType = type->getSingleResult().getSILStorageInterfaceType();
+    auto *gradients = builder.createAllocStack(loc, resultType.getObjectType());
+    builder.createApply(loc, pb, SubstitutionMap(), {gradients, seed});
+    builder.emitDestroyValueOperation(loc, pb);
+
+    auto *parameters =
+        getAsyncLetParameterIndices(*access, getActivityInfo(), getConfig());
+    unsigned resultIndex = 0;
+    for (auto parameter : parameters->getIndices()) {
+      SILValue tangent = gradients;
+      if (parameters->getNumIndices() != 1)
+        tangent = builder.createTupleElementAddr(loc, gradients, resultIndex);
+      ++resultIndex;
+      accumulatePullbackResult(bb, access->captures[parameter], tangent, loc);
+    }
+    // accumulatePullbackResult borrows indirect results, copying any object
+    // contribution into the usual temporary/adjoint infrastructure. All fields
+    // in this buffer remain initialized, including unused tangent subfields.
+    builder.emitDestroyAddrAndFold(loc, gradients);
+    builder.createDeallocStack(loc, gradients);
+    if (seedTemporary) {
+      builder.emitDestroyAddrAndFold(loc, seedTemporary);
+      builder.createDeallocStack(loc, seedTemporary);
+    }
+    if (isa<CopyAddrInst>(read))
+      builder.emitZeroIntoBuffer(loc, seed, IsNotInitialization);
+    return true;
   }
-  void visitLoadBorrowInst(LoadBorrowInst *lbi) { visitLoadOperation(lbi); }
+
+  void visitLoadInst(LoadInst *li) {
+    if (!visitAsyncLetRead(li))
+      visitLoadOperation(li);
+  }
+  void visitLoadBorrowInst(LoadBorrowInst *lbi) {
+    if (!visitAsyncLetRead(lbi))
+      visitLoadOperation(lbi);
+  }
 
   /// Handle `store` or `store_borrow` instruction.
   ///   Original: store/store_borrow x to y
@@ -1917,6 +1954,8 @@ public:
   ///   Original: copy_addr x to y
   ///    Adjoint: adj[x] += adj[y]; adj[y] = 0
   void visitCopyAddrInst(CopyAddrInst *cai) {
+    if (visitAsyncLetRead(cai))
+      return;
     auto *bb = cai->getParent();
     auto adjDest = getAdjointBuffer(bb, cai->getDest());
     addToAdjointBuffer(bb, cai->getSrc(), adjDest, cai->getLoc());

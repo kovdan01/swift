@@ -20,9 +20,9 @@
 #include "swift/SILOptimizer/Differentiation/ADContext.h"
 #include "swift/SILOptimizer/Differentiation/Common.h"
 #include "swift/SILOptimizer/Differentiation/LinearMapInfo.h"
+#include "swift/SILOptimizer/Differentiation/Thunk.h"
 #include "swift/SILOptimizer/Utils/SILOptFunctionBuilder.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -32,105 +32,29 @@ using namespace swift;
 using namespace swift::autodiff;
 
 namespace {
-/// The initial transfer proof is deliberately syntactic: scalar-only, local,
-/// acyclic straight-line computations and these audited scalar primitives.
-/// Merely testing primal argument/result Sendability would NOT prove tape
-/// safety.
-bool isScalarPrimitive(SILFunction *f) {
-  return llvm::StringSwitch<bool>(f->getName())
-      .Cases({"$sSf1poiyS2f_SftFZ", "$sSf1soiyS2f_SftFZ"}, true)
-      .Case("$sSf1moiyS2f_SftFZ", true)
-      .Cases({"$sSd1poiyS2d_SdtFZ", "$sSd1soiyS2d_SdtFZ"}, true)
-      .Case("$sSd1moiyS2d_SdtFZ", true)
-      .Default(false);
-}
-
 bool isNilExecutor(SILValue value) {
   auto *e = dyn_cast<EnumInst>(value);
   return e && !e->hasOperand() &&
-         e->getElement()->getName().getBaseIdentifier().str() == "none";
+         e->getElement() ==
+             e->getFunction()->getASTContext().getOptionalNoneDecl();
 }
 
-std::string validateScalarBody(ADContext &context, SILFunction *f,
-                               bool initializer,
-                               llvm::SmallPtrSetImpl<SILFunction *> &visiting,
-                               llvm::SmallPtrSetImpl<SILFunction *> &checked) {
-  if (!initializer && isScalarPrimitive(f))
-    return {};
-  if (checked.count(f))
-    return {};
-  if (!visiting.insert(f).second)
-    return "recursive child computations are not yet supported";
-  if (f->isExternalDeclaration() || f->size() != 1)
-    return "child computations must have available single-block bodies";
-  auto type = f->getLoweredFunctionType()->getUnsubstitutedType(f->getModule());
-  if (type->getSubstGenericSignature() || type->isCoroutine() ||
-      (!initializer && type->hasErrorResult()) || type->getNumResults() != 1 ||
-      !isAsyncAutoDiffScalar(
-          type->getSingleResult().getSILStorageInterfaceType().getObjectType()))
-    return "generic, throwing, coroutine, or nonscalar child signatures are "
-           "not supported";
-  for (auto param : type->getParameters())
-    if (!isAsyncAutoDiffScalar(param.getSILStorageInterfaceType()) ||
-        param.isFormalIndirect())
-      return "child parameters must be by-value Float or Double";
-
-  // Reject existing user derivative registrations. The residual argument relies
-  // on the body being differentiated by this pass, not on an arbitrary custom
-  // PB.
-  for (auto &witness : f->getModule().getDifferentiabilityWitnesses()) {
-    if (witness.getOriginalFunction() != f)
-      continue;
-    if (isa_and_nonnull<DerivativeAttr>(witness.getAttribute()) ||
-        (witness.getVJP() && !context.isGeneratedFunction(witness.getVJP())))
-      return "custom or pre-existing opaque derivatives of child computations "
-             "are outside the initial scope";
-  }
-
-  unsigned storesToResult = 0;
-  for (auto &inst : f->front()) {
-    if (isa<DebugValueInst, FunctionRefInst, ReturnInst, MetatypeInst>(&inst))
-      continue;
-    if (auto *hop = dyn_cast<HopToExecutorInst>(&inst)) {
-      if (!isNilExecutor(hop->getTargetExecutor()))
-        return "actor-bound child computations require a separate "
-               "residual-isolation design";
-      continue;
+// Validate only the effect change performed by helper construction. Numerical
+// operations, control flow and derivative availability are ordinary AD's job.
+// Transferability of the actual saved residuals is checked after synthesis.
+std::string validateNumericalHelper(SILFunction &function) {
+  if (function.getActorIsolation().isActorIsolated())
+    return "an actor-isolated child needs an executor-aware pullback contract";
+  for (auto &block : function)
+    for (auto &inst : block) {
+      if (isa<ThrowInst>(&inst))
+        return "a throwing initializer needs error-path augmented-result "
+               "cleanup";
+      if (auto *hop = dyn_cast<HopToExecutorInst>(&inst))
+        if (!isNilExecutor(hop->getTargetExecutor()))
+          return "an actor-bound child needs an executor-aware pullback "
+                 "contract";
     }
-    if (auto *e = dyn_cast<EnumInst>(&inst)) {
-      if (!isNilExecutor(e))
-        return "only the nil executor enum is supported in a child computation";
-      continue;
-    }
-    if (auto *tuple = dyn_cast<TupleInst>(&inst)) {
-      if (tuple->getElements().empty())
-        continue;
-    }
-    if (auto *store = dyn_cast<StoreInst>(&inst)) {
-      if (type->getNumIndirectFormalResults() != 1 ||
-          store->getDest() != f->getArguments().front() ||
-          !isAsyncAutoDiffScalar(store->getSrc()->getType()) ||
-          ++storesToResult != 1)
-        return "only initialization of the scalar indirect result is supported";
-      continue;
-    }
-    if (auto *apply = dyn_cast<ApplyInst>(&inst)) {
-      auto *ref = dyn_cast<FunctionRefInst>(apply->getCallee());
-      if (!ref || !apply->getSubstitutionMap().empty() ||
-          apply->getSubstCalleeType()->hasErrorResult())
-        return "child calls must resolve directly to nonthrowing functions";
-      auto reason = validateScalarBody(context, ref->getReferencedFunction(),
-                                       false, visiting, checked);
-      if (!reason.empty())
-        return reason;
-      continue;
-    }
-    return "unsupported instruction in the scalar-only child residual domain";
-  }
-  if (type->getNumIndirectFormalResults() && storesToResult != 1)
-    return "the child must initialize its indirect result exactly once";
-  visiting.erase(f);
-  checked.insert(f);
   return {};
 }
 
@@ -175,89 +99,6 @@ static void removeErrorResultDebugValues(SILFunction &body) {
   }
 }
 
-// These helpers deliberately operate only on the already-validated scalar
-// async-let domain. They are NOT general Swift function reabstraction.
-static bool appendScalarLeafTypes(SILType type,
-                                  SmallVectorImpl<SILType> &leaves) {
-  type = type.getObjectType();
-  if (auto tuple = type.getAs<TupleType>()) {
-    for (unsigned i = 0; i != tuple->getNumElements(); ++i)
-      if (!appendScalarLeafTypes(type.getTupleElementType(i), leaves))
-        return false;
-    return true;
-  }
-  if (!isAsyncAutoDiffScalar(type))
-    return false;
-  leaves.push_back(type);
-  return true;
-}
-
-static bool isScalarPullback(CanSILFunctionType type,
-                             SmallVectorImpl<SILType> &resultLeaves) {
-  if (type->isAsync() || type->hasErrorResult() || type->isCoroutine() ||
-      type->getSubstGenericSignature() || type->getCombinedSubstitutions() ||
-      type->getRepresentation() != SILFunctionTypeRepresentation::Thick ||
-      type->getExtInfo().isNoEscape() || type->getNumParameters() != 1 ||
-      type->getCalleeConvention() != ParameterConvention::Direct_Guaranteed)
-    return false;
-  auto seed = type->getParameters().front();
-  if (!isAsyncAutoDiffScalar(
-          seed.getSILStorageInterfaceType().getObjectType()) ||
-      (seed.getConvention() != ParameterConvention::Direct_Unowned &&
-       seed.getConvention() != ParameterConvention::Indirect_In_Guaranteed))
-    return false;
-  for (auto result : type->getResults()) {
-    if (result.getConvention() != ResultConvention::Indirect &&
-        result.getConvention() != ResultConvention::Unowned &&
-        result.getConvention() != ResultConvention::Owned)
-      return false;
-    if (!appendScalarLeafTypes(result.getSILStorageInterfaceType(),
-                               resultLeaves))
-      return false;
-  }
-  return true;
-}
-
-// Flatten the value of ONE formal result. A formal result may itself be a
-// tuple, independently of the tuple used to represent multiple direct results.
-static void appendScalarResultValues(SILBuilder &builder, SILLocation loc,
-                                     SILValue value,
-                                     SmallVectorImpl<SILValue> &leaves) {
-  if (auto tuple = value->getType().getAs<TupleType>()) {
-    for (unsigned i = 0; i != tuple->getNumElements(); ++i) {
-      SILValue element;
-      if (value->getType().isAddress())
-        element = builder.createTupleElementAddr(loc, value, i);
-      else
-        element = builder.createTupleExtract(loc, value, i);
-      appendScalarResultValues(builder, loc, element, leaves);
-    }
-    return;
-  }
-  assert(isAsyncAutoDiffScalar(value->getType().getObjectType()));
-  if (value->getType().isAddress())
-    value = builder.createLoad(loc, value, LoadOwnershipQualifier::Trivial);
-  leaves.push_back(value);
-}
-
-// Rebuild the value of ONE destination formal result from ordered scalar
-// leaves. In particular, (Float, Float) can become one indirect tuple result.
-static SILValue buildScalarResult(SILBuilder &builder, SILLocation loc,
-                                  SILType type, ArrayRef<SILValue> &leaves) {
-  type = type.getObjectType();
-  if (auto tuple = type.getAs<TupleType>()) {
-    SmallVector<SILValue, 4> elements;
-    for (unsigned i = 0; i != tuple->getNumElements(); ++i)
-      elements.push_back(
-          buildScalarResult(builder, loc, type.getTupleElementType(i), leaves));
-    return builder.createTuple(loc, type, elements);
-  }
-  assert(!leaves.empty() && leaves.front()->getType() == type);
-  auto value = leaves.front();
-  leaves = leaves.drop_front();
-  return value;
-}
-
 SILType lowerCheckpointType(SILFunction &f, Type type) {
   auto signature = f.getLoweredFunctionType()->getSubstGenericSignature();
   Lowering::AbstractionPattern pattern(signature,
@@ -269,218 +110,101 @@ SILType lowerCheckpointType(SILFunction &f, Type type) {
 SILValue swift::autodiff::reabstractAsyncLetPullback(
     ADContext &context, SILBuilder &builder, SILLocation loc, SILValue function,
     CanSILFunctionType target) {
-  auto original = function->getType().castTo<SILFunctionType>();
-  if (original == target)
+  if (function->getType().castTo<SILFunctionType>() == target)
     return function;
 
-  auto &module = context.getModule();
-  auto fromType = original->getUnsubstitutedType(module);
-  auto toType = target->getUnsubstitutedType(module);
-  LLVM_DEBUG(llvm::dbgs() << "[async-let-differentiation] pullback transport\n"
-                          << "  from: " << fromType << '\n'
-                          << "  to:   " << toType << '\n'
-                          << "  formal results: " << fromType->getNumResults()
-                          << " -> " << toType->getNumResults() << '\n');
-
-  if (original != fromType)
-    function = builder.createConvertFunction(
-        loc, function, SILType::getPrimitiveObjectType(fromType), false);
-  if (fromType == toType) {
-    if (toType != target)
-      function = builder.createConvertFunction(
-          loc, function, SILType::getPrimitiveObjectType(target), false);
-    return function;
-  }
-
-  // The generic AD reabstraction helper zips formal results one-to-one. That
-  // cannot convert two formal Float results to ONE @out (Float, Float) result.
-  // Compare the flattened numerical leaves instead, then pack/unpack them.
-  SmallVector<SILType, 4> fromLeaves, toLeaves;
-  if (!isScalarPullback(fromType, fromLeaves) ||
-      !isScalarPullback(toType, toLeaves) || fromLeaves != toLeaves ||
-      fromType->getParameters()
-              .front()
-              .getSILStorageInterfaceType()
-              .getObjectType() != toType->getParameters()
-                                      .front()
-                                      .getSILStorageInterfaceType()
-                                      .getObjectType())
-    llvm::report_fatal_error(
-        "unsupported async-let scalar pullback reabstraction");
-
-  auto &caller = builder.getFunction();
-  assert(caller.hasLoweredAddresses() &&
-         "async-let pullback transport is emitted after address lowering");
-  auto &ctx = context.getASTContext();
-  SmallVector<SILParameterInfo, 2> parameters;
-  parameters.append(toType->getParameters().begin(),
-                    toType->getParameters().end());
-  // Each invocation borrows the captured PB. partial_apply owns the capture,
-  // so invoking the adapted PB does not consume its saved derivative state.
-  parameters.emplace_back(fromType, ParameterConvention::Direct_Guaranteed);
-  auto thunkType = SILFunctionType::get(
-      nullptr,
-      toType->getExtInfo().withRepresentation(
-          SILFunctionTypeRepresentation::Thin),
-      SILCoroutineKind::None, ParameterConvention::Direct_Unowned, parameters,
-      {}, toType->getResults(), std::nullopt, {}, {}, ctx);
-
-  // Private, deterministic per-caller names avoid colliding with a generic
-  // reabstraction thunk created elsewhere for the same two types.
-  auto stem =
-      (Twine("__swift_async_ad_pb_reabstraction_") + caller.getName() + "_")
-          .str();
-  unsigned ordinal = 0;
-  auto name = (Twine(stem) + Twine(ordinal)).str();
-  while (module.lookUpFunction(name))
-    name = (Twine(stem) + Twine(++ordinal)).str();
   SILOptFunctionBuilder functions(context.getTransform());
-  auto *thunk = functions.createFunction(
-      SILLinkage::Private, ctx.getIdentifier(name).str(), thunkType,
-      ActorIsolation::forUnspecified(), /*genericEnv*/ nullptr,
-      caller.getLocation(), IsBare, IsNotTransparent, IsNotSerialized,
-      IsNotDynamic, IsNotDistributed, IsNotRuntimeAccessible);
-  thunk->setDebugScope(new (module) SILDebugScope(caller.getLocation(), thunk));
-  thunk->setHasLoweredAddresses(caller.hasLoweredAddresses());
-  thunk->setThunk(IsReabstractionThunk);
-  context.recordGeneratedFunction(thunk);
-  thunk->createBasicBlock();
-  createEntryArguments(thunk);
-  SILBuilder body(thunk->getEntryBlock(), thunk->getDebugScope());
-
-  SmallVector<AllocStackInst *, 4> temporaries;
-  SmallVector<SILValue, 4> indirectResults;
-  SmallVector<SILValue, 8> arguments;
-  for (auto result : fromType->getResults()) {
-    if (!result.isFormalIndirect())
-      continue;
-    auto *buffer = body.createAllocStack(
-        loc, result.getSILStorageInterfaceType().getObjectType());
-    temporaries.push_back(buffer);
-    indirectResults.push_back(buffer);
-    arguments.push_back(buffer);
-  }
-
-  auto inputs = thunk->getArgumentsWithoutIndirectResults();
-  SILValue seed = inputs.front();
-  auto seedType =
-      fromType->getParameters().front().getSILStorageInterfaceType();
-  if (seedType.isAddress() && seed->getType().isObject()) {
-    auto *buffer = body.createAllocStack(loc, seedType.getObjectType());
-    temporaries.push_back(buffer);
-    body.createStore(loc, seed, buffer, StoreOwnershipQualifier::Trivial);
-    seed = buffer;
-  } else if (seedType.isObject() && seed->getType().isAddress()) {
-    seed = body.createLoad(loc, seed, LoadOwnershipQualifier::Trivial);
-  }
-  arguments.push_back(seed);
-  auto *call =
-      body.createApply(loc, inputs.back(), SubstitutionMap(), arguments);
-
-  // Keep formal-result ordering even if direct and indirect results are mixed.
-  SmallVector<SILValue, 4> values;
-  unsigned directIndex = 0, indirectIndex = 0;
-  for (auto result : fromType->getResults()) {
-    SILValue value;
-    if (result.isFormalIndirect()) {
-      value = indirectResults[indirectIndex++];
-    } else if (fromType->getNumDirectFormalResults() == 1) {
-      value = call;
-      ++directIndex;
-    } else {
-      value = body.createTupleExtract(loc, call, directIndex++);
-    }
-    appendScalarResultValues(body, loc, value, values);
-  }
-  assert(values.size() == toLeaves.size());
-
-  ArrayRef<SILValue> remaining(values);
-  SmallVector<SILValue, 4> directResults;
-  auto indirect = thunk->getIndirectResults().begin();
-  for (auto result : toType->getResults()) {
-    auto value = buildScalarResult(
-        body, loc, result.getSILStorageInterfaceType(), remaining);
-    if (result.isFormalIndirect()) {
-      assert(indirect != thunk->getIndirectResults().end());
-      body.createStore(loc, value, *indirect++,
-                       StoreOwnershipQualifier::Trivial);
-    } else {
-      directResults.push_back(value);
-    }
-  }
-  assert(remaining.empty() && indirect == thunk->getIndirectResults().end());
-  // Every temporary contains only scalar/tuple data. No residual buffer escapes
-  // an invocation, and there is no owned payload to destroy inside these slots.
-  for (auto *temporary : llvm::reverse(temporaries))
-    body.createDeallocStack(loc, temporary);
-  body.createReturn(loc, joinElements(directResults, body, loc));
-  LLVM_DEBUG(llvm::dbgs() << *thunk);
-
-  auto *ref = builder.createFunctionRef(loc, thunk);
-  context.recordGeneratedFunctionReference(ref);
-  function = builder.createPartialApply(loc, ref, SubstitutionMap(), {function},
-                                        toType->getCalleeConvention());
-  if (toType != target)
-    function = builder.createConvertFunction(
-        loc, function, SILType::getPrimitiveObjectType(target), false);
-  return function;
+  return reabstractFunction(
+      builder, functions, loc, function, target,
+      [](SubstitutionMap substitutions) { return substitutions; });
 }
 
-FunctionType *
-swift::autodiff::getAsyncLetPullbackASTType(const AsyncLetAccess &a) {
+IndexSubset *swift::autodiff::getAsyncLetParameterIndices(
+    const AsyncLetAccess &a, const DifferentiableActivityInfo &activity,
+    const AutoDiffConfig &config) {
+  SmallVector<unsigned, 4> indices;
+  for (auto indexed : llvm::enumerate(a.captures)) {
+    auto capture = indexed.value();
+    if (activity.isActive(capture, config) &&
+        capture->getType().getASTType()->getAutoDiffTangentSpace(
+            LookUpConformanceInModule()))
+      indices.push_back(indexed.index());
+  }
+  return IndexSubset::get(a.start->getFunction()->getASTContext(),
+                          a.captures.size(), indices);
+}
+
+FunctionType *swift::autodiff::getAsyncLetPullbackASTType(
+    const AsyncLetAccess &a, const DifferentiableActivityInfo &activity,
+    const AutoDiffConfig &config) {
   auto &ctx = a.start->getFunction()->getASTContext();
-  SmallVector<TupleTypeElt, 4> results;
-  for (auto capture : a.captures)
-    results.emplace_back(capture->getType().getASTType());
-  Type result;
-  if (results.size() == 1)
-    result = results.front().getType();
-  else
-    result = TupleType::get(results, ctx);
-  AnyFunctionType::Param seed(a.getValueType().getASTType(), Identifier(),
+  auto resultSpace = a.getValueType().getASTType()->getAutoDiffTangentSpace(
+      LookUpConformanceInModule());
+  auto *indices = getAsyncLetParameterIndices(a, activity, config);
+  if (!resultSpace || indices->getNumIndices() == 0)
+    return nullptr;
+  SmallVector<TupleTypeElt, 4> gradientTypes;
+  for (auto index : indices->getIndices()) {
+    auto space =
+        a.captures[index]->getType().getASTType()->getAutoDiffTangentSpace(
+            LookUpConformanceInModule());
+    assert(space);
+    gradientTypes.emplace_back(space->getType());
+  }
+  Type result = gradientTypes.size() == 1 ? gradientTypes.front().getType()
+                                          : TupleType::get(gradientTypes, ctx);
+  AnyFunctionType::Param seed(resultSpace->getType(), Identifier(),
                               ParameterTypeFlags());
   return FunctionType::get({seed}, /*yields*/ {}, result,
                            FunctionType::ExtInfo());
 }
 
-CanSILFunctionType
-swift::autodiff::getAsyncLetDirectPullbackType(const AsyncLetAccess &a) {
-  SILParameterInfo seed(a.getValueType().getASTType(),
-                        ParameterConvention::Direct_Unowned);
-  SmallVector<SILResultInfo, 4> results;
-  for (auto capture : a.captures)
-    results.emplace_back(capture->getType().getASTType(),
-                         ResultConvention::Unowned);
-  return SILFunctionType::get(nullptr,
-                              SILFunctionType::ExtInfo().withRepresentation(
-                                  SILFunctionTypeRepresentation::Thick),
-                              SILCoroutineKind::None,
-                              ParameterConvention::Direct_Guaranteed, {seed},
-                              {}, results, std::nullopt, {}, {},
-                              a.start->getFunction()->getASTContext());
+CanSILFunctionType swift::autodiff::getAsyncLetPullbackBufferType(
+    const AsyncLetAccess &a, const DifferentiableActivityInfo &activity,
+    const AutoDiffConfig &config) {
+  auto *astType = getAsyncLetPullbackASTType(a, activity, config);
+  assert(astType && "invalid async-let derivative signature");
+  auto &function = *a.start->getFunction();
+  auto seedType =
+      function.getLoweredType(astType->getParams().front().getPlainType());
+  auto resultType = function.getLoweredType(astType->getResult());
+  SILParameterInfo seed(seedType.getASTType(),
+                        ParameterConvention::Indirect_In_Guaranteed);
+  SILResultInfo result(resultType.getASTType(), ResultConvention::Indirect);
+  return SILFunctionType::get(
+      nullptr,
+      SILFunctionType::ExtInfo().withRepresentation(
+          SILFunctionTypeRepresentation::Thick),
+      SILCoroutineKind::None, ParameterConvention::Direct_Guaranteed, {seed},
+      {}, {result}, std::nullopt, {}, {}, function.getASTContext());
 }
 
 bool swift::autodiff::diagnoseUnsupportedAsyncLets(
     ADContext &context, const DifferentiableActivityInfo &activity,
-    DifferentiationInvoker invoker) {
-  auto &accesses = activity.getAsyncLets();
-  for (auto &a : accesses.getAccesses()) {
+    const AutoDiffConfig &config, DifferentiationInvoker invoker) {
+  for (auto &a : activity.getAsyncLets().getAccesses()) {
     std::string reason;
-    if (!isExperimentalAsyncAutoDiffEnabled())
+    if (!isExperimentalAsyncAutoDiffEnabled()) {
       reason = "enable -Xllvm -enable-experimental-async-autodiff to use the "
                "experimental implementation";
-    else if (!a->isSupported())
+    } else if (!a->isSupported()) {
       reason = a->unsupportedReason;
-    else {
-      for (auto &inst : a->start->getFunction()->front())
-        if (auto *hop = dyn_cast<HopToExecutorInst>(&inst))
-          if (!isNilExecutor(hop->getTargetExecutor()))
-            reason = "actor-bound parents are not supported by the initial "
-                     "async-let implementation";
+    } else if (llvm::any_of(a->reads, [&](SILInstruction *read) {
+                 return activity.isActive(getAsyncLetReadValue(read), config);
+               })) {
+      if (!getAsyncLetPullbackASTType(*a, activity, config))
+        reason = "the active result and selected captures need tangent spaces";
+      else
+        reason = validateNumericalHelper(*a->initializer);
       if (reason.empty()) {
-        llvm::SmallPtrSet<SILFunction *, 16> visiting, checked;
-        reason = validateScalarBody(context, a->initializer, true, visiting,
-                                    checked);
+        auto &parent = *a->start->getFunction();
+        if (parent.getActorIsolation().isActorIsolated())
+          reason = "actor-isolated async-let parents are not yet supported";
+        for (auto &block : parent)
+          for (auto &inst : block)
+            if (auto *hop = dyn_cast<HopToExecutorInst>(&inst))
+              if (!isNilExecutor(hop->getTargetExecutor()))
+                reason = "actor-bound async-let parents are not yet supported";
       }
     }
     if (!reason.empty()) {
@@ -501,8 +225,8 @@ AsyncLetVJPEmitter::AsyncLetVJPEmitter(
       linearMaps(linearMaps) {
   for (auto &a : activity.getAsyncLets().getAccesses()) {
     assert(a->isSupported());
-    if (!llvm::any_of(a->reads, [&](LoadInst *read) {
-          return activity.isActive(read, config);
+    if (!llvm::any_of(a->reads, [&](SILInstruction *read) {
+          return activity.isActive(getAsyncLetReadValue(read), config);
         }))
       continue;
     LLVM_DEBUG(llvm::dbgs() << "[async-let-differentiation] augmenting child @"
@@ -512,7 +236,7 @@ AsyncLetVJPEmitter::AsyncLetVJPEmitter(
     state.access = a.get();
     llvm::SmallVector<TupleTypeElt, 2> fields = {
         a->getValueType().getASTType(),
-        TupleTypeElt(getAsyncLetPullbackASTType(*a))};
+        TupleTypeElt(getAsyncLetPullbackASTType(*a, activity, config))};
     state.payloadAST = TupleType::get(fields, context.getASTContext());
     // A generic task result is stored at opaque abstraction. In particular its
     // closure field can have an indirect seed AND indirect gradient results.
@@ -581,10 +305,7 @@ SILFunction *AsyncLetVJPEmitter::createTaskEntry(const AsyncLetAccess &a,
       break;
     }
 
-  SmallVector<unsigned, 4> indices;
-  for (unsigned i = 0; i != a.captures.size(); ++i)
-    indices.push_back(i);
-  auto *parameters = IndexSubset::get(ctx, a.captures.size(), indices);
+  auto *parameters = getAsyncLetParameterIndices(a, activity, config);
   auto *results = IndexSubset::get(ctx, 1, {0});
   auto *ref = builder.createFunctionRef(loc, body);
   context.recordGeneratedFunctionReference(ref);
@@ -632,8 +353,6 @@ bool AsyncLetVJPEmitter::clone(
     auto loc = inst->getLoc();
     if (inst == a.buffer) {
       state.entry = createTaskEntry(a, state.payloadType, ordinal);
-      // Use an artificial location: the larger allocation is not a source
-      // VarDecl.
       state.buffer = builder.createAllocStack(
           RegularLocation::getAutoGeneratedLocation(), state.payloadType);
       state.valueAddress = builder.createTupleElementAddr(loc, state.buffer, 0);
@@ -644,7 +363,8 @@ bool AsyncLetVJPEmitter::clone(
     }
     if (inst == a.pointer) {
       auto *pointer = builder.createAddressToPointer(
-          loc, state.buffer, a.pointer->getType(), false);
+          loc, state.buffer, a.pointer->getType(),
+          a.pointer->needsStackProtection());
       map(a.pointer, pointer);
       return true;
     }
@@ -652,72 +372,97 @@ bool AsyncLetVJPEmitter::clone(
       map(cast<PointerToAddressInst>(inst), state.valueAddress);
       return true;
     }
-    if (inst == a.start) {
+    if (inst == a.closure) {
+      // Replace the original partial_apply at the original capture point.
+      // In particular, never consume an owned array/struct capture in BOTH
+      // the old initializer closure and a newly constructed task closure.
       auto *ref = builder.createFunctionRef(loc, state.entry);
       context.recordGeneratedFunctionReference(ref);
       SmallVector<SILValue, 4> captures;
       for (auto capture : a.captures)
         captures.push_back(remap(capture));
       auto *closure = builder.createPartialApply(
-          loc, ref, {}, captures, ParameterConvention::Direct_Guaranteed);
-      auto escapingType = closure->getType().castTo<SILFunctionType>();
-      escapingType = escapingType->getWithExtInfo(
-          escapingType->getExtInfo().withSendable(false));
-      state.escapingClosure = builder.createConvertFunction(
-          loc, closure, SILType::getPrimitiveObjectType(escapingType), false);
-      auto noescapeType = escapingType->getWithExtInfo(
-          escapingType->getExtInfo().withNoEscape(true));
-      state.noescapeClosure = builder.createConvertEscapeToNoEscape(
-          loc, state.escapingClosure,
-          SILType::getPrimitiveObjectType(noescapeType), false);
+          loc, ref, {}, captures, a.closure->getCalleeConvention(),
+          a.closure->getResultIsolation(), a.closure->isCalledOnce(),
+          a.closure->isOnStack(), a.closure->isStackAllocationNested());
+      map(a.closure, closure);
+      return true;
+    }
+    if (!a.closure && inst == a.initializerRef) {
+      auto *ref = builder.createFunctionRef(loc, state.entry);
+      context.recordGeneratedFunctionReference(ref);
+      map(a.initializerRef, ref);
+      return true;
+    }
+    if (llvm::is_contained(a.closureConversions, inst)) {
+      auto *conversion = cast<SingleValueInstruction>(inst);
+      SILValue operand = remap(conversion->getOperand(0));
+      auto target =
+          operand->getType().castTo<SILFunctionType>()->getWithExtInfo(
+              conversion->getType().castTo<SILFunctionType>()->getExtInfo());
+      auto targetType = SILType::getPrimitiveObjectType(target);
+      SILValue converted;
+      if (auto *i = dyn_cast<ConvertFunctionInst>(inst))
+        converted = builder.createConvertFunction(loc, operand, targetType,
+                                                  i->withoutActuallyEscaping());
+      else if (auto *i = dyn_cast<ConvertEscapeToNoEscapeInst>(inst))
+        converted = builder.createConvertEscapeToNoEscape(
+            loc, operand, targetType, i->isLifetimeGuaranteed());
+      else if (isa<ThinToThickFunctionInst>(inst))
+        converted = builder.createThinToThickFunction(loc, operand, targetType);
+      else if (isa<CopyValueInst>(inst))
+        converted = builder.emitCopyValueOperation(loc, operand);
+      else if (isa<BeginBorrowInst>(inst))
+        converted = builder.emitBeginBorrowOperation(loc, operand);
+      else
+        llvm_unreachable("unhandled validated closure conversion");
+      map(conversion, converted);
+      return true;
+    }
+    if (inst == a.start) {
       auto substitutions = SubstitutionMap::get(
           a.start->getSubstitutions().getGenericSignature(),
           ArrayRef<Type>{state.payloadAST}, ArrayRef<ProtocolConformanceRef>{});
       auto args = a.start->getArguments();
       auto *start = builder.createBuiltin(
           loc, a.start->getName(), a.start->getType(), substitutions,
-          {remap(args[0]), state.noescapeClosure, remap(a.pointer)});
+          {remap(args[0]), remap(args[1]), remap(a.pointer)});
       map(a.start, start);
       return true;
     }
-    if (auto *load = dyn_cast<LoadInst>(inst)) {
-      if (!llvm::is_contained(a.reads, load))
-        continue;
-      auto *value = builder.createLoad(loc, state.valueAddress,
-                                       LoadOwnershipQualifier::Trivial);
-      map(load, value);
-      if (activity.isActive(load, config)) {
-        LLVM_DEBUG(llvm::dbgs() << "[async-let-differentiation] checkpoint for "
-                                   "result read:\n"
-                                << *load);
+    if (llvm::is_contained(a.reads, inst)) {
+      if (auto *load = dyn_cast<LoadInst>(inst)) {
+        auto *value = builder.createLoad(loc, state.valueAddress,
+                                         load->getOwnershipQualifier());
+        map(load, value);
+      } else if (auto *borrow = dyn_cast<LoadBorrowInst>(inst)) {
+        map(borrow, builder.emitLoadBorrowOperation(loc, state.valueAddress));
+      } else {
+        auto *copy = cast<CopyAddrInst>(inst);
+        builder.createCopyAddr(loc, state.valueAddress, remap(copy->getDest()),
+                               IsNotTake, IsInitialization);
+      }
+      if (activity.isActive(getAsyncLetReadValue(inst), config)) {
+        // The existing per-block checkpoint collection owns this copy. Its
+        // standard branching trace/loop context determines the dynamic read
+        // instance. Do not keep a single mutable PB slot for all iterations.
         SILValue pb = builder.emitLoadValueOperation(
             loc, state.pullbackAddress, LoadOwnershipQualifier::Copy);
         auto target = lowerCheckpointType(
-                          vjp, linearMaps.lookUpAsyncLetPullbackType(load))
+                          vjp, linearMaps.lookUpAsyncLetPullbackType(inst))
                           .castTo<SILFunctionType>();
-        pb = reabstractAsyncLetPullback(context, builder, loc, pb, target);
-        savePullback(pb);
+        savePullback(
+            reabstractAsyncLetPullback(context, builder, loc, pb, target));
       }
       return true;
     }
-    if (inst == a.end) {
-      SmallVector<SILValue, 2> args;
-      for (auto arg : a.end->getArguments())
-        args.push_back(remap(arg));
-      auto *end = builder.createBuiltin(loc, a.end->getName(), a.end->getType(),
-                                        a.end->getSubstitutions(), args);
-      map(a.end, end);
-      // finish has already joined and destroyed the task-owned payload. Each
-      // checkpoint owns a copy; no parent PB retains this allocation/task
-      // handle.
-      builder.emitDestroyValueOperation(loc, state.noescapeClosure);
-      builder.emitDestroyValueOperation(loc, state.escapingClosure);
-      return true;
-    }
-    if (inst == a.deallocation) {
+    if (llvm::is_contained(a.deallocations, inst)) {
       builder.createDeallocStack(loc, state.buffer);
       return true;
     }
+    // The original finish, end, destroy and borrow-end instructions are cloned
+    // normally, using the remapped task pointer/closure values. No duplicate
+    // closure cleanup is inserted: ownership is the original ownership graph.
   }
   return false;
 }

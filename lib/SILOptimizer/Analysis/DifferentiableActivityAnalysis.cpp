@@ -123,14 +123,15 @@ void DifferentiableActivityInfo::setVariedAndPropagateToUsers(
   // Set the value as varied.
   variedValueSets[independentVariableIndex].insert(value);
   if (isExperimentalAsyncAutoDiffEnabled()) {
-    // A captured argument affects the eventual scalar result, even though the
+    // A captured argument affects the eventual typed result, even though the
     // ordinary SSA use chain ends at a closure passed to a runtime builtin.
     for (const auto &access : asyncLets.getAccesses()) {
       if (!access->isSupported() ||
           !llvm::is_contained(access->captures, value))
         continue;
       for (auto *read : access->reads)
-        setVariedAndPropagateToUsers(read, independentVariableIndex);
+        setVariedAndPropagateToUsers(getAsyncLetReadValue(read),
+                                     independentVariableIndex);
     }
   }
   // Propagate variedness to users.
@@ -362,8 +363,17 @@ void DifferentiableActivityInfo::setUsefulAndPropagateToOperands(
 
 void DifferentiableActivityInfo::propagateUseful(
     SILInstruction *inst, unsigned dependentVariableIndex) {
-  if (isExperimentalAsyncAutoDiffEnabled() && asyncLets.isTransport(inst))
-    return;
+  if (isExperimentalAsyncAutoDiffEnabled()) {
+    // Includes copy_addr: propagate usefulness from the typed destination
+    // through the logical read, rather than through the runtime raw pointer.
+    if (auto *access = asyncLets.getRead(inst)) {
+      for (auto capture : access->captures)
+        setUsefulAndPropagateToOperands(capture, dependentVariableIndex);
+      return;
+    }
+    if (asyncLets.isTransport(inst))
+      return;
+  }
   // Propagate usefulness for the given instruction: mark operands as useful and
   // recursively propagate usefulness to defining instructions of operands.
   auto i = dependentVariableIndex;
