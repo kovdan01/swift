@@ -40,8 +40,96 @@ extension BeginBorrowInst : OnoneSimplifiable, SILCombineSimplifiable {
   }
 }
 
+/// Remove a borrow used only by a same-block chain of `convert_function`s
+/// ending in an ordinary `convert_escape_to_noescape`.
+///
+/// For example:
+/// ```
+///   %borrow = begin_borrow %owner
+///   %converted = convert_function %borrow ...
+///   %noescape = convert_escape_to_noescape %converted ...
+///   // ... uses and cleanup of %noescape ...
+///   end_borrow %borrow
+///   destroy_value %owner
+/// ```
+/// becomes:
+/// ```
+///   %converted = convert_function %owner ... // forwards owned ownership
+///   %noescape = convert_escape_to_noescape %converted ...
+///   // ... unchanged uses and cleanup of %noescape ...
+///   destroy_value %converted
+/// ```
+/// This might enable further closure specialization which is incapable of
+/// looking through `begin_borrow`.
+private func tryReplaceBorrowOfNoEscapeConversion(
+  beginBorrow: BeginBorrowInst,
+  _ context: SimplifyContext
+) -> Bool {
+  guard !context.preserveDebugInfo,
+        !beginBorrow.isLexical,
+        !beginBorrow.hasPointerEscape,
+        !beginBorrow.isFromVarDecl,
+        let owner = beginBorrow.borrowedValue as? SingleValueInstruction,
+        owner.ownership == .owned,
+        !owner.isLexical,
+        owner.parentBlock == beginBorrow.parentBlock,
+        owner.type.isThickFunction,
+        !owner.type.isNoEscapeFunction,
+        !owner.type.isMoveOnly,
+        owner.uses.ignoreDebugUses.singleUser(notOfType: DestroyValueInst.self) == beginBorrow,
+        beginBorrow.scopeEndingOperands.allSatisfy({ $0.instruction is EndBorrowInst }) else {
+    return false
+  }
+  if let move = owner as? MoveValueInst, move.hasPointerEscape || move.isFromVarDecl {
+    return false
+  }
+
+  var value: SingleValueInstruction = beginBorrow
+  while let use = value.uses.ignoreDebugUses.ignore(usersOfType: EndBorrowInst.self).singleUse {
+    switch use.instruction {
+    case let conversion as ConvertFunctionInst:
+      guard conversion.operand == use,
+            conversion.parentBlock == beginBorrow.parentBlock,
+            conversion.ownership == .guaranteed,
+            conversion.uses.filter(usersOfType: EndBorrowInst.self).isEmpty,
+            !conversion.withoutActuallyEscaping,
+            !conversion.type.isNoEscapeFunction,
+            !conversion.type.isMoveOnly else {
+        return false
+      }
+      value = conversion
+
+    case let noescape as ConvertEscapeToNoEscapeInst:
+      guard noescape.operand == use,
+            noescape.parentBlock == beginBorrow.parentBlock,
+            // In particular, do not handle @called(atMostOnce) conversions,
+            // which have a consuming operand rather than a pointer escape.
+            use.ownership == .pointerEscape,
+            !noescape.type.isMoveOnly,
+            value.allUsesCanBeConvertedToOwned else {
+        return false
+      }
+      // The owner and all conversions are in one block. Valid input SIL
+      // therefore guarantees that the final owned conversion dominates each
+      // destroy being redirected, including destroys in successor blocks.
+      // This also handles an empty convert_function chain, leaving the
+      // destroys on the original owner in that case.
+      convertAllUsesToOwned(of: beginBorrow, context)
+      return true
+
+    default:
+      return false
+    }
+  }
+  return false
+}
+
 // See comments of `tryReplaceCopy` and `convertAllUsesToOwned`
 private func tryReplaceBorrowWithOwnedOperand(beginBorrow: BeginBorrowInst, _ context: SimplifyContext) -> Bool {
+  if tryReplaceBorrowOfNoEscapeConversion(beginBorrow: beginBorrow, context) {
+    return true
+  }
+
   if findPointerEscapingUse(of: beginBorrow.borrowedValue) {
     return false
   }
