@@ -1795,7 +1795,7 @@ void Differentiation::run() {
       auto childType = child->getLoweredFunctionType()
                            ->getUnsubstitutedType(module);
       auto captures = a.initializer->getArguments();
-      assert(child->size() == 1 && !child->isSerialized());
+      assert(!child->empty() && !child->isSerialized());
       assert(!child->getActorIsolation().isActorIsolated());
       assert(!childType->getSubstGenericSignature() && childType->isAsync() &&
              !childType->isCoroutine() && childType->hasErrorResult());
@@ -1806,86 +1806,33 @@ void Differentiation::run() {
       for (unsigned i = 0; i != captures.size(); ++i)
         assert(child->getArgument(i + 1)->getType() == captures[i]->getType());
 
-      // Keep the numerical subset small: identity, Float arithmetic, or one
-      // await of a local (Float, Float) -> Float workload returning the sum or
-      // product of its inputs. Unrelated work is handled by ordinary AD.
-      // There is no recursive task/call-graph or saved-state analysis here.
-      auto checkArithmetic = [](ApplyInst *call, SILValue lhs, SILValue rhs) {
-        auto *callee = call->getCalleeFunction();
-        assert(callee && (callee->getName() == "$sSf1moiyS2f_SftFZ" ||
-                          callee->getName() == "$sSf1poiyS2f_SftFZ"));
-        assert(call->getSubstitutionMap().empty() &&
-               call->getArguments().size() == 3 &&
-               call->getArguments()[0] == lhs &&
-               call->getArguments()[1] == rhs);
-      };
-      auto checkHop = [](HopToExecutorInst *hop) {
-        assert(isa<EnumInst>(hop->getTargetExecutor()) &&
-               !cast<EnumInst>(hop->getTargetExecutor())->hasOperand());
-      };
-      StoreInst *store = nullptr;
-      ApplyInst *computation = nullptr;
-      for (auto &inst : child->front()) {
-        if (auto *s = dyn_cast<StoreInst>(&inst)) {
-          assert(!store && s->getDest() == child->getArgument(0));
-          store = s;
-        } else if (auto *call = dyn_cast<ApplyInst>(&inst)) {
-          assert(!computation && call->getCalleeFunction());
-          computation = call;
-          auto *workload = call->getCalleeFunction();
-          if (!workload->isAsync()) {
-            checkArithmetic(call, child->getArgument(1),
-                            child->getArgument(captures.size()));
-            continue;
-          }
-          auto workloadType = workload->getLoweredFunctionType();
-          assert(captures.size() == 2 && workload->size() == 1 &&
-                 !workload->isSerialized() &&
-                 !workload->getActorIsolation().isActorIsolated());
-          assert(!workloadType->getSubstGenericSignature() &&
-                 !workloadType->hasErrorResult() &&
-                 !workloadType->isCoroutine() &&
-                 workloadType->getNumParameters() == 2 &&
-                 workloadType->getNumResults() == 1 &&
-                 workloadType->getNumIndirectFormalResults() == 0);
-          assert(call->getSubstitutionMap().empty() &&
-                 call->getArguments().size() == 2 &&
-                 call->getType() == a.getBuffer()->getType().getObjectType());
-          for (unsigned i = 0; i != 2; ++i) {
-            assert(call->getArguments()[i] == child->getArgument(i + 1));
-            assert(workload->getArgument(i)->getType() == captures[i]->getType());
-          }
-          // Restrict the returned computation, not every instruction in the
-          // workload. Ordinary AD preserves inactive work (for example,
-          // constructing a UInt64 and calling blockingSleep) in the VJP
-          // without adding a pullback for it.
-          auto *arithmetic = dyn_cast<ApplyInst>(
-              cast<ReturnInst>(workload->front().getTerminator())->getOperand());
-          assert(arithmetic && "expected a returned Float arithmetic call");
-          checkArithmetic(arithmetic, workload->getArgument(0),
-                          workload->getArgument(1));
-          for (auto &workInst : workload->front()) {
-            if (auto *hop = dyn_cast<HopToExecutorInst>(&workInst))
-              checkHop(hop);
-          }
-        } else if (auto *hop = dyn_cast<HopToExecutorInst>(&inst)) {
-          checkHop(hop);
-        } else {
-          assert((isa<DebugValueInst, FunctionRefInst, MetatypeInst, EnumInst,
-                      TupleInst, ReturnInst>(&inst)));
+      // Differentiate the original initializer with ordinary AD. Its body
+      // can contain Float(i), several calls, branches or loops; those do not
+      // need async-let-specific numerical rules. This is still a scalar
+      // prototype, not a general saved-state transfer/isolation analysis.
+      for (auto &bb : *child) {
+        for (auto &inst : bb) {
+          assert(!isa<ThrowInst>(&inst) &&
+                 "throwing async-let results are not implemented");
+          assert(!isBuiltinInst(&inst,
+                                BuiltinValueKind::StartAsyncLetWithLocalBuffer) &&
+                 "nested async-let initializers need recursive preparation");
+          if (auto *hop = dyn_cast<HopToExecutorInst>(&inst))
+            assert(isa<EnumInst>(hop->getTargetExecutor()) &&
+                   !cast<EnumInst>(hop->getTargetExecutor())->hasOperand());
         }
       }
-      assert(store && (computation ? store->getSrc() == computation
-                                  : store->getSrc() == child->getArgument(1)));
       auto *parameters = a.getParameterIndices();
+      if (parameters->getNumIndices() == 0)
+        continue;
       auto *results = IndexSubset::get(astCtx, 1, {0});
       auto *childWitness = getExactDifferentiabilityWitness(
           module, child, parameters, results);
-      assert(!childWitness && "custom child derivatives are not implemented");
-      childWitness = SILDifferentiabilityWitness::createDefinition(
-          module, SILLinkage::Private, child, DifferentiabilityKind::Reverse,
-          parameters, results, GenericSignature(), nullptr, nullptr,
-          /*isSerialized*/ false, /*isDefault*/ false);
+      if (!childWitness)
+        childWitness = SILDifferentiabilityWitness::createDefinition(
+            module, SILLinkage::Private, child, DifferentiabilityKind::Reverse,
+            parameters, results, GenericSignature(), nullptr, nullptr,
+            /*isSerialized*/ false, /*isDefault*/ false);
       if (transformer.canonicalizeDifferentiabilityWitness(
               childWitness, invoker, IsNotSerialized)) {
         childError = true;

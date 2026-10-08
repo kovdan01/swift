@@ -107,21 +107,20 @@ using Activity = OptionSet<ActivityFlags>;
 
 bool isExperimentalAsyncAutoDiffEnabled();
 
-// One block or a single if/else diamond; one or two Float captures per child.
-// Alternative reads of a shared child belong to their respective branches.
-// A description of the existing SIL, not a second activity analysis.
+// Structured Float results in an otherwise ordinary SIL control-flow graph.
+// A description of the existing SIL, not another activity analysis or AD trace.
+// Waits, result accesses and cleanup sites need not be in the same block.
 struct AsyncLetInfo {
   BuiltinInst *start = nullptr;
   PartialApplyInst *initializer = nullptr;
-  struct Read {
-    ApplyInst *get;
-    PointerToAddressInst *address;
-  };
-  SmallVector<Read, 2> reads;
-  const Read *getRead(SILInstruction *inst) const;
+  SmallVector<ApplyInst *, 2> gets;
+  SmallVector<PointerToAddressInst *, 2> resultAddresses;
+  bool isGet(SILInstruction *inst) const;
+  bool isResultAddress(SILInstruction *inst) const;
 
   AllocStackInst *getBuffer() const;
   IndexSubset *getParameterIndices() const;
+  FunctionType *getPullbackType() const;
   bool isInitializerInstruction(SILInstruction *inst) const;
 };
 
