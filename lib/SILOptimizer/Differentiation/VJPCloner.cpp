@@ -1870,8 +1870,6 @@ bool VJPCloner::Implementation::run() {
              << "Generated VJP for " << original->getName() << ":\n"
              << *vjp);
 
-  assert(!activityInfo.getAsyncLet() && "async-let AD: step 5 complete");
-
   // Generate pullback code.
   PullbackCloner PullbackCloner(cloner);
   if (PullbackCloner.run())
