@@ -98,6 +98,8 @@ class VJPCloner::Implementation final
   /// struct instances.
   llvm::DenseMap<SILBasicBlock *, SmallVector<SILValue, 8>> pullbackValues;
 
+  AllocStackInst *asyncLetResult = nullptr;
+
   ASTContext &getASTContext() const { return vjp->getASTContext(); }
   SILModule &getModule() const { return vjp->getModule(); }
   const AutoDiffConfig &getConfig() const {
@@ -225,6 +227,8 @@ public:
   void visit(SILInstruction *inst) {
     if (errorOccurred)
       return;
+    if (activityInfo.getAsyncLet())
+      Builder.setCurrentDebugScope(getOpScope(inst->getDebugScope()));
     TypeSubstCloner::visit(inst);
   }
 
@@ -238,6 +242,199 @@ public:
     if (errorOccurred)
       return;
     SILClonerWithScopes::postProcess(orig, cloned);
+  }
+
+  Type getAsyncLetResultASTType() {
+    auto &a = *activityInfo.getAsyncLet();
+    SmallVector<TupleTypeElt, 2> fields{
+        a.getBuffer()->getType().getASTType(),
+        TupleTypeElt(pullbackInfo.lookUpLinearMapType(a.get))};
+    return TupleType::get(fields, getASTContext());
+  }
+
+  SILFunction *createAsyncLetEntry() {
+    auto &a = *activityInfo.getAsyncLet();
+    auto *child = cast<FunctionRefInst>(a.initializer->getCallee())
+                      ->getReferencedFunction();
+    auto *indices = IndexSubset::get(getASTContext(), 1, {0});
+    auto *childWitness = getExactDifferentiabilityWitness(
+        getModule(), child, indices, indices);
+    assert(childWitness && childWitness->getVJP());
+    auto *childVJP = childWitness->getVJP();
+    auto childType =
+        child->getLoweredFunctionType()->getUnsubstitutedType(getModule());
+    auto payload = asyncLetResult->getType().getObjectType();
+    SILResultInfo result(payload.getASTType(), ResultConvention::Indirect);
+    auto entryType = SILFunctionType::get(
+        nullptr, childType->getExtInfo(), SILCoroutineKind::None,
+        childType->getCalleeConvention(), childType->getParameters(), {},
+        {result}, childType->getOptionalErrorResult(), {}, {}, getASTContext());
+    SILOptFunctionBuilder functions(context.getTransform());
+    auto name = (Twine("__async_ad_entry_") + vjp->getName()).str();
+    auto *entry = functions.createFunction(
+        SILLinkage::Private, getASTContext().getIdentifier(name).str(), entryType,
+        child->getActorIsolation(), nullptr, child->getLocation(), child->isBare(),
+        IsNotTransparent, IsNotSerialized, IsNotDynamic, IsNotDistributed,
+        IsNotRuntimeAccessible);
+    entry->setDebugScope(
+        new (getModule()) SILDebugScope(child->getLocation(), entry));
+    entry->setHasLoweredAddresses(child->hasLoweredAddresses());
+    context.recordGeneratedFunction(entry);
+    entry->createBasicBlock();
+    createEntryArguments(entry);
+    SILBuilder builder(entry->getEntryBlock(), entry->getDebugScope());
+    auto loc = a.start->getLoc();
+    auto valueAddress =
+        builder.createTupleElementAddr(loc, entry->getArgument(0), 0);
+    auto pbAddress = builder.createTupleElementAddr(loc, entry->getArgument(0), 1);
+
+    // Preserve the existing child's nil-executor hop, including its SIL type.
+    HopToExecutorInst *hop = nullptr;
+    for (auto &inst : child->front())
+      if ((hop = dyn_cast<HopToExecutorInst>(&inst)))
+        break;
+    assert(hop);
+    auto *nil = cast<EnumInst>(hop->getTargetExecutor());
+    auto executor =
+        builder.createEnum(loc, SILValue(), nil->getElement(), nil->getType());
+    builder.createHopToExecutor(loc, executor, hop->isMandatory());
+    auto *ref = builder.createFunctionRef(loc, childVJP);
+    context.recordGeneratedFunctionReference(ref);
+    auto derivativeType = childVJP->getLoweredFunctionType();
+    auto *normal = entry->createBasicBlock();
+    auto pbType = derivativeType->getDirectFormalResultsType(
+        getModule(), TypeExpansionContext::minimal(), entry->hasLoweredAddresses());
+    auto pb = normal->createPhiArgument(pbType, OwnershipKind::Owned);
+    assert(pbType.is<SILFunctionType>());
+    auto *error = entry->createBasicBlock();
+    auto errorType =
+        derivativeType->getOptionalErrorResult()->getSILStorageInterfaceType();
+    auto exception = error->createPhiArgument(errorType, OwnershipKind::Owned);
+    builder.createTryApply(loc, ref, SubstitutionMap(),
+                           {valueAddress, entry->getArgument(1)}, normal, error);
+    builder.setInsertionPoint(normal);
+    builder.createHopToExecutor(loc, executor, hop->isMandatory());
+    auto storedPB = reabstractFunction(
+        builder, functions, loc, pb,
+        pbAddress->getType().getObjectType().castTo<SILFunctionType>(),
+        [](SubstitutionMap map) { return map; });
+    builder.createStore(loc, storedPB, pbAddress, StoreOwnershipQualifier::Init);
+    auto unit = builder.createTuple(
+        loc, SILType::getEmptyTupleType(getASTContext()), {});
+    builder.createReturn(loc, unit);
+    builder.setInsertionPoint(error);
+    builder.createHopToExecutor(loc, executor, hop->isMandatory());
+    builder.createThrow(loc, exception);
+#ifndef NDEBUG
+    entry->verify();
+#endif
+    LLVM_DEBUG(getADDebugStream() << "Async-let VJP result adapter:\n" << *entry);
+    return entry;
+  }
+
+  void visitAllocStackInst(AllocStackInst *inst) {
+    auto &a = activityInfo.getAsyncLet();
+    if (!a || inst != a->getBuffer()) {
+      TypeSubstCloner::visitAllocStackInst(inst);
+      return;
+    }
+    auto type =
+        vjp->getLoweredType(Lowering::AbstractionPattern::getOpaque(),
+                            getAsyncLetResultASTType()).getObjectType();
+    asyncLetResult = Builder.createAllocStack(
+        RegularLocation::getAutoGeneratedLocation(), type);
+    mapValue(inst,
+             Builder.createTupleElementAddr(inst->getLoc(), asyncLetResult, 0));
+  }
+
+  void visitAddressToPointerInst(AddressToPointerInst *inst) {
+    auto &a = activityInfo.getAsyncLet();
+    if (!a || inst != a->start->getArguments()[2]->getDefiningInstruction()) {
+      TypeSubstCloner::visitAddressToPointerInst(inst);
+      return;
+    }
+    mapValue(inst, Builder.createAddressToPointer(
+                       inst->getLoc(), asyncLetResult, inst->getType(),
+                       inst->needsStackProtection()));
+  }
+
+  void visitPointerToAddressInst(PointerToAddressInst *inst) {
+    auto &a = activityInfo.getAsyncLet();
+    if (a && inst == a->resultAddress)
+      mapValue(inst, getOpValue(a->getBuffer()));
+    else
+      TypeSubstCloner::visitPointerToAddressInst(inst);
+  }
+
+  void visitPartialApplyInst(PartialApplyInst *inst) {
+    auto &a = activityInfo.getAsyncLet();
+    if (!a || inst != a->initializer) {
+      TypeSubstCloner::visitPartialApplyInst(inst);
+      return;
+    }
+    auto *ref = Builder.createFunctionRef(inst->getLoc(), createAsyncLetEntry());
+    context.recordGeneratedFunctionReference(ref);
+    auto *closure = Builder.createPartialApply(
+        inst->getLoc(), ref, SubstitutionMap(),
+        {getOpValue(inst->getArguments()[0])}, inst->getCalleeConvention(),
+        inst->getResultIsolation(), inst->isCalledOnce(), inst->isOnStack(),
+        inst->isStackAllocationNested());
+    mapValue(inst, closure);
+  }
+
+  void visitConvertFunctionInst(ConvertFunctionInst *inst) {
+    auto &a = activityInfo.getAsyncLet();
+    if (!a || !a->isInitializerInstruction(inst)) {
+      TypeSubstCloner::visitConvertFunctionInst(inst);
+      return;
+    }
+    auto operand = getOpValue(inst->getOperand());
+    auto type = operand->getType().castTo<SILFunctionType>()->getWithExtInfo(
+        inst->getType().castTo<SILFunctionType>()->getExtInfo());
+    mapValue(inst, Builder.createConvertFunction(
+                       inst->getLoc(), operand,
+                       SILType::getPrimitiveObjectType(type),
+                       inst->withoutActuallyEscaping()));
+  }
+
+  void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *inst) {
+    auto &a = activityInfo.getAsyncLet();
+    if (!a || !a->isInitializerInstruction(inst)) {
+      TypeSubstCloner::visitConvertEscapeToNoEscapeInst(inst);
+      return;
+    }
+    auto operand = getOpValue(inst->getOperand());
+    auto type = operand->getType().castTo<SILFunctionType>()->getWithExtInfo(
+        inst->getType().castTo<SILFunctionType>()->getExtInfo());
+    mapValue(inst, Builder.createConvertEscapeToNoEscape(
+                       inst->getLoc(), operand,
+                       SILType::getPrimitiveObjectType(type),
+                       inst->isLifetimeGuaranteed()));
+  }
+
+  void visitBuiltinInst(BuiltinInst *inst) {
+    auto &a = activityInfo.getAsyncLet();
+    if (!a || inst != a->start) {
+      TypeSubstCloner::visitBuiltinInst(inst);
+      return;
+    }
+    auto args = inst->getArguments();
+    auto substitutions = SubstitutionMap::get(
+        inst->getSubstitutions().getGenericSignature(),
+        ArrayRef<Type>{getAsyncLetResultASTType()},
+        ArrayRef<ProtocolConformanceRef>{});
+    mapValue(inst, Builder.createBuiltin(
+                       inst->getLoc(), inst->getName(), inst->getType(),
+                       substitutions, {getOpValue(args[0]), getOpValue(args[1]),
+                                       getOpValue(args[2])}));
+  }
+
+  void visitDeallocStackInst(DeallocStackInst *inst) {
+    auto &a = activityInfo.getAsyncLet();
+    if (a && inst->getOperand() == a->getBuffer())
+      Builder.createDeallocStack(inst->getLoc(), asyncLetResult);
+    else
+      TypeSubstCloner::visitDeallocStackInst(inst);
   }
 
   void visitReturnInst(ReturnInst *ri) {
@@ -757,6 +954,23 @@ public:
   // If an `apply` has active results or active inout arguments, replace it
   // with an `apply` of its VJP.
   void visitApplyInst(ApplyInst *ai) {
+    if (auto &a = activityInfo.getAsyncLet(); a && ai == a->get) {
+      assert(pullbackInfo.shouldDifferentiateApplySite(ai));
+      TypeSubstCloner::visitApplyInst(ai); // The real wait still executes.
+      auto loc = ai->getLoc();
+      auto address = Builder.createTupleElementAddr(loc, asyncLetResult, 1);
+      auto pb = Builder.emitLoadValueOperation(
+          loc, address, LoadOwnershipQualifier::Copy);
+      SILOptFunctionBuilder functions(context.getTransform());
+      auto target = getLoweredType(pullbackInfo.lookUpLinearMapType(ai))
+                        .castTo<SILFunctionType>();
+      pb = reabstractFunction(Builder, functions, loc, pb, target,
+                             [](SubstitutionMap map) { return map; });
+      auto &saved = pullbackValues[ai->getParent()];
+      assert(saved.size() == pullbackInfo.lookUpLinearMapIndex(ai));
+      saved.push_back(pb);
+      return;
+    }
     // If callee should not be differentiated, do standard cloning.
     if (!pullbackInfo.shouldDifferentiateApplySite(ai)) {
       LLVM_DEBUG(getADDebugStream() << "No active results:\n" << *ai << '\n');
@@ -1699,8 +1913,6 @@ EnumInst *VJPCloner::Implementation::buildPredecessorEnumValue(
 }
 
 bool VJPCloner::Implementation::run() {
-  LLVM_DEBUG(if (activityInfo.getAsyncLet()) activityInfo.dump(getConfig()));
-  assert(!activityInfo.getAsyncLet() && "async-let AD: step 4 complete");
   PrettyStackTraceSILFunction trace("generating VJP for", original);
   LLVM_DEBUG(getADDebugStream() << "Cloning original @" << original->getName()
                                 << " to vjp @" << vjp->getName() << '\n');
@@ -1731,6 +1943,8 @@ bool VJPCloner::Implementation::run() {
   LLVM_DEBUG(getADDebugStream()
              << "Generated VJP for " << original->getName() << ":\n"
              << *vjp);
+
+  assert(!activityInfo.getAsyncLet() && "async-let AD: step 5 complete");
 
   // Generate pullback code.
   PullbackCloner PullbackCloner(cloner);
