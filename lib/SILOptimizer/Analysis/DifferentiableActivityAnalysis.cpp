@@ -267,6 +267,9 @@ void DifferentiableActivityInfo::setVariedAndPropagateToUsers(
     return;
   // Set the value as varied.
   variedValueSets[independentVariableIndex].insert(value);
+  if (asyncLet && value == asyncLet->getBuffer())
+    setVariedAndPropagateToUsers(asyncLet->resultAddress,
+                                independentVariableIndex);
   // Propagate variedness to users.
   for (auto *use : value->getUses())
     propagateVaried(use, independentVariableIndex);
@@ -275,6 +278,16 @@ void DifferentiableActivityInfo::setVariedAndPropagateToUsers(
 void DifferentiableActivityInfo::propagateVaried(
     Operand *operand, unsigned independentVariableIndex) {
   auto *inst = operand->getUser();
+  if (asyncLet) {
+    if (inst == asyncLet->start) {
+      if (operand->get() == asyncLet->start->getArguments()[1])
+        propagateVariedInwardsThroughProjections(
+            asyncLet->getBuffer(), independentVariableIndex);
+      return; // The handle is not the numerical result.
+    }
+    if (inst == asyncLet->start->getArguments()[2]->getDefiningInstruction())
+      return; // Do not mark the raw pointer varied.
+  }
   // Propagate variedness for the given operand.
   // General rule: mark results as varied and recursively propagate variedness
   // to users of results.
@@ -467,6 +480,14 @@ void DifferentiableActivityInfo::setUsefulAndPropagateToOperands(
   // Skip already-useful values to prevent infinite recursion.
   if (isUseful(value, dependentVariableIndex))
     return;
+  if (asyncLet && (value == asyncLet->getBuffer() ||
+                  value == asyncLet->resultAddress)) {
+    setUseful(asyncLet->getBuffer(), dependentVariableIndex);
+    setUseful(asyncLet->resultAddress, dependentVariableIndex);
+    setUsefulAndPropagateToOperands(asyncLet->start->getArguments()[1],
+                                   dependentVariableIndex);
+    return;
+  }
   if (value->getType().isAddress() ||
       value->getType().getClassDecl()) {
     propagateUsefulThroughAddress(value, dependentVariableIndex);
