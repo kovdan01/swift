@@ -1788,59 +1788,119 @@ void Differentiation::run() {
   for (auto invokerPair : context.getInvokers()) {
     auto *witness = invokerPair.first;
     auto invoker = invokerPair.second;
-    if (auto a = findAsyncLet(*witness->getOriginalFunction())) {
-      auto *child = cast<FunctionRefInst>(a->initializer->getCallee())
+    bool childError = false;
+    for (const auto &a : findAsyncLets(*witness->getOriginalFunction())) {
+      auto *child = cast<FunctionRefInst>(a.initializer->getCallee())
                         ->getReferencedFunction();
       auto childType = child->getLoweredFunctionType()
                            ->getUnsubstitutedType(module);
+      auto captures = a.initializer->getArguments();
       assert(child->size() == 1 && !child->isSerialized());
       assert(!child->getActorIsolation().isActorIsolated());
       assert(!childType->getSubstGenericSignature() && childType->isAsync() &&
              !childType->isCoroutine() && childType->hasErrorResult());
-      assert(childType->getNumParameters() == 1 &&
+      assert(childType->getNumParameters() == captures.size() &&
              childType->getNumResults() == 1 &&
              childType->getNumIndirectFormalResults() == 1);
-      assert(child->getArgument(0)->getType() == a->getBuffer()->getType() &&
-             child->getArgument(1)->getType() ==
-                 a->getBuffer()->getType().getObjectType());
-      // Prototype restriction: identity or the standard Float square. This
-      // is not a general validation of custom derivative saved state.
+      assert(child->getArgument(0)->getType() == a.getBuffer()->getType());
+      for (unsigned i = 0; i != captures.size(); ++i)
+        assert(child->getArgument(i + 1)->getType() == captures[i]->getType());
+
+      // Keep the numerical subset small: identity, Float arithmetic, or one
+      // await of a local (Float, Float) -> Float workload that adds or multiplies
+      // its inputs.
+      // There is no recursive task/call-graph or saved-state analysis here.
+      auto checkArithmetic = [](ApplyInst *call, SILValue lhs, SILValue rhs) {
+        auto *callee = call->getCalleeFunction();
+        assert(callee && (callee->getName() == "$sSf1moiyS2f_SftFZ" ||
+                          callee->getName() == "$sSf1poiyS2f_SftFZ"));
+        assert(call->getSubstitutionMap().empty() &&
+               call->getArguments().size() == 3 &&
+               call->getArguments()[0] == lhs &&
+               call->getArguments()[1] == rhs);
+      };
+      auto checkHop = [](HopToExecutorInst *hop) {
+        assert(isa<EnumInst>(hop->getTargetExecutor()) &&
+               !cast<EnumInst>(hop->getTargetExecutor())->hasOperand());
+      };
       StoreInst *store = nullptr;
+      ApplyInst *computation = nullptr;
       for (auto &inst : child->front()) {
         if (auto *s = dyn_cast<StoreInst>(&inst)) {
           assert(!store && s->getDest() == child->getArgument(0));
           store = s;
         } else if (auto *call = dyn_cast<ApplyInst>(&inst)) {
-          assert(call->getCalleeFunction() &&
-                 call->getCalleeFunction()->getName() == "$sSf1moiyS2f_SftFZ");
-          assert(call->getArguments().size() == 3 &&
-                 call->getArguments()[0] == child->getArgument(1) &&
-                 call->getArguments()[1] == child->getArgument(1));
+          assert(!computation && call->getCalleeFunction());
+          computation = call;
+          auto *workload = call->getCalleeFunction();
+          if (!workload->isAsync()) {
+            checkArithmetic(call, child->getArgument(1),
+                            child->getArgument(captures.size()));
+            continue;
+          }
+          auto workloadType = workload->getLoweredFunctionType();
+          assert(captures.size() == 2 && workload->size() == 1 &&
+                 !workload->isSerialized() &&
+                 !workload->getActorIsolation().isActorIsolated());
+          assert(!workloadType->getSubstGenericSignature() &&
+                 !workloadType->hasErrorResult() &&
+                 !workloadType->isCoroutine() &&
+                 workloadType->getNumParameters() == 2 &&
+                 workloadType->getNumResults() == 1 &&
+                 workloadType->getNumIndirectFormalResults() == 0);
+          assert(call->getSubstitutionMap().empty() &&
+                 call->getArguments().size() == 2 &&
+                 call->getType() == a.getBuffer()->getType().getObjectType());
+          for (unsigned i = 0; i != 2; ++i) {
+            assert(call->getArguments()[i] == child->getArgument(i + 1));
+            assert(workload->getArgument(i)->getType() == captures[i]->getType());
+          }
+          ApplyInst *arithmetic = nullptr;
+          for (auto &workInst : workload->front()) {
+            if (auto *op = dyn_cast<ApplyInst>(&workInst)) {
+              assert(!arithmetic);
+              arithmetic = op;
+              checkArithmetic(op, workload->getArgument(0),
+                              workload->getArgument(1));
+            } else if (auto *hop = dyn_cast<HopToExecutorInst>(&workInst)) {
+              checkHop(hop);
+            } else {
+              assert((isa<DebugValueInst, FunctionRefInst, MetatypeInst,
+                          EnumInst, ReturnInst>(&workInst)));
+            }
+          }
+          assert(arithmetic &&
+                 cast<ReturnInst>(workload->front().getTerminator())
+                         ->getOperand() == arithmetic);
         } else if (auto *hop = dyn_cast<HopToExecutorInst>(&inst)) {
-          assert(isa<EnumInst>(hop->getTargetExecutor()) &&
-                 !cast<EnumInst>(hop->getTargetExecutor())->hasOperand());
+          checkHop(hop);
         } else {
           assert((isa<DebugValueInst, FunctionRefInst, MetatypeInst, EnumInst,
                       TupleInst, ReturnInst>(&inst)));
         }
       }
-      assert(store && (store->getSrc() == child->getArgument(1) ||
-                       isa<ApplyInst>(store->getSrc())));
-      auto *indices = IndexSubset::get(astCtx, 1, {0});
+      assert(store && (computation ? store->getSrc() == computation
+                                  : store->getSrc() == child->getArgument(1)));
+      auto *parameters = a.getParameterIndices();
+      auto *results = IndexSubset::get(astCtx, 1, {0});
       auto *childWitness = getExactDifferentiabilityWitness(
-          module, child, indices, indices);
+          module, child, parameters, results);
       assert(!childWitness && "custom child derivatives are not implemented");
       childWitness = SILDifferentiabilityWitness::createDefinition(
           module, SILLinkage::Private, child, DifferentiabilityKind::Reverse,
-          indices, indices, GenericSignature(), nullptr, nullptr,
+          parameters, results, GenericSignature(), nullptr, nullptr,
           /*isSerialized*/ false, /*isDefault*/ false);
       if (transformer.canonicalizeDifferentiabilityWitness(
               childWitness, invoker, IsNotSerialized)) {
-        errorOccurred = true;
-        continue;
+        childError = true;
+        break;
       }
       LLVM_DEBUG(getADDebugStream() << "Prepared existing async-let initializer:\n"
                                    << *childWitness->getVJP());
+    }
+    if (childError) {
+      errorOccurred = true;
+      continue;
     }
     if (transformer.canonicalizeDifferentiabilityWitness(
             witness, invoker,
