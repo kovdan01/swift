@@ -6232,6 +6232,10 @@ public:
       CanType origTypeOfAbstraction = CanType(),
       bool isDefaultDerivative = false);
 
+  bool hasIndirectAutoDiffResult() const;
+
+  SILType getAutoDiffLinearMapType(SILModule &M, TypeExpansionContext context);
+
   /// If \p M is nullptr, the type is not substituted.
   uint16_t getPointerAuthDiscriminator(SILModule *M);
 

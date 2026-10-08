@@ -166,9 +166,6 @@ private:
   SILModule &getModule() const { return getContext().getModule(); }
   ASTContext &getASTContext() const { return getPullback().getASTContext(); }
   SILFunction &getOriginal() const { return vjpCloner.getOriginal(); }
-  SILDifferentiabilityWitness *getWitness() const {
-    return vjpCloner.getWitness();
-  }
   DifferentiationInvoker getInvoker() const { return vjpCloner.getInvoker(); }
   LinearMapInfo &getPullbackInfo() const { return vjpCloner.getPullbackInfo(); }
   const AutoDiffConfig &getConfig() const { return vjpCloner.getConfig(); }
@@ -259,8 +256,7 @@ private:
   std::optional<TangentSpace> getTangentSpace(CanType type) {
     // Use witness generic signature to remap types.
     type =
-        getWitness()->getDerivativeGenericSignature().getReducedType(
-            type);
+        getConfig().derivativeGenericSignature.getReducedType(type);
     return type->getAutoDiffTangentSpace(
         LookUpConformanceInModule());
   }
@@ -656,6 +652,10 @@ private:
   /// This method first tries to find an existing entry in the adjoint buffer
   /// mapping. If no entry exists, creates a zero adjoint buffer.
   SILValue getAdjointBuffer(SILBasicBlock *origBB, SILValue originalValue) {
+    if (auto *a = getPullbackInfo().getAsyncLet(
+            originalValue->getDefiningInstruction());
+        a && a->isResultAddress(originalValue->getDefiningInstruction()))
+      originalValue = a->getBuffer(); // One adjoint for the typed storage.
     assert(getTangentValueCategory(originalValue) == SILValueCategory::Address);
     assert(originalValue->getFunction() == &getOriginal());
     auto insertion = bufferMap.try_emplace({origBB, originalValue}, SILValue());
@@ -986,10 +986,143 @@ public:
     errorOccurred = true;
   }
 
+  void visitBuiltinInst(BuiltinInst *bi) {
+    if (auto *a = getPullbackInfo().getAsyncLet(bi); a && bi == a->start) {
+      assert(shouldDifferentiateAsyncLet(bi, getActivityInfo(), getConfig()));
+      return;
+    }
+    visitSILInstruction(bi);
+  }
+
+  /// Accumulate one returned gradient using the ordinary tangent representation.
+  /// Consumes a direct result; borrows an indirect result, whose storage remains
+  /// initialized for its caller to destroy. Shared by calls and async-let waits.
+  void accumulatePullbackResult(SILBasicBlock *bb, SILValue originalValue,
+                                SILValue gradient, SILLocation loc) {
+    assert(gradient->getType().getObjectType() ==
+           getRemappedTangentType(originalValue->getType()).getObjectType());
+    if (getTangentValueCategory(originalValue) == SILValueCategory::Address) {
+      if (gradient->getType().isAddress()) {
+        addToAdjointBuffer(bb, originalValue, gradient, loc);
+        return;
+      }
+      auto *storage = builder.createAllocStack(loc, gradient->getType());
+      builder.emitStoreValueOperation(loc, gradient, storage,
+                                      StoreOwnershipQualifier::Init);
+      addToAdjointBuffer(bb, originalValue, storage, loc);
+      builder.emitDestroyAddrAndFold(loc, storage);
+      builder.createDeallocStack(loc, storage);
+      return;
+    }
+    if (gradient->getType().isAddress())
+      gradient = builder.emitLoadValueOperation(
+          loc, gradient, LoadOwnershipQualifier::Copy);
+    recordTemporary(gradient);
+    addAdjointValue(bb, originalValue, makeConcreteAdjointValue(gradient), loc);
+  }
+
   /// Handle `apply` instruction.
   ///   Original: (y0, y1, ...) = apply @fn (x0, x1, ...)
   ///    Adjoint: (adj[x0], adj[x1], ...) += apply @fn_pullback (adj[y0], ...)
   void visitApplyInst(ApplyInst *ai) {
+    if (auto *a = getPullbackInfo().getAsyncLet(ai); a && a->isGet(ai)) {
+      auto *bb = ai->getParent();
+      auto loc = ai->getLoc();
+      auto index = getPullbackInfo().lookUpLinearMapIndex(ai);
+      auto saved = pullbackTupleElements.lookup(bb);
+      assert(index < saved.size());
+      SILValue pb = saved[index];
+      auto type = pb->getType().castTo<SILFunctionType>();
+      assert(!type->isAsync() && !type->hasErrorResult());
+      SILFunctionConventions conventions(
+          type, SILAddressConventions::forFunction(getPullback()));
+      auto expansion = getPullback().getTypeExpansionContext();
+      // Invoke the saved closure with its actual conventions. In particular,
+      // do not reabstract it back into the task field's all-indirect form.
+      auto buffer = getAdjointBuffer(bb, a->getBuffer());
+      SmallVector<SILValue, 8> arguments;
+      SmallVector<AllocStackInst *, 4> indirectResults, consumedSeeds;
+      for (auto result : type->getIndirectFormalResults()) {
+        auto resultType = conventions.getSILType(result, expansion);
+        auto *storage = builder.createAllocStack(loc, resultType);
+        indirectResults.push_back(storage);
+        arguments.push_back(storage);
+      }
+      // A tuple seed can be expanded into several formal parameters by normal
+      // function lowering. Project only tuples, never a nominal tangent type.
+      SmallVector<SILValue, 4> seeds{buffer};
+      for (auto parameter : type->getParameters()) {
+        // Apply the closure's substitutions before interpreting its interface
+        // type parameters in the parent's pullback environment.
+        auto expected = conventions.getSILType(parameter, expansion);
+        assert(!parameter.isIndirectInOut() &&
+               !parameter.isAutoDiffSemanticResult());
+        while (!seeds.empty() &&
+               seeds.back()->getType().getObjectType() !=
+                   expected.getObjectType()) {
+          auto address = seeds.pop_back_val();
+          auto tuple = address->getType().castTo<TupleType>();
+          for (unsigned i = tuple->getNumElements(); i != 0; --i)
+            seeds.push_back(builder.createTupleElementAddr(loc, address, i - 1));
+        }
+        assert(!seeds.empty() && "missing pullback seed component");
+        auto seed = seeds.pop_back_val();
+        switch (parameter.getConvention()) {
+        case ParameterConvention::Indirect_In_Guaranteed:
+          arguments.push_back(seed);
+          break;
+        case ParameterConvention::Indirect_In: {
+          // Do not let a consuming parameter invalidate the result adjoint.
+          auto *copy = builder.createAllocStack(loc, seed->getType());
+          builder.createCopyAddr(loc, seed, copy, IsNotTake, IsInitialization);
+          consumedSeeds.push_back(copy);
+          arguments.push_back(copy);
+          break;
+        }
+        case ParameterConvention::Direct_Owned:
+          arguments.push_back(builder.emitLoadValueOperation(
+              loc, seed, LoadOwnershipQualifier::Copy));
+          break;
+        case ParameterConvention::Direct_Guaranteed:
+        case ParameterConvention::Direct_Unowned:
+          arguments.push_back(recordTemporary(builder.emitLoadValueOperation(
+              loc, seed, LoadOwnershipQualifier::Copy)));
+          break;
+        default:
+          llvm_unreachable("unsupported pullback seed convention");
+        }
+      }
+      assert(seeds.empty() && "unconsumed pullback seed components");
+      auto *call = builder.createApply(loc, pb, SubstitutionMap(), arguments);
+      builder.emitDestroyValueOperation(loc, pb);
+      // The callee consumed these initialized copies; only storage remains.
+      for (auto *storage : llvm::reverse(consumedSeeds))
+        builder.createDeallocStack(loc, storage);
+      SmallVector<SILValue, 8> directResults, gradients;
+      if (type->getNumResults() - type->getNumIndirectFormalResults() == 1)
+        directResults.push_back(call);
+      else
+        extractAllElements(call, builder, directResults);
+      collectAllActualResultsInTypeOrder(call, directResults, gradients);
+      auto captures = a->initializer->getArguments();
+      auto *parameters = a->getParameterIndices();
+      assert(gradients.size() == parameters->getNumIndices() &&
+             "expected one formal gradient per selected capture");
+      unsigned resultIndex = 0;
+      for (auto parameter : parameters->getIndices()) {
+        auto gradient = gradients[resultIndex++];
+        if (getActivityInfo().isActive(captures[parameter], getConfig()))
+          accumulatePullbackResult(bb, captures[parameter], gradient, loc);
+        else if (gradient->getType().isObject())
+          builder.emitDestroyValueOperation(loc, gradient);
+      }
+      for (auto *storage : llvm::reverse(indirectResults)) {
+        builder.emitDestroyAddrAndFold(loc, storage);
+        builder.createDeallocStack(loc, storage);
+      }
+      builder.emitZeroIntoBuffer(loc, buffer, IsNotInitialization);
+      return;
+    }
     assert(getPullbackInfo().shouldDifferentiateApplySite(ai));
 
     // Skip `array.uninitialized_intrinsic` applications, which have special
@@ -1284,21 +1417,7 @@ public:
       if (paramInfo.isAutoDiffSemanticResult())
         continue;
       auto tan = *allResultsIt++;
-      if (tan->getType().isAddress()) {
-        addToAdjointBuffer(bb, origArg, tan, loc);
-      } else {
-        if (origArg->getType().isAddress()) {
-          auto *tmpBuf = builder.createAllocStack(loc, tan->getType());
-          builder.emitStoreValueOperation(loc, tan, tmpBuf,
-                                          StoreOwnershipQualifier::Init);
-          addToAdjointBuffer(bb, origArg, tmpBuf, loc);
-          builder.emitDestroyAddrAndFold(loc, tmpBuf);
-          builder.createDeallocStack(loc, tmpBuf);
-        } else {
-          recordTemporary(tan);
-          addAdjointValue(bb, origArg, makeConcreteAdjointValue(tan), loc);
-        }
-      }
+      accumulatePullbackResult(bb, origArg, tan, loc);
     }
 
     // Propagate adjoints for yields
@@ -2348,6 +2467,17 @@ bool PullbackCloner::Implementation::run() {
       // If value is not active, skip.
       if (!getActivityInfo().isActive(v, getConfig()))
         return false;
+      // The recognized initializer chain carries dependency information, but
+      // its capture adjoints are produced by the child pullback at the wait.
+      // These closure values therefore need no independent adjoints.
+      if (auto *a = getPullbackInfo().getAsyncLet(v->getDefiningInstruction())) {
+        if (a->isInitializerInstruction(v->getDefiningInstruction()))
+          return false;
+        // A typed result address aliases the child's allocation. Do not
+        // propagate another adjoint for this alias across branch edges.
+        if (a->isResultAddress(v->getDefiningInstruction()))
+          return false;
+      }
       // If active value has already been visited, skip.
       if (visited.count(v))
         return false;

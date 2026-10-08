@@ -61,7 +61,8 @@ LinearMapInfo::LinearMapInfo(ADContext &context, AutoDiffLinearMapKind kind,
                              const DifferentiableActivityInfo &activityInfo,
                              SILLoopInfo *loopInfo)
     : kind(kind), original(original), derivative(derivative),
-      activityInfo(activityInfo), loopInfo(loopInfo), config(config),
+      activityInfo(activityInfo), asyncLets(context.getAsyncLets(derivative)),
+      loopInfo(loopInfo), config(config),
       synthesizedFile(context.getOrCreateSynthesizedFile(original)),
       typeConverter(context.getTypeConverter()) {
   generateDifferentiationDataStructures(context, derivative);
@@ -177,6 +178,11 @@ void LinearMapInfo::populateBranchingTraceDecl(SILBasicBlock *originalBB,
 
 
 Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
+  if (auto *a = getAsyncLet(fai.getInstruction());
+      a && a->isGet(fai.getInstruction())) {
+    assert(kind == AutoDiffLinearMapKind::Pullback);
+    return a->getPullbackType();
+  }
   SmallVector<SILValue, 4> allResults;
   SmallVector<unsigned, 8> activeParamIndices;
   SmallVector<unsigned, 8> activeResultIndices;
@@ -283,46 +289,12 @@ Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
               LookUpConformanceInModule())
           ->getUnsubstitutedType(original->getModule());
 
-  auto linearMapSILType = derivativeFnType->getAllResultsInterfaceType();
-  if (auto tupleType = linearMapSILType.getAs<TupleType>()) {
-    linearMapSILType = SILType::getPrimitiveObjectType(
-        tupleType.getElementType(tupleType->getElements().size() - 1));
-  }
-  if (auto fnTy = linearMapSILType.getAs<SILFunctionType>()) {
-    linearMapSILType = SILType::getPrimitiveObjectType(
-        fnTy->getUnsubstitutedType(original->getModule()));
-  }
-
-  // IRGen requires decls to have AST types (not `SILFunctionType`), so we
-  // convert the `SILFunctionType` of the linear map to a `FunctionType` with
-  // the same parameters and results.
-  auto silFnTy = linearMapSILType.castTo<SILFunctionType>();
-  SmallVector<AnyFunctionType::Param, 8> params;
-  for (auto &param : silFnTy->getParameters()) {
-    ParameterTypeFlags flags;
-    if (param.isAutoDiffSemanticResult())
-      flags = flags.withInOut(true);
-
-    params.push_back(
-        AnyFunctionType::Param(param.getInterfaceType(), Identifier(), flags));
-  }
-
-  AnyFunctionType *astFnTy;
-  if (auto genSig = silFnTy->getSubstGenericSignature()) {
-    // FIXME: Verify ExtInfo state is correct, not working by accident.
-    GenericFunctionType::ExtInfo info;
-    astFnTy = GenericFunctionType::get(
-        genSig, params, /* yields */ {},
-        silFnTy->getAllResultsInterfaceType().getASTType(), info);
-  } else {
-    FunctionType::ExtInfo info;
-    astFnTy = FunctionType::get(
-        params, /* yields */ {},
-        silFnTy->getAllResultsInterfaceType().getASTType(), info);
-  }
-
+  auto linearMapSILType = derivativeFnType->getAutoDiffLinearMapType(
+      original->getModule(), derivative->getTypeExpansionContext());
+  auto linearMapFnType = linearMapSILType.castTo<SILFunctionType>()
+                             ->getUnsubstitutedType(original->getModule());
   Type resultType =
-      astFnTy->hasArchetype() ? astFnTy->mapTypeOutOfEnvironment() : astFnTy;
+      getLinearMapASTType(linearMapFnType);
   if (fai.getKind() == FullApplySiteKind::TryApplyInst)
     resultType = resultType->wrapInOptionalType();
 
@@ -453,6 +425,13 @@ void LinearMapInfo::generateDifferentiationDataStructures(
 /// 3. The instruction has both an active result (direct or indirect) and an
 ///    active argument.
 bool LinearMapInfo::shouldDifferentiateApplySite(FullApplySite applySite) {
+  if (auto *a = getAsyncLet(applySite.getInstruction());
+      a && a->isGet(applySite.getInstruction())) {
+    assert(kind == AutoDiffLinearMapKind::Pullback);
+    // The get's () result is inactive. It checkpoints the selected child's
+    // pullback; selection is the PR's predicate on the start's raw buffer.
+    return shouldDifferentiateAsyncLet(a->start, activityInfo, config);
+  }
   // Function applications with an active inout argument should be
   // differentiated.
   for (auto inoutArg : applySite.getInoutArguments())
@@ -509,6 +488,11 @@ static bool shouldDifferentiateInjectEnumAddr(
 ///    ending, or destroying on an active operand.
 /// 5. The instruction creates an SSA copy of an active operand.
 bool LinearMapInfo::shouldDifferentiateInstruction(SILInstruction *inst) {
+  if (auto *a = getAsyncLet(inst))
+    // These closures are replaced as part of the child computation. Their
+    // captured-input adjoints are produced by the saved child pullback.
+    if (a->isInitializerInstruction(inst))
+      return false;
   // A full apply site with an active argument and an active result (direct or
   // indirect) should be differentiated.
   if (FullApplySite::isa(inst))
@@ -556,21 +540,13 @@ bool LinearMapInfo::shouldDifferentiateInstruction(SILInstruction *inst) {
       return true;
   }
 
-  // Should differentiate `inject_enum_addr` if the corresponding
-  // `init_enum_addr` has an active operand.
   if (auto inject = dyn_cast<InjectEnumAddrInst>(inst))
     if (shouldDifferentiateInjectEnumAddr(*inject, activityInfo, config))
       return true;
 
-  // Should differentiate `startAsyncLetWithLocalBuffer` with
-  // active result buffer
   if (auto *bi = dyn_cast<BuiltinInst>(inst);
-      bi &&
-      bi->getBuiltinKind() == BuiltinValueKind::StartAsyncLetWithLocalBuffer) {
-    auto resultBuf = bi->getArguments().back();
-    if (activityInfo.isActive(resultBuf, config))
-      return true;
-  }
+      bi && shouldDifferentiateAsyncLet(bi, activityInfo, config))
+    return true;
 
   return false;
 }
