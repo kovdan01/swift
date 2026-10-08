@@ -656,7 +656,8 @@ private:
   /// This method first tries to find an existing entry in the adjoint buffer
   /// mapping. If no entry exists, creates a zero adjoint buffer.
   SILValue getAdjointBuffer(SILBasicBlock *origBB, SILValue originalValue) {
-    if (auto &a = getActivityInfo().getAsyncLet();
+    if (auto *a = getActivityInfo().getAsyncLet(
+            originalValue->getDefiningInstruction());
         a && originalValue == a->resultAddress)
       originalValue = a->getBuffer(); // One adjoint for the typed storage.
     assert(getTangentValueCategory(originalValue) == SILValueCategory::Address);
@@ -993,7 +994,7 @@ public:
   ///   Original: (y0, y1, ...) = apply @fn (x0, x1, ...)
   ///    Adjoint: (adj[x0], adj[x1], ...) += apply @fn_pullback (adj[y0], ...)
   void visitApplyInst(ApplyInst *ai) {
-    if (auto &a = getActivityInfo().getAsyncLet(); a && ai == a->get) {
+    if (auto *a = getActivityInfo().getAsyncLet(ai); a && ai == a->get) {
       auto *bb = ai->getParent();
       auto loc = ai->getLoc();
       auto index = getPullbackInfo().lookUpLinearMapIndex(ai);
@@ -1011,9 +1012,18 @@ public:
       auto seed = builder.createLoad(loc, buffer, LoadOwnershipQualifier::Trivial);
       auto dx = builder.createApply(loc, pb, SubstitutionMap(), {seed});
       builder.emitDestroyValueOperation(loc, pb);
-      recordTemporary(dx);
-      addAdjointValue(bb, a->initializer->getArguments()[0],
-                      makeConcreteAdjointValue(dx), loc);
+      SmallVector<SILValue, 2> gradients;
+      auto captures = a->initializer->getArguments();
+      if (captures.size() == 1)
+        gradients.push_back(dx);
+      else
+        extractAllElements(dx, builder, gradients);
+      assert(gradients.size() == captures.size());
+      for (unsigned i = 0; i != captures.size(); ++i) {
+        recordTemporary(gradients[i]);
+        addAdjointValue(bb, captures[i],
+                        makeConcreteAdjointValue(gradients[i]), loc);
+      }
       builder.emitZeroIntoBuffer(loc, buffer, IsNotInitialization);
       return;
     }
@@ -2378,7 +2388,7 @@ bool PullbackCloner::Implementation::run() {
       // The recognized initializer chain carries dependency information, but
       // its capture adjoints are produced by the child pullback at the wait.
       // These closure values therefore need no independent adjoints.
-      if (auto &a = getActivityInfo().getAsyncLet();
+      if (auto *a = getActivityInfo().getAsyncLet(v->getDefiningInstruction());
           a && a->isInitializerInstruction(v->getDefiningInstruction()))
         return false;
       // If active value has already been visited, skip.
