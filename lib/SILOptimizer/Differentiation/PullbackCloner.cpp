@@ -658,7 +658,7 @@ private:
   SILValue getAdjointBuffer(SILBasicBlock *origBB, SILValue originalValue) {
     if (auto *a = getActivityInfo().getAsyncLet(
             originalValue->getDefiningInstruction());
-        a && a->getRead(originalValue->getDefiningInstruction()))
+        a && a->isResultAddress(originalValue->getDefiningInstruction()))
       originalValue = a->getBuffer(); // One adjoint for the typed storage.
     assert(getTangentValueCategory(originalValue) == SILValueCategory::Address);
     assert(originalValue->getFunction() == &getOriginal());
@@ -994,7 +994,7 @@ public:
   ///   Original: (y0, y1, ...) = apply @fn (x0, x1, ...)
   ///    Adjoint: (adj[x0], adj[x1], ...) += apply @fn_pullback (adj[y0], ...)
   void visitApplyInst(ApplyInst *ai) {
-    if (auto *a = getActivityInfo().getAsyncLet(ai); a && a->getRead(ai)) {
+    if (auto *a = getActivityInfo().getAsyncLet(ai); a && a->isGet(ai)) {
       auto *bb = ai->getParent();
       auto loc = ai->getLoc();
       auto index = getPullbackInfo().lookUpLinearMapIndex(ai);
@@ -1014,15 +1014,19 @@ public:
       builder.emitDestroyValueOperation(loc, pb);
       SmallVector<SILValue, 2> gradients;
       auto captures = a->initializer->getArguments();
-      if (captures.size() == 1)
+      auto *parameters = a->getParameterIndices();
+      if (parameters->getNumIndices() == 1)
         gradients.push_back(dx);
       else
         extractAllElements(dx, builder, gradients);
-      assert(gradients.size() == captures.size());
-      for (unsigned i = 0; i != captures.size(); ++i) {
-        recordTemporary(gradients[i]);
-        addAdjointValue(bb, captures[i],
-                        makeConcreteAdjointValue(gradients[i]), loc);
+      assert(gradients.size() == parameters->getNumIndices());
+      unsigned resultIndex = 0;
+      for (auto parameter : parameters->getIndices()) {
+        auto gradient = gradients[resultIndex++];
+        recordTemporary(gradient);
+        if (getActivityInfo().isActive(captures[parameter], getConfig()))
+          addAdjointValue(bb, captures[parameter],
+                          makeConcreteAdjointValue(gradient), loc);
       }
       builder.emitZeroIntoBuffer(loc, buffer, IsNotInitialization);
       return;
@@ -2393,8 +2397,7 @@ bool PullbackCloner::Implementation::run() {
           return false;
         // A typed result address aliases the child's allocation. Do not
         // propagate another adjoint for this alias across branch edges.
-        if (auto *read = a->getRead(v->getDefiningInstruction());
-            read && v == read->address)
+        if (a->isResultAddress(v->getDefiningInstruction()))
           return false;
       }
       // If active value has already been visited, skip.
