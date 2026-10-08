@@ -107,13 +107,18 @@ using Activity = OptionSet<ActivityFlags>;
 
 bool isExperimentalAsyncAutoDiffEnabled();
 
-// One block, one or two Float captures, one wait and one load per child.
+// One block or a single if/else diamond; one or two Float captures per child.
+// Alternative reads of a shared child belong to their respective branches.
 // A description of the existing SIL, not a second activity analysis.
 struct AsyncLetInfo {
   BuiltinInst *start = nullptr;
   PartialApplyInst *initializer = nullptr;
-  ApplyInst *get = nullptr;
-  PointerToAddressInst *resultAddress = nullptr;
+  struct Read {
+    ApplyInst *get;
+    PointerToAddressInst *address;
+  };
+  SmallVector<Read, 2> reads;
+  const Read *getRead(SILInstruction *inst) const;
 
   AllocStackInst *getBuffer() const;
   IndexSubset *getParameterIndices() const;
