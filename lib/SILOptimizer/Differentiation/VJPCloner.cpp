@@ -1620,6 +1620,8 @@ EnumInst *VJPCloner::Implementation::buildPredecessorEnumValue(
 }
 
 bool VJPCloner::Implementation::run() {
+  LLVM_DEBUG(if (activityInfo.getAsyncLet()) activityInfo.dump(getConfig()));
+  assert(!activityInfo.getAsyncLet() && "async-let AD: step 1 complete");
   PrettyStackTraceSILFunction trace("generating VJP for", original);
   LLVM_DEBUG(getADDebugStream() << "Cloning original @" << original->getName()
                                 << " to vjp @" << vjp->getName() << '\n');
