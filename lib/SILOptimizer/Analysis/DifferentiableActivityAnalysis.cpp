@@ -74,6 +74,14 @@ AllocStackInst *AsyncLetInfo::getBuffer() const {
   return cast<AllocStackInst>(pointer->getOperand());
 }
 
+IndexSubset *AsyncLetInfo::getParameterIndices() const {
+  SmallVector<unsigned, 2> indices;
+  for (unsigned i = 0; i != initializer->getArguments().size(); ++i)
+    indices.push_back(i);
+  return IndexSubset::get(start->getFunction()->getASTContext(),
+                          indices.size(), indices);
+}
+
 bool AsyncLetInfo::isInitializerInstruction(SILInstruction *inst) const {
   SILValue value = start->getArguments()[1];
   while (true) {
@@ -86,27 +94,18 @@ bool AsyncLetInfo::isInitializerInstruction(SILInstruction *inst) const {
   }
 }
 
-std::optional<AsyncLetInfo> swift::findAsyncLet(SILFunction &function) {
-  if (!EnableAsyncAutoDiff)
-    return std::nullopt;
+static AsyncLetInfo findAsyncLet(BuiltinInst *start) {
+  auto &function = *start->getFunction();
   AsyncLetInfo a;
-  for (auto &bb : function)
-    for (auto &inst : bb)
-      if (auto *start = isBuiltinInst(
-              &inst, BuiltinValueKind::StartAsyncLetWithLocalBuffer)) {
-        assert(!a.start && "only one async let is implemented");
-        a.start = start;
-      }
-  if (!a.start)
-    return std::nullopt;
+  a.start = start;
 
   assert(function.size() == 1 && function.isAsync());
   assert(!function.isSerialized() &&
          !function.getActorIsolation().isActorIsolated());
   auto type = function.getLoweredFunctionType();
   assert(!type->getSubstGenericSignature() && !type->hasErrorResult());
-  assert(type->getNumParameters() == 1 &&
-         type->getNumIndirectFormalResults() == 0);
+  assert((type->getNumParameters() == 1 || type->getNumParameters() == 2) &&
+         type->getNumIndirectFormalResults() == 0 && type->getNumResults() == 1);
   assert(a.start->getArguments().size() == 3);
   assert(a.start->getSubstitutions().getReplacementTypes().size() == 1 &&
          a.start->getSubstitutions().getConformances().empty());
@@ -131,10 +130,14 @@ std::optional<AsyncLetInfo> swift::findAsyncLet(SILFunction &function) {
     closure = consumer->getOperand(0);
   }
   assert(a.initializer->getSubstitutionMap().empty());
-  assert(a.initializer->getArguments().size() == 1 &&
-         a.initializer->getArguments()[0] == function.getArgument(0));
+  auto captures = a.initializer->getArguments();
+  assert(captures.size() == type->getNumParameters());
+  for (unsigned i = 0; i != captures.size(); ++i) {
+    assert(captures[i] == function.getArgument(i) &&
+           "expected all parent parameters captured in order");
+    assert(captures[i]->getType() == buffer->getType().getObjectType());
+  }
   assert(isa<FunctionRefInst>(a.initializer->getCallee()));
-  assert(function.getArgument(0)->getType() == buffer->getType().getObjectType());
 
   SILInstruction *finish = nullptr, *end = nullptr;
   LoadInst *read = nullptr;
@@ -184,7 +187,8 @@ std::optional<AsyncLetInfo> swift::findAsyncLet(SILFunction &function) {
     dealloc = cast<DeallocStackInst>(inst);
   }
   assert(a.get && a.resultAddress && read && finish && end && dealloc);
-  assert(cast<ReturnInst>(function.front().getTerminator())->getOperand() == read);
+  assert(cast<ReturnInst>(function.front().getTerminator())
+             ->getOperand()->getType() == read->getType());
   SILInstruction *order[] = {buffer, a.initializer, a.start, a.get,
                             a.resultAddress, read, finish, end, dealloc};
   unsigned next = 0;
@@ -196,16 +200,43 @@ std::optional<AsyncLetInfo> swift::findAsyncLet(SILFunction &function) {
       ++next;
   }
   assert(next == 9 && "unexpected async-let instruction order");
-  LLVM_DEBUG(getADDebugStream() << "Matched single Float async let:\n"
+  LLVM_DEBUG(getADDebugStream() << "Matched Float async let:\n"
                                << *a.start << *a.initializer << *a.get
                                << *a.resultAddress);
   return a;
 }
 
+SmallVector<AsyncLetInfo, 2> swift::findAsyncLets(SILFunction &function) {
+  SmallVector<AsyncLetInfo, 2> result;
+  if (!EnableAsyncAutoDiff)
+    return result;
+  for (auto &bb : function)
+    for (auto &inst : bb)
+      if (auto *start = isBuiltinInst(
+              &inst, BuiltinValueKind::StartAsyncLetWithLocalBuffer)) {
+        assert(result.size() < 2 && "at most two async lets in this prototype");
+        result.push_back(findAsyncLet(start));
+      }
+  return result;
+}
+
+const AsyncLetInfo *
+DifferentiableActivityInfo::getAsyncLet(SILInstruction *inst) const {
+  if (!inst)
+    return nullptr;
+  for (const auto &a : asyncLets)
+    if (inst == a.start || inst == a.get || inst == a.resultAddress ||
+        inst == a.getBuffer() ||
+        inst == a.start->getArguments()[2]->getDefiningInstruction() ||
+        a.isInitializerInstruction(inst))
+      return &a;
+  return nullptr;
+}
+
 DifferentiableActivityInfo::DifferentiableActivityInfo(
     DifferentiableActivityCollection &parent, GenericSignature derivGenSig)
     : parent(parent), derivativeGenericSignature(derivGenSig) {
-  asyncLet = findAsyncLet(parent.function);
+  asyncLets = findAsyncLets(parent.function);
   analyze(parent.domInfo, parent.postDomInfo);
 }
 
@@ -265,9 +296,9 @@ void DifferentiableActivityInfo::setVariedAndPropagateToUsers(
     return;
   // Set the value as varied.
   variedValueSets[independentVariableIndex].insert(value);
-  if (asyncLet && value == asyncLet->getBuffer())
-    setVariedAndPropagateToUsers(asyncLet->resultAddress,
-                                independentVariableIndex);
+  if (auto *a = getAsyncLet(value->getDefiningInstruction());
+      a && value == a->getBuffer())
+    setVariedAndPropagateToUsers(a->resultAddress, independentVariableIndex);
   // Propagate variedness to users.
   for (auto *use : value->getUses())
     propagateVaried(use, independentVariableIndex);
@@ -276,14 +307,14 @@ void DifferentiableActivityInfo::setVariedAndPropagateToUsers(
 void DifferentiableActivityInfo::propagateVaried(
     Operand *operand, unsigned independentVariableIndex) {
   auto *inst = operand->getUser();
-  if (asyncLet) {
-    if (inst == asyncLet->start) {
-      if (operand->get() == asyncLet->start->getArguments()[1])
+  if (auto *a = getAsyncLet(inst)) {
+    if (inst == a->start) {
+      if (operand->get() == a->start->getArguments()[1])
         propagateVariedInwardsThroughProjections(
-            asyncLet->getBuffer(), independentVariableIndex);
+            a->getBuffer(), independentVariableIndex);
       return; // The handle is not the numerical result.
     }
-    if (inst == asyncLet->start->getArguments()[2]->getDefiningInstruction())
+    if (inst == a->start->getArguments()[2]->getDefiningInstruction())
       return; // Do not mark the raw pointer varied.
   }
   // Propagate variedness for the given operand.
@@ -461,11 +492,11 @@ void DifferentiableActivityInfo::setUsefulAndPropagateToOperands(
   // Skip already-useful values to prevent infinite recursion.
   if (isUseful(value, dependentVariableIndex))
     return;
-  if (asyncLet && (value == asyncLet->getBuffer() ||
-                  value == asyncLet->resultAddress)) {
-    setUseful(asyncLet->getBuffer(), dependentVariableIndex);
-    setUseful(asyncLet->resultAddress, dependentVariableIndex);
-    setUsefulAndPropagateToOperands(asyncLet->start->getArguments()[1],
+  if (auto *a = getAsyncLet(value->getDefiningInstruction());
+      a && (value == a->getBuffer() || value == a->resultAddress)) {
+    setUseful(a->getBuffer(), dependentVariableIndex);
+    setUseful(a->resultAddress, dependentVariableIndex);
+    setUsefulAndPropagateToOperands(a->start->getArguments()[1],
                                    dependentVariableIndex);
     return;
   }
