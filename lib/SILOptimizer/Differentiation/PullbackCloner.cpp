@@ -656,6 +656,10 @@ private:
   /// This method first tries to find an existing entry in the adjoint buffer
   /// mapping. If no entry exists, creates a zero adjoint buffer.
   SILValue getAdjointBuffer(SILBasicBlock *origBB, SILValue originalValue) {
+    if (auto *a = getPullbackInfo().getAsyncLet(
+            originalValue->getDefiningInstruction());
+        a && a->isResultAddress(originalValue->getDefiningInstruction()))
+      originalValue = a->getBuffer(); // One adjoint for the typed storage.
     assert(getTangentValueCategory(originalValue) == SILValueCategory::Address);
     assert(originalValue->getFunction() == &getOriginal());
     auto insertion = bufferMap.try_emplace({origBB, originalValue}, SILValue());
@@ -986,10 +990,93 @@ public:
     errorOccurred = true;
   }
 
+  void visitBuiltinInst(BuiltinInst *bi) {
+    if (auto *a = getPullbackInfo().getAsyncLet(bi); a && bi == a->start) {
+      assert(shouldDifferentiateAsyncLet(bi, getActivityInfo(), getConfig()));
+      return;
+    }
+    visitSILInstruction(bi);
+  }
+
   /// Handle `apply` instruction.
   ///   Original: (y0, y1, ...) = apply @fn (x0, x1, ...)
   ///    Adjoint: (adj[x0], adj[x1], ...) += apply @fn_pullback (adj[y0], ...)
   void visitApplyInst(ApplyInst *ai) {
+    if (auto *a = getPullbackInfo().getAsyncLet(ai); a && a->isGet(ai)) {
+      auto *bb = ai->getParent();
+      auto loc = ai->getLoc();
+      auto index = getPullbackInfo().lookUpLinearMapIndex(ai);
+      auto saved = pullbackTupleElements.lookup(bb);
+      assert(index < saved.size());
+      SILValue pb = saved[index];
+      auto type = pb->getType().castTo<SILFunctionType>();
+      assert(!type->isAsync() && !type->hasErrorResult());
+      // Invoke the saved closure with its actual conventions. In particular,
+      // do not reabstract it back into the task field's all-indirect form.
+      auto buffer = getAdjointBuffer(bb, a->getBuffer());
+      SmallVector<SILValue, 8> arguments;
+      SmallVector<AllocStackInst *, 4> indirectResults;
+      for (auto result : type->getIndirectFormalResults()) {
+        auto resultType = remapType(result.getSILStorageInterfaceType());
+        assert(resultType.getObjectType().isTrivial(getPullback()));
+        auto *storage = builder.createAllocStack(loc, resultType);
+        indirectResults.push_back(storage);
+        arguments.push_back(storage);
+      }
+      // A tuple seed can be expanded into several formal parameters by normal
+      // function lowering. Project only tuples, never a nominal tangent type.
+      SmallVector<SILValue, 4> seeds{buffer};
+      for (auto parameter : type->getParameters()) {
+        auto expected = remapType(parameter.getSILStorageInterfaceType());
+        assert(!parameter.isIndirectInOut() &&
+               expected.getObjectType().isTrivial(getPullback()));
+        while (!seeds.empty() &&
+               seeds.back()->getType().getObjectType() !=
+                   expected.getObjectType()) {
+          auto address = seeds.pop_back_val();
+          auto tuple = address->getType().castTo<TupleType>();
+          for (unsigned i = tuple->getNumElements(); i != 0; --i)
+            seeds.push_back(builder.createTupleElementAddr(loc, address, i - 1));
+        }
+        assert(!seeds.empty() && "missing pullback seed component");
+        auto seed = seeds.pop_back_val();
+        arguments.push_back(expected.isAddress()
+                                ? seed
+                                : builder.emitLoadValueOperation(
+                                      loc, seed, LoadOwnershipQualifier::Copy));
+      }
+      assert(seeds.empty() && "unconsumed pullback seed components");
+      auto *call = builder.createApply(loc, pb, SubstitutionMap(), arguments);
+      builder.emitDestroyValueOperation(loc, pb);
+      SmallVector<SILValue, 8> directResults, gradients;
+      if (type->getNumResults() - type->getNumIndirectFormalResults() == 1)
+        directResults.push_back(call);
+      else
+        extractAllElements(call, builder, directResults);
+      collectAllActualResultsInTypeOrder(call, directResults, gradients);
+      auto captures = a->initializer->getArguments();
+      auto *parameters = a->getParameterIndices();
+      assert(gradients.size() == parameters->getNumIndices() &&
+             "expected one formal gradient per selected capture");
+      unsigned resultIndex = 0;
+      for (auto parameter : parameters->getIndices()) {
+        auto gradient = gradients[resultIndex++];
+        if (gradient->getType().isAddress())
+          gradient = builder.emitLoadValueOperation(
+              loc, gradient, LoadOwnershipQualifier::Take);
+        assert(gradient->getType().isTrivial(getPullback()) &&
+               gradient->getType() ==
+                   getRemappedTangentType(captures[parameter]->getType()));
+        recordTemporary(gradient);
+        if (getActivityInfo().isActive(captures[parameter], getConfig()))
+          addAdjointValue(bb, captures[parameter],
+                          makeConcreteAdjointValue(gradient), loc);
+      }
+      for (auto *storage : llvm::reverse(indirectResults))
+        builder.createDeallocStack(loc, storage);
+      builder.emitZeroIntoBuffer(loc, buffer, IsNotInitialization);
+      return;
+    }
     assert(getPullbackInfo().shouldDifferentiateApplySite(ai));
 
     // Skip `array.uninitialized_intrinsic` applications, which have special
@@ -2348,6 +2435,17 @@ bool PullbackCloner::Implementation::run() {
       // If value is not active, skip.
       if (!getActivityInfo().isActive(v, getConfig()))
         return false;
+      // The recognized initializer chain carries dependency information, but
+      // its capture adjoints are produced by the child pullback at the wait.
+      // These closure values therefore need no independent adjoints.
+      if (auto *a = getPullbackInfo().getAsyncLet(v->getDefiningInstruction())) {
+        if (a->isInitializerInstruction(v->getDefiningInstruction()))
+          return false;
+        // A typed result address aliases the child's allocation. Do not
+        // propagate another adjoint for this alias across branch edges.
+        if (a->isResultAddress(v->getDefiningInstruction()))
+          return false;
+      }
       // If active value has already been visited, skip.
       if (visited.count(v))
         return false;

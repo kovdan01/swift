@@ -199,9 +199,37 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
     return alloc;
   };
 
-  // Handle indirect results.
-  assert(fromType->getNumResults() == toType->getNumResults());
-  for (unsigned resIdx : range(toType->getNumResults())) {
+  // The same result aggregate may be returned directly or through a single
+  // indirect tuple. Handle that grouping here, while retaining the ordinary
+  // parameter, call, ownership and cleanup paths below.
+  auto canPackResults = [&](CanSILFunctionType direct,
+                            CanSILFunctionType indirect) {
+    if (direct->getNumIndirectFormalResults() ||
+        indirect->getNumResults() != 1 ||
+        !indirect->getSingleResult().isFormalIndirect())
+      return false;
+    auto aggregate = direct->getDirectFormalResultsType(
+        module, builder.getTypeExpansionContext(), thunk->hasLoweredAddresses());
+    auto storage = indirect->getSingleResult().getSILStorageInterfaceType()
+                       .getObjectType();
+    return storage.is<TupleType>() && aggregate == storage &&
+           storage.isTrivial(*thunk);
+  };
+  bool packResults = canPackResults(fromType, toType);
+  bool unpackResults = canPackResults(toType, fromType);
+  SILValue aggregateBuffer;
+  if (packResults) {
+    aggregateBuffer = *toArgIter++;
+  } else if (unpackResults) {
+    aggregateBuffer = createAllocStack(fromConv.getSILType(
+        fromType->getSingleResult(), builder.getTypeExpansionContext()));
+    arguments.push_back(aggregateBuffer);
+  }
+  unsigned numResults =
+      (packResults || unpackResults) ? 0 : toType->getNumResults();
+  assert(packResults || unpackResults ||
+         fromType->getNumResults() == toType->getNumResults());
+  for (unsigned resIdx : range(numResults)) {
     auto fromRes = fromConv.getResults()[resIdx];
     auto toRes = toConv.getResults()[resIdx];
     // No abstraction mismatch.
@@ -267,13 +295,24 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
   SmallVector<SILValue, 4> results;
   // Extract all direct results.
   SmallVector<SILValue, 4> directResults;
-  extractAllElements(apply, builder, directResults);
+  // One formal tuple result is not several formal results.
+  if (fromType->getNumResults() - fromType->getNumIndirectFormalResults() == 1)
+    directResults.push_back(apply);
+  else
+    extractAllElements(apply, builder, directResults);
 
   auto fromDirResultsIter = directResults.begin();
   auto fromIndResultsIter = apply->getIndirectSILResults().begin();
   auto toIndResultsIter = thunk->getIndirectResults().begin();
-  // Reabstract results.
-  for (unsigned resIdx : range(toType->getNumResults())) {
+  if (packResults) {
+    builder.emitStoreValueOperation(loc, apply, aggregateBuffer,
+                                    StoreOwnershipQualifier::Init);
+  } else if (unpackResults) {
+    results.push_back(builder.emitLoadValueOperation(
+        loc, aggregateBuffer, LoadOwnershipQualifier::Take));
+  }
+  // Reabstract the ordinary one-to-one results.
+  for (unsigned resIdx : range(numResults)) {
     auto fromRes = fromConv.getResults()[resIdx];
     auto toRes = toConv.getResults()[resIdx];
     // Check function-typed results.
