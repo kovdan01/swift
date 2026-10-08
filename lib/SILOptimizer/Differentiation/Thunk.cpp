@@ -199,9 +199,45 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
     return alloc;
   };
 
-  // Handle indirect results.
-  assert(fromType->getNumResults() == toType->getNumResults());
-  for (unsigned resIdx : range(toType->getNumResults())) {
+  // A two-capture Float pullback has two direct results, whereas its opaque
+  // tuple-field representation has one indirect (Float, Float) result.
+  // Handle only this flat, trivial regrouping; leave the existing per-result
+  // algorithm and its ownership handling unchanged for all other signatures.
+  auto floatType = module.getASTContext().getFloatType()->getCanonicalType();
+  auto hasDirectFloatPair = [&](CanSILFunctionType type) {
+    return type->getNumResults() == 2 &&
+           llvm::all_of(type->getResults(), [&](SILResultInfo result) {
+             return result.getConvention() == ResultConvention::Unowned &&
+                    result.getInterfaceType() == floatType;
+           });
+  };
+  auto hasIndirectFloatPair = [&](CanSILFunctionType type) {
+    if (type->getNumResults() != 1 ||
+        !type->getSingleResult().isFormalIndirect())
+      return false;
+    auto tuple = type->getSingleResult().getSILStorageInterfaceType()
+                     .getObjectType();
+    return tuple.is<TupleType>() &&
+           tuple.castTo<TupleType>()->getNumElements() == 2 &&
+           tuple.getTupleElementType(0).getASTType() == floatType &&
+           tuple.getTupleElementType(1).getASTType() == floatType;
+  };
+  bool packPair = hasDirectFloatPair(fromType) && hasIndirectFloatPair(toType);
+  bool unpackPair = hasIndirectFloatPair(fromType) && hasDirectFloatPair(toType);
+  SILValue pairBuffer;
+  if (packPair) {
+    pairBuffer = *toArgIter++;
+  } else if (unpackPair) {
+    pairBuffer = createAllocStack(fromConv.getSILType(
+        fromType->getSingleResult(), builder.getTypeExpansionContext()));
+    arguments.push_back(pairBuffer);
+  }
+
+  // Ordinary one-to-one indirect results (the pair is handled separately).
+  unsigned numResults = (packPair || unpackPair) ? 0 : toType->getNumResults();
+  assert(packPair || unpackPair ||
+         fromType->getNumResults() == toType->getNumResults());
+  for (unsigned resIdx : range(numResults)) {
     auto fromRes = fromConv.getResults()[resIdx];
     auto toRes = toConv.getResults()[resIdx];
     // No abstraction mismatch.
@@ -272,8 +308,20 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
   auto fromDirResultsIter = directResults.begin();
   auto fromIndResultsIter = apply->getIndirectSILResults().begin();
   auto toIndResultsIter = thunk->getIndirectResults().begin();
-  // Reabstract results.
-  for (unsigned resIdx : range(toType->getNumResults())) {
+  if (packPair || unpackPair) {
+    assert(!packPair || directResults.size() == 2);
+    for (unsigned i = 0; i != 2; ++i) {
+      auto address = builder.createTupleElementAddr(loc, pairBuffer, i);
+      if (packPair)
+        builder.emitStoreValueOperation(loc, directResults[i], address,
+                                        StoreOwnershipQualifier::Init);
+      else
+        results.push_back(builder.emitLoadValueOperation(
+            loc, address, LoadOwnershipQualifier::Take));
+    }
+  }
+  // Reabstract ordinary one-to-one results.
+  for (unsigned resIdx : range(numResults)) {
     auto fromRes = fromConv.getResults()[resIdx];
     auto toRes = toConv.getResults()[resIdx];
     // Check function-typed results.

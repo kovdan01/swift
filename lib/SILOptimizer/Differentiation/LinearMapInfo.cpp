@@ -177,12 +177,18 @@ void LinearMapInfo::populateBranchingTraceDecl(SILBasicBlock *originalBB,
 
 
 Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
-  if (auto &a = activityInfo.getAsyncLet(); a && fai.getInstruction() == a->get) {
+  if (auto *a = activityInfo.getAsyncLet(fai.getInstruction());
+      a && fai.getInstruction() == a->get) {
     assert(kind == AutoDiffLinearMapKind::Pullback);
     // The prototype restricts both primal and tangent to Float.
     auto type = a->getBuffer()->getType().getASTType();
     AnyFunctionType::Param seed(type, Identifier(), ParameterTypeFlags());
-    return FunctionType::get({seed}, /*yields*/ {}, type,
+    Type gradients = type;
+    if (a->initializer->getArguments().size() == 2) {
+      SmallVector<TupleTypeElt, 2> fields{type, type};
+      gradients = TupleType::get(fields, context.getASTContext());
+    }
+    return FunctionType::get({seed}, /*yields*/ {}, gradients,
                              FunctionType::ExtInfo());
   }
   SmallVector<SILValue, 4> allResults;
@@ -461,7 +467,7 @@ void LinearMapInfo::generateDifferentiationDataStructures(
 /// 3. The instruction has both an active result (direct or indirect) and an
 ///    active argument.
 bool LinearMapInfo::shouldDifferentiateApplySite(FullApplySite applySite) {
-  if (auto &a = activityInfo.getAsyncLet();
+  if (auto *a = activityInfo.getAsyncLet(applySite.getInstruction());
       a && applySite.getInstruction() == a->get) {
     assert(kind == AutoDiffLinearMapKind::Pullback);
     return activityInfo.isActive(a->getBuffer(), config);
@@ -522,7 +528,7 @@ static bool shouldDifferentiateInjectEnumAddr(
 ///    ending, or destroying on an active operand.
 /// 5. The instruction creates an SSA copy of an active operand.
 bool LinearMapInfo::shouldDifferentiateInstruction(SILInstruction *inst) {
-  if (auto &a = activityInfo.getAsyncLet())
+  if (auto *a = activityInfo.getAsyncLet(inst))
     // These closures are replaced as part of the child computation. Their
     // captured-input adjoints are produced by the saved child pullback.
     if (a->isInitializerInstruction(inst))
