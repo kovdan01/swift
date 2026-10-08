@@ -249,10 +249,15 @@ public:
         cast<TupleElementAddrInst>(getOpValue(a.getBuffer()))->getOperand());
   }
 
+  const AsyncLetInfo *getActiveAsyncLet(SILInstruction *inst) {
+    auto *a = activityInfo.getAsyncLet(inst);
+    return a && activityInfo.isActive(a->getBuffer(), getConfig()) ? a : nullptr;
+  }
+
   Type getAsyncLetResultASTType(const AsyncLetInfo &a) {
     SmallVector<TupleTypeElt, 2> fields{
         a.getBuffer()->getType().getASTType(),
-        TupleTypeElt(pullbackInfo.lookUpLinearMapType(a.reads.front().get))};
+        TupleTypeElt(a.getPullbackType())};
     return TupleType::get(fields, getASTContext());
   }
 
@@ -261,11 +266,8 @@ public:
                       ->getReferencedFunction();
     auto *parameters = a.getParameterIndices();
     auto *results = IndexSubset::get(getASTContext(), 1, {0});
-    assert(getConfig().parameterIndices->getNumIndices() ==
-           a.initializer->getArguments().size());
-    for (unsigned i = 0; i != a.initializer->getArguments().size(); ++i)
-      assert(getConfig().parameterIndices->contains(i) &&
-             "differentiate all Float inputs, not the Bool flag");
+    assert(parameters->getNumIndices() >= 1 &&
+           parameters->getNumIndices() <= 2);
     auto *childWitness = getExactDifferentiabilityWitness(
         getModule(), child, parameters, results);
     assert(childWitness && childWitness->getVJP());
@@ -346,7 +348,7 @@ public:
   }
 
   void visitAllocStackInst(AllocStackInst *inst) {
-    auto *a = activityInfo.getAsyncLet(inst);
+    auto *a = getActiveAsyncLet(inst);
     if (!a || inst != a->getBuffer()) {
       TypeSubstCloner::visitAllocStackInst(inst);
       return;
@@ -361,7 +363,7 @@ public:
   }
 
   void visitAddressToPointerInst(AddressToPointerInst *inst) {
-    auto *a = activityInfo.getAsyncLet(inst);
+    auto *a = getActiveAsyncLet(inst);
     if (!a || inst != a->start->getArguments()[2]->getDefiningInstruction()) {
       TypeSubstCloner::visitAddressToPointerInst(inst);
       return;
@@ -372,15 +374,15 @@ public:
   }
 
   void visitPointerToAddressInst(PointerToAddressInst *inst) {
-    auto *a = activityInfo.getAsyncLet(inst);
-    if (a && a->getRead(inst))
+    auto *a = getActiveAsyncLet(inst);
+    if (a && a->isResultAddress(inst))
       mapValue(inst, getOpValue(a->getBuffer()));
     else
       TypeSubstCloner::visitPointerToAddressInst(inst);
   }
 
   void visitPartialApplyInst(PartialApplyInst *inst) {
-    auto *a = activityInfo.getAsyncLet(inst);
+    auto *a = getActiveAsyncLet(inst);
     if (!a || inst != a->initializer) {
       TypeSubstCloner::visitPartialApplyInst(inst);
       return;
@@ -397,7 +399,7 @@ public:
   }
 
   void visitConvertFunctionInst(ConvertFunctionInst *inst) {
-    auto *a = activityInfo.getAsyncLet(inst);
+    auto *a = getActiveAsyncLet(inst);
     if (!a || !a->isInitializerInstruction(inst)) {
       TypeSubstCloner::visitConvertFunctionInst(inst);
       return;
@@ -412,7 +414,7 @@ public:
   }
 
   void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *inst) {
-    auto *a = activityInfo.getAsyncLet(inst);
+    auto *a = getActiveAsyncLet(inst);
     if (!a || !a->isInitializerInstruction(inst)) {
       TypeSubstCloner::visitConvertEscapeToNoEscapeInst(inst);
       return;
@@ -427,7 +429,7 @@ public:
   }
 
   void visitBuiltinInst(BuiltinInst *inst) {
-    auto *a = activityInfo.getAsyncLet(inst);
+    auto *a = getActiveAsyncLet(inst);
     if (!a || inst != a->start) {
       TypeSubstCloner::visitBuiltinInst(inst);
       return;
@@ -445,7 +447,7 @@ public:
 
   void visitDeallocStackInst(DeallocStackInst *inst) {
     auto *a =
-        activityInfo.getAsyncLet(inst->getOperand()->getDefiningInstruction());
+        getActiveAsyncLet(inst->getOperand()->getDefiningInstruction());
     if (a && inst->getOperand() == a->getBuffer())
       Builder.createDeallocStack(inst->getLoc(), getAsyncLetResult(*a));
     else
@@ -969,7 +971,7 @@ public:
   // If an `apply` has active results or active inout arguments, replace it
   // with an `apply` of its VJP.
   void visitApplyInst(ApplyInst *ai) {
-    if (auto *a = activityInfo.getAsyncLet(ai); a && a->getRead(ai)) {
+    if (auto *a = getActiveAsyncLet(ai); a && a->isGet(ai)) {
       assert(pullbackInfo.shouldDifferentiateApplySite(ai));
       TypeSubstCloner::visitApplyInst(ai); // The real wait still executes.
       auto loc = ai->getLoc();
@@ -986,6 +988,8 @@ public:
       // supplied by getPullbackValues, not stored in this vector.
       assert(saved.size() + unsigned(!ai->getParent()->isEntry()) ==
              pullbackInfo.lookUpLinearMapIndex(ai));
+      // A loop block's terminator stores this tuple in the existing AD
+      // subcontext on each iteration. There is no mutable per-child PB slot.
       saved.push_back(pb);
       return;
     }

@@ -178,18 +178,9 @@ void LinearMapInfo::populateBranchingTraceDecl(SILBasicBlock *originalBB,
 
 Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
   if (auto *a = activityInfo.getAsyncLet(fai.getInstruction());
-      a && a->getRead(fai.getInstruction())) {
+      a && a->isGet(fai.getInstruction())) {
     assert(kind == AutoDiffLinearMapKind::Pullback);
-    // The prototype restricts both primal and tangent to Float.
-    auto type = a->getBuffer()->getType().getASTType();
-    AnyFunctionType::Param seed(type, Identifier(), ParameterTypeFlags());
-    Type gradients = type;
-    if (a->initializer->getArguments().size() == 2) {
-      SmallVector<TupleTypeElt, 2> fields{type, type};
-      gradients = TupleType::get(fields, context.getASTContext());
-    }
-    return FunctionType::get({seed}, /*yields*/ {}, gradients,
-                             FunctionType::ExtInfo());
+    return a->getPullbackType();
   }
   SmallVector<SILValue, 4> allResults;
   SmallVector<unsigned, 8> activeParamIndices;
@@ -468,10 +459,11 @@ void LinearMapInfo::generateDifferentiationDataStructures(
 ///    active argument.
 bool LinearMapInfo::shouldDifferentiateApplySite(FullApplySite applySite) {
   if (auto *a = activityInfo.getAsyncLet(applySite.getInstruction());
-      a && a->getRead(applySite.getInstruction())) {
+      a && a->isGet(applySite.getInstruction())) {
     assert(kind == AutoDiffLinearMapKind::Pullback);
-    return activityInfo.isActive(
-        a->getRead(applySite.getInstruction())->address, config);
+    // The get has no numerical SIL result. Its output is the typed buffer,
+    // whose adjoint ordinary loads populate across branches and loop edges.
+    return activityInfo.isActive(a->getBuffer(), config);
   }
   // Function applications with an active inout argument should be
   // differentiated.
