@@ -95,18 +95,71 @@ bool AsyncLetInfo::isInitializerInstruction(SILInstruction *inst) const {
   }
 }
 
+const AsyncLetInfo::Read *AsyncLetInfo::getRead(SILInstruction *inst) const {
+  for (const auto &read : reads)
+    if (inst == read.get || inst == read.address)
+      return &read;
+  return nullptr;
+}
+
+// Keep this extension to the actual lowering of a single if/else. No loop,
+// general lifetime-state solver, or new AD branch trace is introduced here.
+static void checkAsyncLetCFG(SILFunction &function) {
+  if (function.size() == 1) {
+    assert(isa<ReturnInst>(function.front().getTerminator()));
+  } else {
+    assert(function.size() == 4 && "expected one if/else and a return join");
+    auto *entry = function.getEntryBlock();
+    auto *branch = cast<CondBranchInst>(entry->getTerminator());
+    auto *left = branch->getTrueBB();
+    auto *right = branch->getFalseBB();
+    assert(left != right && left->getSinglePredecessorBlock() == entry &&
+           right->getSinglePredecessorBlock() == entry);
+    assert(left->getNumArguments() == 0 && right->getNumArguments() == 0);
+    auto *join = cast<BranchInst>(left->getTerminator())->getDestBB();
+    assert(cast<BranchInst>(right->getTerminator())->getDestBB() == join &&
+           join != entry && join != left && join != right);
+    assert(join->getNumArguments() == 1 &&
+           cast<ReturnInst>(join->getTerminator())->getOperand() ==
+               join->getArgument(0));
+    auto *flag = cast<StructExtractInst>(branch->getCondition());
+    assert(flag->getOperand() == function.getArguments().back() &&
+           flag->getOperand()->getType().getASTType() ==
+               function.getASTContext().getBoolType()->getCanonicalType());
+  }
+  for (auto &bb : function)
+    for (auto &inst : bb)
+      if (auto *hop = dyn_cast<HopToExecutorInst>(&inst))
+        assert(isa<EnumInst>(hop->getTargetExecutor()) &&
+               !cast<EnumInst>(hop->getTargetExecutor())->hasOperand());
+}
+
+static void checkAsyncLetOrder(ArrayRef<SILInstruction *> order) {
+  unsigned next = 0;
+  for (auto &inst : *order.front()->getParent())
+    if (next != order.size() && &inst == order[next])
+      ++next;
+  assert(next == order.size() && "unexpected async-let instruction order");
+}
+
 static AsyncLetInfo findAsyncLet(BuiltinInst *start) {
   auto &function = *start->getFunction();
   AsyncLetInfo a;
   a.start = start;
 
-  assert(function.size() == 1 && function.isAsync());
+  assert(function.isAsync());
   assert(!function.isSerialized() &&
          !function.getActorIsolation().isActorIsolated());
   auto type = function.getLoweredFunctionType();
   assert(!type->getSubstGenericSignature() && !type->hasErrorResult());
-  assert((type->getNumParameters() == 1 || type->getNumParameters() == 2) &&
+  assert(type->getNumParameters() >= 1 && type->getNumParameters() <= 3 &&
          type->getNumIndirectFormalResults() == 0 && type->getNumResults() == 1);
+  // An optional trailing Bool controls the branch, not the derivative.
+  unsigned numInputs = type->getNumParameters();
+  if (function.getArguments().back()->getType().getASTType() ==
+      function.getASTContext().getBoolType()->getCanonicalType())
+    --numInputs;
+  assert((numInputs == 1 || numInputs == 2) && "expected Float inputs");
   assert(a.start->getArguments().size() == 3);
   assert(a.start->getSubstitutions().getReplacementTypes().size() == 1 &&
          a.start->getSubstitutions().getConformances().empty());
@@ -132,81 +185,110 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start) {
   }
   assert(a.initializer->getSubstitutionMap().empty());
   auto captures = a.initializer->getArguments();
-  assert(captures.size() == type->getNumParameters());
+  assert(captures.size() == numInputs);
   // Require the same parent parameters, but preserve their actual capture
   // order. The child VJP's gradient i belongs to captures[i], not necessarily
   // to parent parameter i (for example, workload2(b, a)).
   for (unsigned i = 0; i != captures.size(); ++i) {
     assert(llvm::is_contained(captures, SILValue(function.getArgument(i))) &&
-           "expected all parent parameters captured, in any order");
+           "expected all Float parent parameters captured, in any order");
     assert(captures[i]->getType() == buffer->getType().getObjectType());
   }
   assert(isa<FunctionRefInst>(a.initializer->getCallee()));
 
-  SILInstruction *finish = nullptr, *end = nullptr;
-  LoadInst *read = nullptr;
-  DeallocStackInst *dealloc = nullptr;
+  // A branch-local child is read and cleaned up in its own block. An entry
+  // child is read and cleaned up once in EACH arm, never twice on one path.
+  SmallVector<SILBasicBlock *, 2> readBlocks;
+  if (function.size() != 1) {
+    auto *branch = cast<CondBranchInst>(function.front().getTerminator());
+    if (start->getParent()->isEntry()) {
+      readBlocks.push_back(branch->getTrueBB());
+      readBlocks.push_back(branch->getFalseBB());
+    } else {
+      assert(start->getParent() == branch->getTrueBB() ||
+             start->getParent() == branch->getFalseBB());
+      readBlocks.push_back(start->getParent());
+    }
+  } else {
+    readBlocks.push_back(start->getParent());
+  }
+  checkAsyncLetOrder({buffer, a.initializer, start});
+
+  SmallVector<SILInstruction *, 2> gets, addresses, finishes, ends, deallocs;
   auto pointer = a.start->getArguments()[2];
   for (auto *use : pointer->getUses()) {
     auto *inst = use->getUser();
     if (inst == a.start)
       continue;
     if (auto *addr = dyn_cast<PointerToAddressInst>(inst)) {
-      assert(!a.resultAddress && addr->getType() == buffer->getType());
-      a.resultAddress = addr;
-      assert(addr->hasOneUse());
-      read = cast<LoadInst>((*addr->use_begin())->getUser());
-      assert(read->getOwnershipQualifier() == LoadOwnershipQualifier::Trivial);
+      assert(addr->getType() == buffer->getType() && addr->hasOneUse());
+      auto *load = cast<LoadInst>((*addr->use_begin())->getUser());
+      assert(load->getOwnershipQualifier() == LoadOwnershipQualifier::Trivial);
+      addresses.push_back(addr);
     } else if (auto *apply = dyn_cast<ApplyInst>(inst)) {
       auto *callee = apply->getCalleeFunction();
       assert(callee && apply->getArguments().size() == 2 &&
-             apply->getArguments()[0] == a.start);
-      // Deliberately match the runtime symbols for this prototype: no stdlib
-      // rebuild or new semantic attributes are needed.
-      if (callee->getName() == "swift_asyncLet_get") {
-        assert(!a.get);
-        a.get = apply;
-      } else {
-        assert(callee->getName() == "swift_asyncLet_finish" && !finish);
-        finish = apply;
+             apply->getArguments()[0] == a.start &&
+             apply->getArguments()[1] == pointer);
+      if (callee->getName() == "swift_asyncLet_get")
+        gets.push_back(apply);
+      else {
+        assert(callee->getName() == "swift_asyncLet_finish");
+        finishes.push_back(apply);
       }
     } else {
-      assert(isBuiltinInst(inst, BuiltinValueKind::FinishAsyncLet) && !finish);
-      assert(cast<BuiltinInst>(inst)->getArguments()[0] == a.start);
-      finish = inst;
+      assert(isBuiltinInst(inst, BuiltinValueKind::FinishAsyncLet));
+      auto args = cast<BuiltinInst>(inst)->getArguments();
+      assert(args.size() == 2 && args[0] == a.start && args[1] == pointer);
+      finishes.push_back(inst);
     }
   }
   for (auto *use : a.start->getUses()) {
     auto *inst = use->getUser();
-    if (inst == a.get || inst == finish)
+    if (llvm::is_contained(gets, inst) || llvm::is_contained(finishes, inst))
       continue;
-    assert(isBuiltinInst(inst, BuiltinValueKind::EndAsyncLetLifetime) && !end);
-    end = inst;
+    assert(isBuiltinInst(inst, BuiltinValueKind::EndAsyncLetLifetime));
+    ends.push_back(inst);
   }
   for (auto *use : buffer->getUses()) {
     auto *inst = use->getUser();
     if (inst == pointer->getDefiningInstruction() || isa<DebugValueInst>(inst))
       continue;
-    assert(!dealloc);
-    dealloc = cast<DeallocStackInst>(inst);
+    deallocs.push_back(cast<DeallocStackInst>(inst));
   }
-  assert(a.get && a.resultAddress && read && finish && end && dealloc);
-  assert(cast<ReturnInst>(function.front().getTerminator())
-             ->getOperand()->getType() == read->getType());
-  SILInstruction *order[] = {buffer, a.initializer, a.start, a.get,
-                            a.resultAddress, read, finish, end, dealloc};
-  unsigned next = 0;
-  for (auto &inst : function.front()) {
-    if (auto *hop = dyn_cast<HopToExecutorInst>(&inst))
-      assert(isa<EnumInst>(hop->getTargetExecutor()) &&
-             !cast<EnumInst>(hop->getTargetExecutor())->hasOperand());
-    if (next != 9 && &inst == order[next])
-      ++next;
+  assert(gets.size() == readBlocks.size() && addresses.size() == gets.size() &&
+         finishes.size() == gets.size() && ends.size() == gets.size() &&
+         deallocs.size() == gets.size());
+  auto oneInBlock = [](ArrayRef<SILInstruction *> sites, SILBasicBlock *bb) {
+    SILInstruction *found = nullptr;
+    for (auto *site : sites)
+      if (site->getParent() == bb) {
+        assert(!found && "only one read/cleanup per child per arm");
+        found = site;
+      }
+    assert(found && "missing async-let read or cleanup in this arm");
+    return found;
+  };
+  for (auto *bb : readBlocks) {
+    auto *get = cast<ApplyInst>(oneInBlock(gets, bb));
+    auto *address = cast<PointerToAddressInst>(oneInBlock(addresses, bb));
+    auto *load = cast<LoadInst>((*address->use_begin())->getUser());
+    if (bb == start->getParent())
+      checkAsyncLetOrder({start, get});
+    checkAsyncLetOrder({get, address, load, oneInBlock(finishes, bb),
+                       oneInBlock(ends, bb), oneInBlock(deallocs, bb)});
+    a.reads.push_back({get, address});
   }
-  assert(next == 9 && "unexpected async-let instruction order");
-  LLVM_DEBUG(getADDebugStream() << "Matched Float async let:\n"
-                               << *a.start << *a.initializer << *a.get
-                               << *a.resultAddress);
+  auto *returnBB = &*function.findReturnBB();
+  assert(cast<ReturnInst>(returnBB->getTerminator())->getOperand()->getType() ==
+         buffer->getType().getObjectType());
+  LLVM_DEBUG({
+    getADDebugStream() << "Matched Float async let with " << a.reads.size()
+                       << " alternative read(s):\n"
+                       << *a.start << *a.initializer;
+    for (const auto &read : a.reads)
+      llvm::dbgs() << *read.get << *read.address;
+  });
   return a;
 }
 
@@ -218,8 +300,11 @@ SmallVector<AsyncLetInfo, 2> swift::findAsyncLets(SILFunction &function) {
   for (auto &bb : function)
     for (auto &inst : bb)
       if (auto *start = isBuiltinInst(
-              &inst, BuiltinValueKind::StartAsyncLetWithLocalBuffer))
+              &inst, BuiltinValueKind::StartAsyncLetWithLocalBuffer)) {
+        if (result.empty())
+          checkAsyncLetCFG(function);
         result.push_back(findAsyncLet(start));
+      }
   return result;
 }
 
@@ -228,8 +313,7 @@ DifferentiableActivityInfo::getAsyncLet(SILInstruction *inst) const {
   if (!inst)
     return nullptr;
   for (const auto &a : asyncLets)
-    if (inst == a.start || inst == a.get || inst == a.resultAddress ||
-        inst == a.getBuffer() ||
+    if (inst == a.start || a.getRead(inst) || inst == a.getBuffer() ||
         inst == a.start->getArguments()[2]->getDefiningInstruction() ||
         a.isInitializerInstruction(inst))
       return &a;
@@ -301,7 +385,8 @@ void DifferentiableActivityInfo::setVariedAndPropagateToUsers(
   variedValueSets[independentVariableIndex].insert(value);
   if (auto *a = getAsyncLet(value->getDefiningInstruction());
       a && value == a->getBuffer())
-    setVariedAndPropagateToUsers(a->resultAddress, independentVariableIndex);
+    for (const auto &read : a->reads)
+      setVariedAndPropagateToUsers(read.address, independentVariableIndex);
   // Propagate variedness to users.
   for (auto *use : value->getUses())
     propagateVaried(use, independentVariableIndex);
@@ -496,9 +581,11 @@ void DifferentiableActivityInfo::setUsefulAndPropagateToOperands(
   if (isUseful(value, dependentVariableIndex))
     return;
   if (auto *a = getAsyncLet(value->getDefiningInstruction());
-      a && (value == a->getBuffer() || value == a->resultAddress)) {
+      a && (value == a->getBuffer() ||
+            a->getRead(value->getDefiningInstruction()))) {
     setUseful(a->getBuffer(), dependentVariableIndex);
-    setUseful(a->resultAddress, dependentVariableIndex);
+    for (const auto &read : a->reads)
+      setUseful(read.address, dependentVariableIndex);
     setUsefulAndPropagateToOperands(a->start->getArguments()[1],
                                    dependentVariableIndex);
     return;
