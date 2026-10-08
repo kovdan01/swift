@@ -13,6 +13,7 @@
 #define DEBUG_TYPE "differentiation"
 
 #include "swift/AST/Builtins.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/CommandLine.h"
 #include "swift/SILOptimizer/Analysis/DifferentiableActivityAnalysis.h"
 #include "swift/SILOptimizer/Differentiation/Common.h"
@@ -132,9 +133,12 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start) {
   assert(a.initializer->getSubstitutionMap().empty());
   auto captures = a.initializer->getArguments();
   assert(captures.size() == type->getNumParameters());
+  // Require the same parent parameters, but preserve their actual capture
+  // order. The child VJP's gradient i belongs to captures[i], not necessarily
+  // to parent parameter i (for example, workload2(b, a)).
   for (unsigned i = 0; i != captures.size(); ++i) {
-    assert(captures[i] == function.getArgument(i) &&
-           "expected all parent parameters captured in order");
+    assert(llvm::is_contained(captures, SILValue(function.getArgument(i))) &&
+           "expected all parent parameters captured, in any order");
     assert(captures[i]->getType() == buffer->getType().getObjectType());
   }
   assert(isa<FunctionRefInst>(a.initializer->getCallee()));
@@ -207,16 +211,15 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start) {
 }
 
 SmallVector<AsyncLetInfo, 2> swift::findAsyncLets(SILFunction &function) {
+  // The inline capacity is not a limit on the number of children.
   SmallVector<AsyncLetInfo, 2> result;
   if (!EnableAsyncAutoDiff)
     return result;
   for (auto &bb : function)
     for (auto &inst : bb)
       if (auto *start = isBuiltinInst(
-              &inst, BuiltinValueKind::StartAsyncLetWithLocalBuffer)) {
-        assert(result.size() < 2 && "at most two async lets in this prototype");
+              &inst, BuiltinValueKind::StartAsyncLetWithLocalBuffer))
         result.push_back(findAsyncLet(start));
-      }
   return result;
 }
 
