@@ -656,6 +656,9 @@ private:
   /// This method first tries to find an existing entry in the adjoint buffer
   /// mapping. If no entry exists, creates a zero adjoint buffer.
   SILValue getAdjointBuffer(SILBasicBlock *origBB, SILValue originalValue) {
+    if (auto &a = getActivityInfo().getAsyncLet();
+        a && originalValue == a->resultAddress)
+      originalValue = a->getBuffer(); // One adjoint for the typed storage.
     assert(getTangentValueCategory(originalValue) == SILValueCategory::Address);
     assert(originalValue->getFunction() == &getOriginal());
     auto insertion = bufferMap.try_emplace({origBB, originalValue}, SILValue());
@@ -990,6 +993,30 @@ public:
   ///   Original: (y0, y1, ...) = apply @fn (x0, x1, ...)
   ///    Adjoint: (adj[x0], adj[x1], ...) += apply @fn_pullback (adj[y0], ...)
   void visitApplyInst(ApplyInst *ai) {
+    if (auto &a = getActivityInfo().getAsyncLet(); a && ai == a->get) {
+      auto *bb = ai->getParent();
+      auto loc = ai->getLoc();
+      auto index = getPullbackInfo().lookUpLinearMapIndex(ai);
+      auto saved = pullbackTupleElements.lookup(bb);
+      assert(index < saved.size());
+      SILValue pb = saved[index];
+      auto type = pb->getType().castTo<SILFunctionType>();
+      assert(!type->isAsync() && !type->hasErrorResult() &&
+             type->getNumIndirectFormalResults() == 0 &&
+             type->getParameters().size() == 1 &&
+             type->getParameters()[0].getConvention() ==
+                 ParameterConvention::Direct_Unowned);
+      // visitLoadOperation has already accumulated the result's seed here.
+      auto buffer = getAdjointBuffer(bb, a->getBuffer());
+      auto seed = builder.createLoad(loc, buffer, LoadOwnershipQualifier::Trivial);
+      auto dx = builder.createApply(loc, pb, SubstitutionMap(), {seed});
+      builder.emitDestroyValueOperation(loc, pb);
+      recordTemporary(dx);
+      addAdjointValue(bb, a->initializer->getArguments()[0],
+                      makeConcreteAdjointValue(dx), loc);
+      builder.emitZeroIntoBuffer(loc, buffer, IsNotInitialization);
+      return;
+    }
     assert(getPullbackInfo().shouldDifferentiateApplySite(ai));
 
     // Skip `array.uninitialized_intrinsic` applications, which have special
