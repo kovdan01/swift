@@ -1305,6 +1305,11 @@ const DifferentiableActivityInfo &VJPCloner::getActivityInfo() const {
 
 SILFunction *VJPCloner::Implementation::createEmptyPullback() {
   auto origTy = original->getLoweredFunctionType();
+  if (isExperimentalAsyncAutoDiffEnabled() && origTy->isAsync() &&
+      !origTy->getSubstGenericSignature())
+    // A bound @substituted result is Float, not an unconstrained tau_0_0.
+    // Only change our view of the type; keep the original function unchanged.
+    origTy = origTy->getUnsubstitutedType(getModule());
   // Get witness generic signature for remapping types.
   // Witness generic signature may have more requirements than VJP generic
   // signature: when witness generic signature has same-type requirements
@@ -1621,7 +1626,7 @@ EnumInst *VJPCloner::Implementation::buildPredecessorEnumValue(
 
 bool VJPCloner::Implementation::run() {
   LLVM_DEBUG(if (activityInfo.getAsyncLet()) activityInfo.dump(getConfig()));
-  assert(!activityInfo.getAsyncLet() && "async-let AD: step 2 complete");
+  assert(!activityInfo.getAsyncLet() && "async-let AD: step 4 complete");
   PrettyStackTraceSILFunction trace("generating VJP for", original);
   LLVM_DEBUG(getADDebugStream() << "Cloning original @" << original->getName()
                                 << " to vjp @" << vjp->getName() << '\n');
