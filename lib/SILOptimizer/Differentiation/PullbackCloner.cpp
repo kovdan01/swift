@@ -2361,6 +2361,12 @@ bool PullbackCloner::Implementation::run() {
       // If value is not active, skip.
       if (!getActivityInfo().isActive(v, getConfig()))
         return false;
+      // The recognized initializer chain carries dependency information, but
+      // its capture adjoints are produced by the child pullback at the wait.
+      // These closure values therefore need no independent adjoints.
+      if (auto &a = getActivityInfo().getAsyncLet();
+          a && a->isInitializerInstruction(v->getDefiningInstruction()))
+        return false;
       // If active value has already been visited, skip.
       if (visited.count(v))
         return false;
