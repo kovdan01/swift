@@ -252,7 +252,7 @@ public:
   Type getAsyncLetResultASTType(const AsyncLetInfo &a) {
     SmallVector<TupleTypeElt, 2> fields{
         a.getBuffer()->getType().getASTType(),
-        TupleTypeElt(pullbackInfo.lookUpLinearMapType(a.get))};
+        TupleTypeElt(pullbackInfo.lookUpLinearMapType(a.reads.front().get))};
     return TupleType::get(fields, getASTContext());
   }
 
@@ -262,7 +262,10 @@ public:
     auto *parameters = a.getParameterIndices();
     auto *results = IndexSubset::get(getASTContext(), 1, {0});
     assert(getConfig().parameterIndices->getNumIndices() ==
-           original->getLoweredFunctionType()->getNumParameters());
+           a.initializer->getArguments().size());
+    for (unsigned i = 0; i != a.initializer->getArguments().size(); ++i)
+      assert(getConfig().parameterIndices->contains(i) &&
+             "differentiate all Float inputs, not the Bool flag");
     auto *childWitness = getExactDifferentiabilityWitness(
         getModule(), child, parameters, results);
     assert(childWitness && childWitness->getVJP());
@@ -370,7 +373,7 @@ public:
 
   void visitPointerToAddressInst(PointerToAddressInst *inst) {
     auto *a = activityInfo.getAsyncLet(inst);
-    if (a && inst == a->resultAddress)
+    if (a && a->getRead(inst))
       mapValue(inst, getOpValue(a->getBuffer()));
     else
       TypeSubstCloner::visitPointerToAddressInst(inst);
@@ -1036,7 +1039,7 @@ public:
   // If an `apply` has active results or active inout arguments, replace it
   // with an `apply` of its VJP.
   void visitApplyInst(ApplyInst *ai) {
-    if (auto *a = activityInfo.getAsyncLet(ai); a && ai == a->get) {
+    if (auto *a = activityInfo.getAsyncLet(ai); a && a->getRead(ai)) {
       assert(pullbackInfo.shouldDifferentiateApplySite(ai));
       TypeSubstCloner::visitApplyInst(ai); // The real wait still executes.
       auto loc = ai->getLoc();
@@ -1049,7 +1052,10 @@ public:
       pb = reabstractFunction(Builder, functions, loc, pb, target,
                              [](SubstitutionMap map) { return map; });
       auto &saved = pullbackValues[ai->getParent()];
-      assert(saved.size() == pullbackInfo.lookUpLinearMapIndex(ai));
+      // Non-entry tuples start with the existing predecessor trace. It is
+      // supplied by getPullbackValues, not stored in this vector.
+      assert(saved.size() + unsigned(!ai->getParent()->isEntry()) ==
+             pullbackInfo.lookUpLinearMapIndex(ai));
       saved.push_back(pb);
       return;
     }

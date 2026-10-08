@@ -658,7 +658,7 @@ private:
   SILValue getAdjointBuffer(SILBasicBlock *origBB, SILValue originalValue) {
     if (auto *a = getActivityInfo().getAsyncLet(
             originalValue->getDefiningInstruction());
-        a && originalValue == a->resultAddress)
+        a && a->getRead(originalValue->getDefiningInstruction()))
       originalValue = a->getBuffer(); // One adjoint for the typed storage.
     assert(getTangentValueCategory(originalValue) == SILValueCategory::Address);
     assert(originalValue->getFunction() == &getOriginal());
@@ -994,7 +994,7 @@ public:
   ///   Original: (y0, y1, ...) = apply @fn (x0, x1, ...)
   ///    Adjoint: (adj[x0], adj[x1], ...) += apply @fn_pullback (adj[y0], ...)
   void visitApplyInst(ApplyInst *ai) {
-    if (auto *a = getActivityInfo().getAsyncLet(ai); a && ai == a->get) {
+    if (auto *a = getActivityInfo().getAsyncLet(ai); a && a->getRead(ai)) {
       auto *bb = ai->getParent();
       auto loc = ai->getLoc();
       auto index = getPullbackInfo().lookUpLinearMapIndex(ai);
@@ -2388,9 +2388,15 @@ bool PullbackCloner::Implementation::run() {
       // The recognized initializer chain carries dependency information, but
       // its capture adjoints are produced by the child pullback at the wait.
       // These closure values therefore need no independent adjoints.
-      if (auto *a = getActivityInfo().getAsyncLet(v->getDefiningInstruction());
-          a && a->isInitializerInstruction(v->getDefiningInstruction()))
-        return false;
+      if (auto *a = getActivityInfo().getAsyncLet(v->getDefiningInstruction())) {
+        if (a->isInitializerInstruction(v->getDefiningInstruction()))
+          return false;
+        // A typed result address aliases the child's allocation. Do not
+        // propagate another adjoint for this alias across branch edges.
+        if (auto *read = a->getRead(v->getDefiningInstruction());
+            read && v == read->address)
+          return false;
+      }
       // If active value has already been visited, skip.
       if (visited.count(v))
         return false;
