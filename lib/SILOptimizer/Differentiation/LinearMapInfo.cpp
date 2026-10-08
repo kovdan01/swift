@@ -522,6 +522,11 @@ static bool shouldDifferentiateInjectEnumAddr(
 ///    ending, or destroying on an active operand.
 /// 5. The instruction creates an SSA copy of an active operand.
 bool LinearMapInfo::shouldDifferentiateInstruction(SILInstruction *inst) {
+  if (auto &a = activityInfo.getAsyncLet())
+    // These closures are replaced as part of the child computation. Their
+    // captured-input adjoints are produced by the saved child pullback.
+    if (a->isInitializerInstruction(inst))
+      return false;
   // A full apply site with an active argument and an active result (direct or
   // indirect) should be differentiated.
   if (FullApplySite::isa(inst))
