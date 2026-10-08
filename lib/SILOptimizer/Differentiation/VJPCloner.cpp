@@ -377,7 +377,7 @@ public:
     auto *closure = Builder.createPartialApply(
         inst->getLoc(), ref, SubstitutionMap(),
         {getOpValue(inst->getArguments()[0])}, inst->getCalleeConvention(),
-        inst->getResultIsolation(), inst->isCalledOnce(), inst->isOnStack(),
+        inst->getResultIsolation(), inst->getExecutionSemantics(), inst->isOnStack(),
         inst->isStackAllocationNested());
     mapValue(inst, closure);
   }
@@ -1519,11 +1519,23 @@ const DifferentiableActivityInfo &VJPCloner::getActivityInfo() const {
 
 SILFunction *VJPCloner::Implementation::createEmptyPullback() {
   auto origTy = original->getLoweredFunctionType();
+  auto vjpTy = vjp->getLoweredFunctionType();
   if (isExperimentalAsyncAutoDiffEnabled() && origTy->isAsync() &&
-      !origTy->getSubstGenericSignature())
-    // A bound @substituted result is Float, not an unconstrained tau_0_0.
-    // Only change our view of the type; keep the original function unchanged.
+      origTy->hasPatternSubstitutions() &&
+      !origTy->getInvocationGenericSignature()) {
+    // Resolve the bound pattern parameters, not a polymorphic function's
+    // invocation parameters. Keep both local type views consistent; neither
+    // the original function nor its VJP is changed.
     origTy = origTy->getUnsubstitutedType(getModule());
+    vjpTy = vjpTy->getUnsubstitutedType(getModule());
+    assert(!origTy->getSubstGenericSignature() &&
+           !vjpTy->getSubstGenericSignature() &&
+           "expected concrete async function component types");
+    LLVM_DEBUG(getADDebugStream()
+               << "Materialized bound async function types for pullback:\n"
+               << "  original: " << origTy << '\n'
+               << "  VJP: " << vjpTy << '\n');
+  }
   // Get witness generic signature for remapping types.
   // Witness generic signature may have more requirements than VJP generic
   // signature: when witness generic signature has same-type requirements
@@ -1721,7 +1733,7 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
   // Set pullback generic signature equal to VJP generic signature.
   // Do not use witness generic signature, which may have same-type requirements
   // binding all generic parameters to concrete types.
-  auto pbGenericSig = vjp->getLoweredFunctionType()->getSubstGenericSignature();
+  auto pbGenericSig = vjpTy->getSubstGenericSignature();
   auto *pbGenericEnv = pbGenericSig.getGenericEnvironment();
   auto pbType = SILFunctionType::get(
       pbGenericSig, SILExtInfo::getThin(), origTy->getCoroutineKind(),
