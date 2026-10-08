@@ -1808,8 +1808,8 @@ void Differentiation::run() {
         assert(child->getArgument(i + 1)->getType() == captures[i]->getType());
 
       // Keep the numerical subset small: identity, Float arithmetic, or one
-      // await of a local (Float, Float) -> Float workload that adds or multiplies
-      // its inputs.
+      // await of a local (Float, Float) -> Float workload returning the sum or
+      // product of its inputs. Unrelated work is handled by ordinary AD.
       // There is no recursive task/call-graph or saved-state analysis here.
       auto checkArithmetic = [](ApplyInst *call, SILValue lhs, SILValue rhs) {
         auto *callee = call->getCalleeFunction();
@@ -1856,23 +1856,19 @@ void Differentiation::run() {
             assert(call->getArguments()[i] == child->getArgument(i + 1));
             assert(workload->getArgument(i)->getType() == captures[i]->getType());
           }
-          ApplyInst *arithmetic = nullptr;
+          // Restrict the returned computation, not every instruction in the
+          // workload. Ordinary AD preserves inactive work (for example,
+          // constructing a UInt64 and calling blockingSleep) in the VJP
+          // without adding a pullback for it.
+          auto *arithmetic = dyn_cast<ApplyInst>(
+              cast<ReturnInst>(workload->front().getTerminator())->getOperand());
+          assert(arithmetic && "expected a returned Float arithmetic call");
+          checkArithmetic(arithmetic, workload->getArgument(0),
+                          workload->getArgument(1));
           for (auto &workInst : workload->front()) {
-            if (auto *op = dyn_cast<ApplyInst>(&workInst)) {
-              assert(!arithmetic);
-              arithmetic = op;
-              checkArithmetic(op, workload->getArgument(0),
-                              workload->getArgument(1));
-            } else if (auto *hop = dyn_cast<HopToExecutorInst>(&workInst)) {
+            if (auto *hop = dyn_cast<HopToExecutorInst>(&workInst))
               checkHop(hop);
-            } else {
-              assert((isa<DebugValueInst, FunctionRefInst, MetatypeInst,
-                          EnumInst, ReturnInst>(&workInst)));
-            }
           }
-          assert(arithmetic &&
-                 cast<ReturnInst>(workload->front().getTerminator())
-                         ->getOperand() == arithmetic);
         } else if (auto *hop = dyn_cast<HopToExecutorInst>(&inst)) {
           checkHop(hop);
         } else {
