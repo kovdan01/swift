@@ -50,10 +50,12 @@
 
 #include "swift/AST/GenericEnvironment.h"
 #include "swift/SIL/SILFunction.h"
+#include "swift/SIL/SILInstruction.h"
 #include "swift/SIL/SILValue.h"
 #include "swift/SILOptimizer/Analysis/Analysis.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include <optional>
 
 using llvm::SmallDenseMap;
 using llvm::SmallDenseSet;
@@ -103,10 +105,28 @@ enum class ActivityFlags : unsigned {
 
 using Activity = OptionSet<ActivityFlags>;
 
+bool isExperimentalAsyncAutoDiffEnabled();
+
+// One block, one child, one Float capture and one result load. This is a
+// description of the existing SIL, not a second activity analysis.
+struct AsyncLetInfo {
+  BuiltinInst *start = nullptr;
+  PartialApplyInst *initializer = nullptr;
+  ApplyInst *get = nullptr;
+  PointerToAddressInst *resultAddress = nullptr;
+
+  AllocStackInst *getBuffer() const;
+  bool isInitializerInstruction(SILInstruction *inst) const;
+};
+
+std::optional<AsyncLetInfo> findAsyncLet(SILFunction &function);
+
 /// Result of activity analysis on a function. Accepts queries for whether a
 /// value is "varied", "useful" or "active" against certain differentiation
 /// indices.
 class DifferentiableActivityInfo {
+  std::optional<AsyncLetInfo> asyncLet;
+
 private:
   DifferentiableActivityCollection &parent;
 
@@ -180,6 +200,8 @@ public:
   explicit DifferentiableActivityInfo(
       DifferentiableActivityCollection &parent,
       GenericSignature derivativeGenericSignature);
+
+  const std::optional<AsyncLetInfo> &getAsyncLet() const { return asyncLet; }
 
   /// Returns true if the given value is varied for the given independent
   /// variable index.

@@ -12,6 +12,8 @@
 
 #define DEBUG_TYPE "differentiation"
 
+#include "swift/AST/Builtins.h"
+#include "llvm/Support/CommandLine.h"
 #include "swift/SILOptimizer/Analysis/DifferentiableActivityAnalysis.h"
 #include "swift/SILOptimizer/Differentiation/Common.h"
 
@@ -59,9 +61,151 @@ DifferentiableActivityCollection::DifferentiableActivityCollection(
     SILFunction &f, DominanceInfo *di, PostDominanceInfo *pdi)
     : function(f), domInfo(di), postDomInfo(pdi) {}
 
+static llvm::cl::opt<bool> EnableAsyncAutoDiff(
+    "enable-experimental-async-autodiff", llvm::cl::Hidden,
+    llvm::cl::init(false));
+
+bool swift::isExperimentalAsyncAutoDiffEnabled() {
+  return EnableAsyncAutoDiff;
+}
+
+AllocStackInst *AsyncLetInfo::getBuffer() const {
+  auto *pointer = cast<AddressToPointerInst>(start->getArguments()[2]);
+  return cast<AllocStackInst>(pointer->getOperand());
+}
+
+bool AsyncLetInfo::isInitializerInstruction(SILInstruction *inst) const {
+  SILValue value = start->getArguments()[1];
+  while (true) {
+    if (value->getDefiningInstruction() == inst)
+      return true;
+    if (value == initializer)
+      return false;
+    // findAsyncLet has checked the conversion chain.
+    value = value->getDefiningInstruction()->getOperand(0);
+  }
+}
+
+std::optional<AsyncLetInfo> swift::findAsyncLet(SILFunction &function) {
+  if (!EnableAsyncAutoDiff)
+    return std::nullopt;
+  AsyncLetInfo a;
+  for (auto &bb : function)
+    for (auto &inst : bb)
+      if (auto *start = isBuiltinInst(
+              &inst, BuiltinValueKind::StartAsyncLetWithLocalBuffer)) {
+        assert(!a.start && "only one async let is implemented");
+        a.start = start;
+      }
+  if (!a.start)
+    return std::nullopt;
+
+  assert(function.size() == 1 && function.isAsync());
+  assert(!function.isSerialized() &&
+         !function.getActorIsolation().isActorIsolated());
+  auto type = function.getLoweredFunctionType();
+  assert(!type->getSubstGenericSignature() && !type->hasErrorResult());
+  assert(type->getNumParameters() == 1 &&
+         type->getNumIndirectFormalResults() == 0);
+  assert(a.start->getArguments().size() == 3);
+  assert(a.start->getSubstitutions().getReplacementTypes().size() == 1 &&
+         a.start->getSubstitutions().getConformances().empty());
+  auto *buffer = a.getBuffer();
+  assert(buffer->getType().getASTType() ==
+         function.getASTContext().getFloatType()->getCanonicalType());
+
+  SILValue closure = a.start->getArguments()[1];
+  SILInstruction *consumer = a.start;
+  while (true) {
+    // The converted closure is private to this start, apart from cleanup.
+    for (auto *use : closure->getUses())
+      assert((use->getUser() == consumer ||
+              isa<DestroyValueInst, DebugValueInst>(use->getUser()) ||
+              isBuiltinInst(use->getUser(),
+                            BuiltinValueKind::EndAsyncLetLifetime)) &&
+             "shared initializer closure");
+    if ((a.initializer = dyn_cast<PartialApplyInst>(closure)))
+      break;
+    consumer = closure->getDefiningInstruction();
+    assert((isa<ConvertFunctionInst, ConvertEscapeToNoEscapeInst>(consumer)));
+    closure = consumer->getOperand(0);
+  }
+  assert(a.initializer->getSubstitutionMap().empty());
+  assert(a.initializer->getArguments().size() == 1 &&
+         a.initializer->getArguments()[0] == function.getArgument(0));
+  assert(isa<FunctionRefInst>(a.initializer->getCallee()));
+  assert(function.getArgument(0)->getType() == buffer->getType().getObjectType());
+
+  SILInstruction *finish = nullptr, *end = nullptr;
+  LoadInst *read = nullptr;
+  DeallocStackInst *dealloc = nullptr;
+  auto pointer = a.start->getArguments()[2];
+  for (auto *use : pointer->getUses()) {
+    auto *inst = use->getUser();
+    if (inst == a.start)
+      continue;
+    if (auto *addr = dyn_cast<PointerToAddressInst>(inst)) {
+      assert(!a.resultAddress && addr->getType() == buffer->getType());
+      a.resultAddress = addr;
+      assert(addr->hasOneUse());
+      read = cast<LoadInst>((*addr->use_begin())->getUser());
+      assert(read->getOwnershipQualifier() == LoadOwnershipQualifier::Trivial);
+    } else if (auto *apply = dyn_cast<ApplyInst>(inst)) {
+      auto *callee = apply->getCalleeFunction();
+      assert(callee && apply->getArguments().size() == 2 &&
+             apply->getArguments()[0] == a.start);
+      // Deliberately match the runtime symbols for this prototype: no stdlib
+      // rebuild or new semantic attributes are needed.
+      if (callee->getName() == "swift_asyncLet_get") {
+        assert(!a.get);
+        a.get = apply;
+      } else {
+        assert(callee->getName() == "swift_asyncLet_finish" && !finish);
+        finish = apply;
+      }
+    } else {
+      assert(isBuiltinInst(inst, BuiltinValueKind::FinishAsyncLet) && !finish);
+      assert(cast<BuiltinInst>(inst)->getArguments()[0] == a.start);
+      finish = inst;
+    }
+  }
+  for (auto *use : a.start->getUses()) {
+    auto *inst = use->getUser();
+    if (inst == a.get || inst == finish)
+      continue;
+    assert(isBuiltinInst(inst, BuiltinValueKind::EndAsyncLetLifetime) && !end);
+    end = inst;
+  }
+  for (auto *use : buffer->getUses()) {
+    auto *inst = use->getUser();
+    if (inst == pointer->getDefiningInstruction() || isa<DebugValueInst>(inst))
+      continue;
+    assert(!dealloc);
+    dealloc = cast<DeallocStackInst>(inst);
+  }
+  assert(a.get && a.resultAddress && read && finish && end && dealloc);
+  assert(cast<ReturnInst>(function.front().getTerminator())->getOperand() == read);
+  SILInstruction *order[] = {buffer, a.initializer, a.start, a.get,
+                            a.resultAddress, read, finish, end, dealloc};
+  unsigned next = 0;
+  for (auto &inst : function.front()) {
+    if (auto *hop = dyn_cast<HopToExecutorInst>(&inst))
+      assert(isa<EnumInst>(hop->getTargetExecutor()) &&
+             !cast<EnumInst>(hop->getTargetExecutor())->hasOperand());
+    if (next != 9 && &inst == order[next])
+      ++next;
+  }
+  assert(next == 9 && "unexpected async-let instruction order");
+  LLVM_DEBUG(getADDebugStream() << "Matched single Float async let:\n"
+                               << *a.start << *a.initializer << *a.get
+                               << *a.resultAddress);
+  return a;
+}
+
 DifferentiableActivityInfo::DifferentiableActivityInfo(
     DifferentiableActivityCollection &parent, GenericSignature derivGenSig)
     : parent(parent), derivativeGenericSignature(derivGenSig) {
+  asyncLet = findAsyncLet(parent.function);
   analyze(parent.domInfo, parent.postDomInfo);
 }
 
