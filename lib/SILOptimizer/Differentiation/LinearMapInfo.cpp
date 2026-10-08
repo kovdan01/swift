@@ -177,6 +177,14 @@ void LinearMapInfo::populateBranchingTraceDecl(SILBasicBlock *originalBB,
 
 
 Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
+  if (auto &a = activityInfo.getAsyncLet(); a && fai.getInstruction() == a->get) {
+    assert(kind == AutoDiffLinearMapKind::Pullback);
+    // The prototype restricts both primal and tangent to Float.
+    auto type = a->getBuffer()->getType().getASTType();
+    AnyFunctionType::Param seed(type, Identifier(), ParameterTypeFlags());
+    return FunctionType::get({seed}, /*yields*/ {}, type,
+                             FunctionType::ExtInfo());
+  }
   SmallVector<SILValue, 4> allResults;
   SmallVector<unsigned, 8> activeParamIndices;
   SmallVector<unsigned, 8> activeResultIndices;
@@ -453,6 +461,11 @@ void LinearMapInfo::generateDifferentiationDataStructures(
 /// 3. The instruction has both an active result (direct or indirect) and an
 ///    active argument.
 bool LinearMapInfo::shouldDifferentiateApplySite(FullApplySite applySite) {
+  if (auto &a = activityInfo.getAsyncLet();
+      a && applySite.getInstruction() == a->get) {
+    assert(kind == AutoDiffLinearMapKind::Pullback);
+    return activityInfo.isActive(a->getBuffer(), config);
+  }
   // Function applications with an active inout argument should be
   // differentiated.
   for (auto inoutArg : applySite.getInoutArguments())
