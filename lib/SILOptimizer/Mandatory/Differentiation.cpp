@@ -31,6 +31,7 @@
 #include "swift/SIL/FormalLinkage.h"
 #include "swift/SIL/PrettyStackTrace.h"
 #include "swift/SIL/SILBuilder.h"
+#include "swift/SILOptimizer/Analysis/DifferentiableActivityAnalysis.h"
 #include "swift/SILOptimizer/Analysis/DominanceAnalysis.h"
 #include "swift/SILOptimizer/Differentiation/ADContext.h"
 #include "swift/SILOptimizer/Differentiation/JVPCloner.h"
@@ -1788,6 +1789,60 @@ void Differentiation::run() {
   for (auto invokerPair : context.getInvokers()) {
     auto *witness = invokerPair.first;
     auto invoker = invokerPair.second;
+    if (auto a = findAsyncLet(*witness->getOriginalFunction())) {
+      auto *child = cast<FunctionRefInst>(a->initializer->getCallee())
+                        ->getReferencedFunction();
+      auto childType = child->getLoweredFunctionType()
+                           ->getUnsubstitutedType(module);
+      assert(child->size() == 1 && !child->isSerialized());
+      assert(!child->getActorIsolation().isActorIsolated());
+      assert(!childType->getSubstGenericSignature() && childType->isAsync() &&
+             !childType->isCoroutine() && childType->hasErrorResult());
+      assert(childType->getNumParameters() == 1 &&
+             childType->getNumResults() == 1 &&
+             childType->getNumIndirectFormalResults() == 1);
+      assert(child->getArgument(0)->getType() == a->getBuffer()->getType() &&
+             child->getArgument(1)->getType() ==
+                 a->getBuffer()->getType().getObjectType());
+      // Prototype restriction: identity or the standard Float square. This
+      // is not a general validation of custom derivative saved state.
+      StoreInst *store = nullptr;
+      for (auto &inst : child->front()) {
+        if (auto *s = dyn_cast<StoreInst>(&inst)) {
+          assert(!store && s->getDest() == child->getArgument(0));
+          store = s;
+        } else if (auto *call = dyn_cast<ApplyInst>(&inst)) {
+          assert(call->getCalleeFunction() &&
+                 call->getCalleeFunction()->getName() == "$sSf1moiyS2f_SftFZ");
+          assert(call->getArguments().size() == 3 &&
+                 call->getArguments()[0] == child->getArgument(1) &&
+                 call->getArguments()[1] == child->getArgument(1));
+        } else if (auto *hop = dyn_cast<HopToExecutorInst>(&inst)) {
+          assert(isa<EnumInst>(hop->getTargetExecutor()) &&
+                 !cast<EnumInst>(hop->getTargetExecutor())->hasOperand());
+        } else {
+          assert((isa<DebugValueInst, FunctionRefInst, MetatypeInst, EnumInst,
+                      TupleInst, ReturnInst>(&inst)));
+        }
+      }
+      assert(store && (store->getSrc() == child->getArgument(1) ||
+                       isa<ApplyInst>(store->getSrc())));
+      auto *indices = IndexSubset::get(astCtx, 1, {0});
+      auto *childWitness = getExactDifferentiabilityWitness(
+          module, child, indices, indices);
+      assert(!childWitness && "custom child derivatives are not implemented");
+      childWitness = SILDifferentiabilityWitness::createDefinition(
+          module, SILLinkage::Private, child, DifferentiabilityKind::Reverse,
+          indices, indices, GenericSignature(), nullptr, nullptr,
+          /*isSerialized*/ false, /*isDefault*/ false);
+      if (transformer.canonicalizeDifferentiabilityWitness(
+              childWitness, invoker, IsNotSerialized)) {
+        errorOccurred = true;
+        continue;
+      }
+      LLVM_DEBUG(getADDebugStream() << "Prepared existing async-let initializer:\n"
+                                   << *childWitness->getVJP());
+    }
     if (transformer.canonicalizeDifferentiabilityWitness(
             witness, invoker,
             witness->getOriginalFunction()->getSerializedKind()))
