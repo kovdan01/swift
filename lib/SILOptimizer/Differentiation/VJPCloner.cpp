@@ -266,8 +266,7 @@ public:
                       ->getReferencedFunction();
     auto *parameters = a.getParameterIndices();
     auto *results = IndexSubset::get(getASTContext(), 1, {0});
-    assert(parameters->getNumIndices() >= 1 &&
-           parameters->getNumIndices() <= 2);
+    assert(parameters->getNumIndices() >= 1);
     auto *childWitness = getExactDifferentiabilityWitness(
         getModule(), child, parameters, results);
     assert(childWitness && childWitness->getVJP());
