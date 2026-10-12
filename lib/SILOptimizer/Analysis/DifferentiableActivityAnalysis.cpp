@@ -14,7 +14,10 @@
 #include "swift/SIL/SILInstruction.h"
 #define DEBUG_TYPE "differentiation"
 
+#include "swift/AST/AutoDiff.h"
 #include "swift/AST/Builtins.h"
+#include "swift/AST/SubstitutionMap.h"
+#include "swift/SIL/AbstractionPattern.h"
 #include "swift/SILOptimizer/Analysis/DominanceAnalysis.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/CommandLine.h"
@@ -79,29 +82,40 @@ AllocStackInst *AsyncLetInfo::getBuffer() const {
 }
 
 IndexSubset *AsyncLetInfo::getParameterIndices() const {
-  auto &ctx = start->getFunction()->getASTContext();
+  auto &function = *start->getFunction();
   auto captures = initializer->getArguments();
-  SmallVector<unsigned, 2> indices;
+  SmallVector<unsigned, 4> indices;
   for (unsigned i = 0; i != captures.size(); ++i)
-    if (captures[i]->getType().getASTType() ==
-        ctx.getFloatType()->getCanonicalType())
+    if (captures[i]->getType().isDifferentiable(function.getModule()))
       indices.push_back(i);
-  // Int/Bool captures are forwarded to the child but have no cotangent.
-  // For (Int, Float, Float), this is a three-bit set selecting {1, 2}.
-  return IndexSubset::get(ctx, captures.size(), indices);
+  // Preserve capture positions, including gaps for nondifferentiable values.
+  return IndexSubset::get(function.getASTContext(), captures.size(), indices);
 }
 
 FunctionType *AsyncLetInfo::getPullbackType() const {
-  auto &ctx = start->getFunction()->getASTContext();
-  auto count = getParameterIndices()->getNumIndices();
-  assert(count >= 1 && count <= 2);
-  auto type = getBuffer()->getType().getASTType();
-  AnyFunctionType::Param seed(type, Identifier(), ParameterTypeFlags());
-  Type gradients = type;
-  if (count == 2) {
-    SmallVector<TupleTypeElt, 2> fields{type, type};
-    gradients = TupleType::get(fields, ctx);
-  }
+  auto &function = *start->getFunction();
+  auto &ctx = function.getASTContext();
+  auto tangentType = [&](SILType primal) -> CanType {
+    auto space = primal.getASTType()->getAutoDiffTangentSpace(
+        LookUpConformanceInModule());
+    assert(space && "an active async-let value must have a tangent space");
+    auto tangent = space->getCanonicalType();
+    auto lowered = function.getLoweredType(
+        Lowering::AbstractionPattern::getOpaque(), tangent).getObjectType();
+    assert(lowered.isTrivial(function) &&
+           "nontrivial or address-only async-let tangents are not implemented");
+    return tangent;
+  };
+  AnyFunctionType::Param seed(tangentType(getBuffer()->getType()), Identifier(),
+                             ParameterTypeFlags());
+  auto captures = initializer->getArguments();
+  SmallVector<TupleTypeElt, 4> fields;
+  for (auto index : getParameterIndices()->getIndices())
+    fields.emplace_back(tangentType(captures[index]->getType()));
+  assert(!fields.empty() && "an active child must have differentiable captures");
+  // A single capture's tangent is one result, even if it is itself a tuple.
+  Type gradients = fields.size() == 1 ? fields.front().getType()
+                                     : TupleType::get(fields, ctx);
   return FunctionType::get({seed}, /*yields*/ {}, gradients,
                            FunctionType::ExtInfo());
 }
@@ -143,14 +157,13 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
          !function.getActorIsolation().isActorIsolated());
   auto type = function.getLoweredFunctionType();
   assert(!type->getSubstGenericSignature() && !type->hasErrorResult());
-  assert(type->getNumIndirectFormalResults() == 0 &&
-         type->getNumResults() == 1);
+  // Parent parameter/result conventions are handled by ordinary AD.
   assert(a.start->getArguments().size() == 3);
   assert(a.start->getSubstitutions().getReplacementTypes().size() == 1 &&
          a.start->getSubstitutions().getConformances().empty());
   auto *buffer = a.getBuffer();
-  assert(buffer->getType().getASTType() ==
-         function.getASTContext().getFloatType()->getCanonicalType());
+  assert(buffer->getType().getObjectType().isTrivial(function) &&
+         "only concrete trivial async-let results are implemented");
 
   SILValue closure = a.start->getArguments()[1];
   SILInstruction *consumer = a.start;
@@ -170,19 +183,12 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
   }
   assert(a.initializer->getSubstitutionMap().empty());
   auto captures = a.initializer->getArguments();
-  // Allow loop indices, flags and computed Float captures. Do not equate
-  // initializer parameter indices with parent parameter indices.
-  auto &ctx = function.getASTContext();
-  for (auto capture : captures) {
-    auto ty = capture->getType();
-    assert(ty.isObject() &&
-           (ty.getASTType() == ctx.getFloatType()->getCanonicalType() ||
-            ty.getASTType() == ctx.getIntType()->getCanonicalType() ||
-            ty.getASTType() == ctx.getBoolType()->getCanonicalType()) &&
-           "only scalar Float/Int/Bool captures are implemented");
-  }
-  assert(a.getParameterIndices()->getNumIndices() <= 2 &&
-         "the result adapters support at most two Float cotangents");
+  // Trivial control values are forwarded too; only values with a tangent
+  // space are differentiation parameters. There is no capture-count limit.
+  for (auto capture : captures)
+    assert(capture->getType().isObject() &&
+           capture->getType().isTrivial(function) &&
+           "only by-value trivial async-let captures are implemented");
   assert(isa<FunctionRefInst>(a.initializer->getCallee()));
   assert(dominance.dominates(buffer, a.initializer) &&
          dominance.dominates(a.initializer, start));
@@ -195,11 +201,28 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
       continue;
     if (auto *addr = dyn_cast<PointerToAddressInst>(inst)) {
       assert(addr->getType() == buffer->getType());
-      for (auto *addressUse : addr->getUses()) {
-        if (isa<DebugValueInst>(addressUse->getUser()))
-          continue;
-        auto *load = cast<LoadInst>(addressUse->getUser());
-        assert(load->getOwnershipQualifier() == LoadOwnershipQualifier::Trivial);
+      // An aggregate can be read whole or through typed field projections.
+      // The existing memory/projection visitors differentiate these accesses.
+      SmallVector<SILValue, 4> addresses{addr};
+      while (!addresses.empty()) {
+        auto address = addresses.pop_back_val();
+        for (auto *addressUse : address->getUses()) {
+          auto *user = addressUse->getUser();
+          if (isa<DebugValueInst>(user))
+            continue;
+          if (auto *field = dyn_cast<StructElementAddrInst>(user)) {
+            addresses.push_back(field);
+          } else if (auto *element = dyn_cast<TupleElementAddrInst>(user)) {
+            addresses.push_back(element);
+          } else if (auto *copy = dyn_cast<CopyAddrInst>(user)) {
+            assert(copy->getSrc() == address && !copy->isTakeOfSrc() &&
+                   "expected a nonconsuming async-let result copy");
+          } else {
+            auto *load = cast<LoadInst>(user);
+            assert(load->getOwnershipQualifier() ==
+                   LoadOwnershipQualifier::Trivial);
+          }
+        }
       }
       a.resultAddresses.push_back(addr);
     } else if (auto *apply = dyn_cast<ApplyInst>(inst)) {
@@ -249,11 +272,11 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
   for (auto *dealloc : deallocs)
     assert(dominance.dominates(buffer, dealloc));
   LLVM_DEBUG({
-    getADDebugStream() << "Matched Float async let with " << a.gets.size()
+    getADDebugStream() << "Matched trivial async let with " << a.gets.size()
                        << " wait(s), " << a.resultAddresses.size()
                        << " result address(es), "
                        << a.getParameterIndices()->getNumIndices()
-                       << " Float capture(s):\n"
+                       << " differentiable capture(s):\n"
                        << *a.start << *a.initializer;
   });
   return a;

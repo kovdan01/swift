@@ -107,7 +107,7 @@ using Activity = OptionSet<ActivityFlags>;
 
 bool isExperimentalAsyncAutoDiffEnabled();
 
-// Structured Float results in an otherwise ordinary SIL control-flow graph.
+// Structured trivial results in an otherwise ordinary SIL control-flow graph.
 // A description of the existing SIL, not another activity analysis or AD trace.
 // Waits, result accesses and cleanup sites need not be in the same block.
 struct AsyncLetInfo {
