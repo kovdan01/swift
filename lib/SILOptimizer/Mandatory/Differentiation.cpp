@@ -1808,9 +1808,9 @@ void Differentiation::run() {
         assert(child->getArgument(i + 1)->getType() == captures[i]->getType());
 
       // Differentiate the original initializer with ordinary AD. Its body
-      // can contain Float(i), several calls, branches or loops; those do not
-      // need async-let-specific numerical rules. This is still a scalar
-      // prototype, not a general saved-state transfer/isolation analysis.
+      // can contain conversions, calls, branches or loops; those do not need
+      // async-let-specific numerical rules. Trivial primal/tangent types do
+      // not imply that arbitrary saved derivative state is task-transferable.
       for (auto &bb : *child) {
         for (auto &inst : bb) {
           assert(!isa<ThrowInst>(&inst) &&
@@ -1824,8 +1824,11 @@ void Differentiation::run() {
         }
       }
       auto *parameters = a.getParameterIndices();
-      if (parameters->getNumIndices() == 0)
+      if (parameters->getNumIndices() == 0 ||
+          !a.getBuffer()->getType().isDifferentiable(module))
         continue;
+      // Check the actual tangent types, not just the primal representations.
+      (void)a.getPullbackType();
       auto *results = IndexSubset::get(astCtx, 1, {0});
       auto *childWitness = getExactDifferentiabilityWitness(
           module, child, parameters, results);
