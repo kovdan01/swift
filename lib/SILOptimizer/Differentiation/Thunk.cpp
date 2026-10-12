@@ -129,6 +129,157 @@ static void forwardFunctionArgumentsConvertingOwnership(
   }
 }
 
+// Tuple regrouping for trivial values. Nominal types remain leaves: never
+// reinterpret a struct's layout as a tuple, even when the sizes happen to match.
+static void collectTrivialTupleLeaves(SILType type,
+                                     SmallVectorImpl<SILType> &leaves) {
+  type = type.getObjectType();
+  if (auto tuple = type.getAs<TupleType>()) {
+    for (unsigned i = 0; i != tuple->getNumElements(); ++i)
+      collectTrivialTupleLeaves(type.getTupleElementType(i), leaves);
+  } else {
+    leaves.push_back(type);
+  }
+}
+
+static void explodeTrivialTuple(SILBuilder &builder, SILLocation loc,
+                               SILValue value,
+                               SmallVectorImpl<SILValue> &leaves) {
+  if (value->getType().isAddress())
+    value = builder.createLoad(loc, value, LoadOwnershipQualifier::Trivial);
+  if (auto tuple = value->getType().getAs<TupleType>()) {
+    for (unsigned i = 0; i != tuple->getNumElements(); ++i)
+      explodeTrivialTuple(builder, loc, builder.createTupleExtract(loc, value, i),
+                          leaves);
+  } else {
+    leaves.push_back(value);
+  }
+}
+
+static SILValue rebuildTrivialTuple(SILBuilder &builder, SILLocation loc,
+                                   SILType type, ArrayRef<SILValue> leaves,
+                                   unsigned &next) {
+  type = type.getObjectType();
+  if (auto tuple = type.getAs<TupleType>()) {
+    SmallVector<SILValue, 4> elements;
+    for (unsigned i = 0; i != tuple->getNumElements(); ++i)
+      elements.push_back(rebuildTrivialTuple(
+          builder, loc, type.getTupleElementType(i), leaves, next));
+    return builder.createTuple(loc, type, elements);
+  }
+  assert(next < leaves.size() && leaves[next]->getType() == type &&
+         "reabstraction must preserve each leaf's type and position");
+  return leaves[next++];
+}
+
+// Handle arbitrary tuple grouping and direct/indirect conventions when the
+// entire numerical interface is trivial. The captured function is not trivial;
+// it remains a guaranteed argument of this ordinary reabstraction thunk.
+// Return false without emitting anything for the existing ownership-aware path.
+static bool emitTrivialReabstraction(SILFunction *thunk, SILBuilder &builder,
+                                    SILLocation loc,
+                                    CanSILFunctionType fromType,
+                                    CanSILFunctionType toType) {
+  if (fromType->isAsync() || toType->isAsync() ||
+      fromType->hasErrorResult() || toType->hasErrorResult() ||
+      fromType->isCoroutine() || toType->isCoroutine() ||
+      fromType->getSubstGenericSignature() || toType->getSubstGenericSignature())
+    return false;
+  SILAddressConventions silConv = SILAddressConventions::forFunction(*thunk);
+  SILFunctionConventions fromConv(fromType, silConv), toConv(toType, silConv);
+  assert(toConv.useLoweredAddresses());
+  SmallVector<SILType, 8> fromParams, toParams, fromResults, toResults;
+  auto collect = [&](SILFunctionConventions &conv,
+                     SmallVectorImpl<SILType> &params,
+                     SmallVectorImpl<SILType> &results) {
+    for (auto param : conv.getParameters()) {
+      auto type = conv.getSILType(param, builder.getTypeExpansionContext());
+      if (param.isIndirectInOut() || param.isAutoDiffSemanticResult() ||
+          !type.getObjectType().isTrivial(*thunk))
+        return false;
+      collectTrivialTupleLeaves(type, params);
+    }
+    for (auto result : conv.getResults()) {
+      auto type = conv.getSILType(result, builder.getTypeExpansionContext());
+      if (!type.getObjectType().isTrivial(*thunk))
+        return false;
+      collectTrivialTupleLeaves(type, results);
+    }
+    return true;
+  };
+  if (!collect(fromConv, fromParams, fromResults) ||
+      !collect(toConv, toParams, toResults) ||
+      fromParams != toParams || fromResults != toResults)
+    return false;
+
+  SmallVector<SILValue, 8> leaves, arguments, indirectResults;
+  SmallVector<AllocStackInst *, 8> allocations;
+  auto allocate = [&](SILType type) {
+    auto *buffer = builder.createAllocStack(loc, type);
+    allocations.push_back(buffer);
+    return buffer;
+  };
+  auto thunkArgs = thunk->getArgumentsWithoutIndirectResults();
+  for (auto argument : thunkArgs.drop_back())
+    explodeTrivialTuple(builder, loc, argument, leaves);
+  // Give the source call result buffers before its ordinary parameters.
+  unsigned numDirectResults = 0;
+  for (auto result : fromConv.getResults()) {
+    if (!result.isFormalIndirect()) {
+      ++numDirectResults;
+      continue;
+    }
+    auto *buffer = allocate(
+        fromConv.getSILType(result, builder.getTypeExpansionContext()));
+    indirectResults.push_back(buffer);
+    arguments.push_back(buffer);
+  }
+  unsigned next = 0;
+  for (auto param : fromConv.getParameters()) {
+    auto type = fromConv.getSILType(param, builder.getTypeExpansionContext());
+    auto value = rebuildTrivialTuple(builder, loc, type, leaves, next);
+    if (param.isFormalIndirect()) {
+      auto *buffer = allocate(type);
+      builder.createStore(loc, value, buffer, StoreOwnershipQualifier::Trivial);
+      arguments.push_back(buffer);
+    } else {
+      arguments.push_back(value);
+    }
+  }
+  assert(next == leaves.size());
+  auto *apply = builder.createApply(loc, thunkArgs.back(), SubstitutionMap(),
+                                   arguments);
+  leaves.clear();
+  unsigned directIndex = 0, indirectIndex = 0;
+  for (auto result : fromConv.getResults()) {
+    SILValue value;
+    if (result.isFormalIndirect()) {
+      value = indirectResults[indirectIndex++];
+    } else if (numDirectResults == 1) {
+      value = apply; // One formal tuple result is not several formal results.
+    } else {
+      value = builder.createTupleExtract(loc, apply, directIndex++);
+    }
+    explodeTrivialTuple(builder, loc, value, leaves);
+  }
+  next = 0;
+  SmallVector<SILValue, 8> returned;
+  auto out = thunk->getIndirectResults().begin();
+  for (auto result : toConv.getResults()) {
+    auto type = toConv.getSILType(result, builder.getTypeExpansionContext());
+    auto value = rebuildTrivialTuple(builder, loc, type, leaves, next);
+    if (result.isFormalIndirect())
+      builder.createStore(loc, value, *out++, StoreOwnershipQualifier::Trivial);
+    else
+      returned.push_back(value);
+  }
+  assert(next == leaves.size());
+  for (auto *buffer : llvm::reverse(allocations))
+    builder.createDeallocStack(loc, buffer);
+  builder.createReturn(loc, joinElements(returned, builder, loc));
+  return true;
+}
+
 SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
                                            SILModule &module, SILLocation loc,
                                            SILFunction *caller,
@@ -173,6 +324,12 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
   SILBuilder builder(entry);
   createEntryArguments(thunk);
 
+  if (emitTrivialReabstraction(thunk, builder, loc, fromType, toType)) {
+    LLVM_DEBUG(getADDebugStream() << "Created trivial reabstraction thunk:\n"
+                                 << *thunk);
+    return thunk;
+  }
+
   SILAddressConventions silConv = SILAddressConventions::forFunction(*thunk);
   SILFunctionConventions fromConv(fromType, silConv);
   SILFunctionConventions toConv(toType, silConv);
@@ -199,45 +356,9 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
     return alloc;
   };
 
-  // A two-capture Float pullback has two direct results, whereas its opaque
-  // tuple-field representation has one indirect (Float, Float) result.
-  // Handle only this flat, trivial regrouping; leave the existing per-result
-  // algorithm and its ownership handling unchanged for all other signatures.
-  auto floatType = module.getASTContext().getFloatType()->getCanonicalType();
-  auto hasDirectFloatPair = [&](CanSILFunctionType type) {
-    return type->getNumResults() == 2 &&
-           llvm::all_of(type->getResults(), [&](SILResultInfo result) {
-             return result.getConvention() == ResultConvention::Unowned &&
-                    result.getInterfaceType() == floatType;
-           });
-  };
-  auto hasIndirectFloatPair = [&](CanSILFunctionType type) {
-    if (type->getNumResults() != 1 ||
-        !type->getSingleResult().isFormalIndirect())
-      return false;
-    auto tuple = type->getSingleResult().getSILStorageInterfaceType()
-                     .getObjectType();
-    return tuple.is<TupleType>() &&
-           tuple.castTo<TupleType>()->getNumElements() == 2 &&
-           tuple.getTupleElementType(0).getASTType() == floatType &&
-           tuple.getTupleElementType(1).getASTType() == floatType;
-  };
-  bool packPair = hasDirectFloatPair(fromType) && hasIndirectFloatPair(toType);
-  bool unpackPair = hasIndirectFloatPair(fromType) && hasDirectFloatPair(toType);
-  SILValue pairBuffer;
-  if (packPair) {
-    pairBuffer = *toArgIter++;
-  } else if (unpackPair) {
-    pairBuffer = createAllocStack(fromConv.getSILType(
-        fromType->getSingleResult(), builder.getTypeExpansionContext()));
-    arguments.push_back(pairBuffer);
-  }
-
-  // Ordinary one-to-one indirect results (the pair is handled separately).
-  unsigned numResults = (packPair || unpackPair) ? 0 : toType->getNumResults();
-  assert(packPair || unpackPair ||
-         fromType->getNumResults() == toType->getNumResults());
-  for (unsigned resIdx : range(numResults)) {
+  // Handle indirect results using the existing one-to-one path.
+  assert(fromType->getNumResults() == toType->getNumResults());
+  for (unsigned resIdx : range(toType->getNumResults())) {
     auto fromRes = fromConv.getResults()[resIdx];
     auto toRes = toConv.getResults()[resIdx];
     // No abstraction mismatch.
@@ -308,20 +429,8 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
   auto fromDirResultsIter = directResults.begin();
   auto fromIndResultsIter = apply->getIndirectSILResults().begin();
   auto toIndResultsIter = thunk->getIndirectResults().begin();
-  if (packPair || unpackPair) {
-    assert(!packPair || directResults.size() == 2);
-    for (unsigned i = 0; i != 2; ++i) {
-      auto address = builder.createTupleElementAddr(loc, pairBuffer, i);
-      if (packPair)
-        builder.emitStoreValueOperation(loc, directResults[i], address,
-                                        StoreOwnershipQualifier::Init);
-      else
-        results.push_back(builder.emitLoadValueOperation(
-            loc, address, LoadOwnershipQualifier::Take));
-    }
-  }
-  // Reabstract ordinary one-to-one results.
-  for (unsigned resIdx : range(numResults)) {
+  // Reabstract results.
+  for (unsigned resIdx : range(toType->getNumResults())) {
     auto fromRes = fromConv.getResults()[resIdx];
     auto toRes = toConv.getResults()[resIdx];
     // Check function-typed results.
