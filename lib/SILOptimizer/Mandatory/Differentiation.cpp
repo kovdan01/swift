@@ -1403,8 +1403,6 @@ bool DifferentiationTransformer::canonicalizeDifferentiabilityWitness(
         assert(parameters->getNumIndices() != 0 &&
                a.getBuffer()->getType().isDifferentiable(module) &&
                "selected child needs a differentiable result and captures");
-        // Check the actual tangent types, not just the primal representations.
-        (void)a.getPullbackType();
         auto *results = IndexSubset::get(astCtx, 1, {0});
         auto *childWitness = getExactDifferentiabilityWitness(
             module, child, parameters, results);
@@ -1416,6 +1414,8 @@ bool DifferentiationTransformer::canonicalizeDifferentiabilityWitness(
         if (canonicalizeDifferentiabilityWitness(
                 childWitness, invoker, IsNotSerialized))
           return true;
+        // Use the generated derivative's interface, not a reconstructed type.
+        (void)a.getPullbackType();
         LLVM_DEBUG(getADDebugStream() << "Prepared existing async-let initializer:\n"
                                      << *childWitness->getVJP());
       }
