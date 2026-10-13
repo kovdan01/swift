@@ -61,7 +61,8 @@ LinearMapInfo::LinearMapInfo(ADContext &context, AutoDiffLinearMapKind kind,
                              const DifferentiableActivityInfo &activityInfo,
                              SILLoopInfo *loopInfo)
     : kind(kind), original(original), derivative(derivative),
-      activityInfo(activityInfo), loopInfo(loopInfo), config(config),
+      activityInfo(activityInfo), asyncLets(context.getAsyncLets(derivative)),
+      loopInfo(loopInfo), config(config),
       synthesizedFile(context.getOrCreateSynthesizedFile(original)),
       typeConverter(context.getTypeConverter()) {
   generateDifferentiationDataStructures(context, derivative);
@@ -177,7 +178,7 @@ void LinearMapInfo::populateBranchingTraceDecl(SILBasicBlock *originalBB,
 
 
 Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
-  if (auto *a = activityInfo.getAsyncLet(fai.getInstruction());
+  if (auto *a = getAsyncLet(fai.getInstruction());
       a && a->isGet(fai.getInstruction())) {
     assert(kind == AutoDiffLinearMapKind::Pullback);
     return a->getPullbackType();
@@ -458,12 +459,12 @@ void LinearMapInfo::generateDifferentiationDataStructures(
 /// 3. The instruction has both an active result (direct or indirect) and an
 ///    active argument.
 bool LinearMapInfo::shouldDifferentiateApplySite(FullApplySite applySite) {
-  if (auto *a = activityInfo.getAsyncLet(applySite.getInstruction());
+  if (auto *a = getAsyncLet(applySite.getInstruction());
       a && a->isGet(applySite.getInstruction())) {
     assert(kind == AutoDiffLinearMapKind::Pullback);
-    // The get has no numerical SIL result. Its output is the typed buffer,
-    // whose adjoint ordinary loads populate across branches and loop edges.
-    return activityInfo.isActive(a->getBuffer(), config);
+    // The get's () result is inactive. It checkpoints the selected child's
+    // pullback; selection is the PR's predicate on the start's raw buffer.
+    return shouldDifferentiateAsyncLet(a->start, activityInfo, config);
   }
   // Function applications with an active inout argument should be
   // differentiated.
@@ -521,7 +522,7 @@ static bool shouldDifferentiateInjectEnumAddr(
 ///    ending, or destroying on an active operand.
 /// 5. The instruction creates an SSA copy of an active operand.
 bool LinearMapInfo::shouldDifferentiateInstruction(SILInstruction *inst) {
-  if (auto *a = activityInfo.getAsyncLet(inst))
+  if (auto *a = getAsyncLet(inst))
     // These closures are replaced as part of the child computation. Their
     // captured-input adjoints are produced by the saved child pullback.
     if (a->isInitializerInstruction(inst))
