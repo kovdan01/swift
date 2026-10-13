@@ -1003,48 +1003,69 @@ public:
       SILValue pb = saved[index];
       auto type = pb->getType().castTo<SILFunctionType>();
       assert(!type->isAsync() && !type->hasErrorResult());
-      // Use a buffer for the seed and one buffer for the gradient aggregate.
-      // Shared reabstraction handles the saved closure's direct/indirect and
-      // tuple-flattening conventions. Do not infer these from the primal type.
+      // Invoke the saved closure with its actual conventions. In particular,
+      // do not reabstract it back into the task field's all-indirect form.
       auto buffer = getAdjointBuffer(bb, a->getBuffer());
-      auto seedType = buffer->getType().getObjectType();
-      auto gradientsType = getTypeLowering(a->getPullbackType()->getResult())
-                               .getLoweredType().getObjectType();
-      assert(seedType.isTrivial(getPullback()) &&
-             gradientsType.isTrivial(getPullback()));
-      SILParameterInfo seedParameter(seedType.getASTType(),
-                                     ParameterConvention::Indirect_In_Guaranteed);
-      SILResultInfo gradientResult(gradientsType.getASTType(),
-                                  ResultConvention::Indirect);
-      auto indirectType = SILFunctionType::get(
-          nullptr, type->getExtInfo(), SILCoroutineKind::None,
-          type->getCalleeConvention(), {seedParameter}, {}, {gradientResult},
-          std::nullopt, {}, {}, getASTContext());
-      SILOptFunctionBuilder functions(getContext().getTransform());
-      pb = reabstractFunction(builder, functions, loc, pb, indirectType,
-                              [](SubstitutionMap map) { return map; });
-      auto gradients = builder.createAllocStack(loc, gradientsType);
-      builder.createApply(loc, pb, SubstitutionMap(), {gradients, buffer});
+      SmallVector<SILValue, 8> arguments;
+      SmallVector<AllocStackInst *, 4> indirectResults;
+      for (auto result : type->getIndirectFormalResults()) {
+        auto resultType = remapType(result.getSILStorageInterfaceType());
+        assert(resultType.getObjectType().isTrivial(getPullback()));
+        auto *storage = builder.createAllocStack(loc, resultType);
+        indirectResults.push_back(storage);
+        arguments.push_back(storage);
+      }
+      // A tuple seed can be expanded into several formal parameters by normal
+      // function lowering. Project only tuples, never a nominal tangent type.
+      SmallVector<SILValue, 4> seeds{buffer};
+      for (auto parameter : type->getParameters()) {
+        auto expected = remapType(parameter.getSILStorageInterfaceType());
+        assert(!parameter.isIndirectInOut() &&
+               expected.getObjectType().isTrivial(getPullback()));
+        while (!seeds.empty() &&
+               seeds.back()->getType().getObjectType() !=
+                   expected.getObjectType()) {
+          auto address = seeds.pop_back_val();
+          auto tuple = address->getType().castTo<TupleType>();
+          for (unsigned i = tuple->getNumElements(); i != 0; --i)
+            seeds.push_back(builder.createTupleElementAddr(loc, address, i - 1));
+        }
+        assert(!seeds.empty() && "missing pullback seed component");
+        auto seed = seeds.pop_back_val();
+        arguments.push_back(expected.isAddress()
+                                ? seed
+                                : builder.emitLoadValueOperation(
+                                      loc, seed, LoadOwnershipQualifier::Copy));
+      }
+      assert(seeds.empty() && "unconsumed pullback seed components");
+      auto *call = builder.createApply(loc, pb, SubstitutionMap(), arguments);
       builder.emitDestroyValueOperation(loc, pb);
+      SmallVector<SILValue, 8> directResults, gradients;
+      if (type->getNumResults() - type->getNumIndirectFormalResults() == 1)
+        directResults.push_back(call);
+      else
+        extractAllElements(call, builder, directResults);
+      collectAllActualResultsInTypeOrder(call, directResults, gradients);
       auto captures = a->initializer->getArguments();
       auto *parameters = a->getParameterIndices();
+      assert(gradients.size() == parameters->getNumIndices() &&
+             "expected one formal gradient per selected capture");
       unsigned resultIndex = 0;
       for (auto parameter : parameters->getIndices()) {
-        SILValue address = gradients;
-        if (parameters->getNumIndices() != 1)
-          address = builder.createTupleElementAddr(loc, gradients, resultIndex);
-        ++resultIndex;
-        auto gradient = builder.createLoad(loc, address,
-                                           LoadOwnershipQualifier::Trivial);
-        assert(gradient->getType() ==
-               getRemappedTangentType(captures[parameter]->getType()) &&
-               "gradient must match the selected capture's tangent type");
+        auto gradient = gradients[resultIndex++];
+        if (gradient->getType().isAddress())
+          gradient = builder.emitLoadValueOperation(
+              loc, gradient, LoadOwnershipQualifier::Take);
+        assert(gradient->getType().isTrivial(getPullback()) &&
+               gradient->getType() ==
+                   getRemappedTangentType(captures[parameter]->getType()));
         recordTemporary(gradient);
         if (getActivityInfo().isActive(captures[parameter], getConfig()))
           addAdjointValue(bb, captures[parameter],
                           makeConcreteAdjointValue(gradient), loc);
       }
-      builder.createDeallocStack(loc, gradients);
+      for (auto *storage : llvm::reverse(indirectResults))
+        builder.createDeallocStack(loc, storage);
       builder.emitZeroIntoBuffer(loc, buffer, IsNotInitialization);
       return;
     }
