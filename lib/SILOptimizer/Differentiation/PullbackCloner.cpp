@@ -656,7 +656,7 @@ private:
   /// This method first tries to find an existing entry in the adjoint buffer
   /// mapping. If no entry exists, creates a zero adjoint buffer.
   SILValue getAdjointBuffer(SILBasicBlock *origBB, SILValue originalValue) {
-    if (auto *a = getActivityInfo().getAsyncLet(
+    if (auto *a = getPullbackInfo().getAsyncLet(
             originalValue->getDefiningInstruction());
         a && a->isResultAddress(originalValue->getDefiningInstruction()))
       originalValue = a->getBuffer(); // One adjoint for the typed storage.
@@ -990,11 +990,21 @@ public:
     errorOccurred = true;
   }
 
+  void visitBuiltinInst(BuiltinInst *bi) {
+    if (auto *a = getPullbackInfo().getAsyncLet(bi); a && bi == a->start) {
+      // PR #93158 selects this instruction via its active raw result buffer.
+      // Its numerical reverse action is emitted at the saved waits instead.
+      assert(shouldDifferentiateAsyncLet(bi, getActivityInfo(), getConfig()));
+      return;
+    }
+    visitSILInstruction(bi);
+  }
+
   /// Handle `apply` instruction.
   ///   Original: (y0, y1, ...) = apply @fn (x0, x1, ...)
   ///    Adjoint: (adj[x0], adj[x1], ...) += apply @fn_pullback (adj[y0], ...)
   void visitApplyInst(ApplyInst *ai) {
-    if (auto *a = getActivityInfo().getAsyncLet(ai); a && a->isGet(ai)) {
+    if (auto *a = getPullbackInfo().getAsyncLet(ai); a && a->isGet(ai)) {
       auto *bb = ai->getParent();
       auto loc = ai->getLoc();
       auto index = getPullbackInfo().lookUpLinearMapIndex(ai);
@@ -2417,7 +2427,7 @@ bool PullbackCloner::Implementation::run() {
       // The recognized initializer chain carries dependency information, but
       // its capture adjoints are produced by the child pullback at the wait.
       // These closure values therefore need no independent adjoints.
-      if (auto *a = getActivityInfo().getAsyncLet(v->getDefiningInstruction())) {
+      if (auto *a = getPullbackInfo().getAsyncLet(v->getDefiningInstruction())) {
         if (a->isInitializerInstruction(v->getDefiningInstruction()))
           return false;
         // A typed result address aliases the child's allocation. Do not
