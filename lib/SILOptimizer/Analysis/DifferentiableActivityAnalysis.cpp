@@ -14,13 +14,7 @@
 #include "swift/SIL/SILInstruction.h"
 #define DEBUG_TYPE "differentiation"
 
-#include "swift/AST/AutoDiff.h"
 #include "swift/AST/Builtins.h"
-#include "swift/AST/SubstitutionMap.h"
-#include "swift/SIL/AbstractionPattern.h"
-#include "swift/SILOptimizer/Analysis/DominanceAnalysis.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/CommandLine.h"
 #include "swift/SILOptimizer/Analysis/DifferentiableActivityAnalysis.h"
 #include "swift/SILOptimizer/Differentiation/Common.h"
 
@@ -68,260 +62,9 @@ DifferentiableActivityCollection::DifferentiableActivityCollection(
     SILFunction &f, DominanceInfo *di, PostDominanceInfo *pdi)
     : function(f), domInfo(di), postDomInfo(pdi) {}
 
-static llvm::cl::opt<bool> EnableAsyncAutoDiff(
-    "enable-experimental-async-autodiff", llvm::cl::Hidden,
-    llvm::cl::init(false));
-
-bool swift::isExperimentalAsyncAutoDiffEnabled() {
-  return EnableAsyncAutoDiff;
-}
-
-AllocStackInst *AsyncLetInfo::getBuffer() const {
-  auto *pointer = cast<AddressToPointerInst>(start->getArguments()[2]);
-  return cast<AllocStackInst>(pointer->getOperand());
-}
-
-IndexSubset *AsyncLetInfo::getParameterIndices() const {
-  auto &function = *start->getFunction();
-  auto captures = initializer->getArguments();
-  SmallVector<unsigned, 4> indices;
-  for (unsigned i = 0; i != captures.size(); ++i)
-    if (captures[i]->getType().isDifferentiable(function.getModule()))
-      indices.push_back(i);
-  // Preserve capture positions, including gaps for nondifferentiable values.
-  return IndexSubset::get(function.getASTContext(), captures.size(), indices);
-}
-
-FunctionType *AsyncLetInfo::getPullbackType() const {
-  auto &function = *start->getFunction();
-  auto &ctx = function.getASTContext();
-  auto tangentType = [&](SILType primal) -> CanType {
-    auto space = primal.getASTType()->getAutoDiffTangentSpace(
-        LookUpConformanceInModule());
-    assert(space && "an active async-let value must have a tangent space");
-    auto tangent = space->getCanonicalType();
-    auto lowered = function.getLoweredType(
-        Lowering::AbstractionPattern::getOpaque(), tangent).getObjectType();
-    assert(lowered.isTrivial(function) &&
-           "nontrivial or address-only async-let tangents are not implemented");
-    return tangent;
-  };
-  AnyFunctionType::Param seed(tangentType(getBuffer()->getType()), Identifier(),
-                             ParameterTypeFlags());
-  auto captures = initializer->getArguments();
-  SmallVector<TupleTypeElt, 4> fields;
-  for (auto index : getParameterIndices()->getIndices())
-    fields.emplace_back(tangentType(captures[index]->getType()));
-  assert(!fields.empty() && "an active child must have differentiable captures");
-  // A single capture's tangent is one result, even if it is itself a tuple.
-  Type gradients = fields.size() == 1 ? fields.front().getType()
-                                     : TupleType::get(fields, ctx);
-  return FunctionType::get({seed}, /*yields*/ {}, gradients,
-                           FunctionType::ExtInfo());
-}
-
-bool AsyncLetInfo::isInitializerInstruction(SILInstruction *inst) const {
-  SILValue value = start->getArguments()[1];
-  while (true) {
-    if (value->getDefiningInstruction() == inst)
-      return true;
-    if (value == initializer)
-      return false;
-    // findAsyncLet has checked the conversion chain.
-    value = value->getDefiningInstruction()->getOperand(0);
-  }
-}
-
-bool AsyncLetInfo::isGet(SILInstruction *inst) const {
-  return llvm::any_of(gets, [&](ApplyInst *get) { return inst == get; });
-}
-
-bool AsyncLetInfo::isResultAddress(SILInstruction *inst) const {
-  return llvm::any_of(resultAddresses, [&](PointerToAddressInst *address) {
-    return inst == address;
-  });
-}
-
-// Do not classify the CFG as a particular diamond or loop shape. SILGen has
-// already established the structured task lifetime, which the forward cloner
-// preserves instruction for instruction. Only validate the use/def associations
-// needed to change the result type. Ordinary AD owns control-flow history.
-static AsyncLetInfo findAsyncLet(BuiltinInst *start,
-                                DominanceInfo &dominance) {
-  auto &function = *start->getFunction();
-  AsyncLetInfo a;
-  a.start = start;
-
-  assert(function.isAsync());
-  assert(!function.isSerialized() &&
-         !function.getActorIsolation().isActorIsolated());
-  auto type = function.getLoweredFunctionType();
-  assert(!type->getSubstGenericSignature() && !type->hasErrorResult());
-  // Parent parameter/result conventions are handled by ordinary AD.
-  assert(a.start->getArguments().size() == 3);
-  assert(a.start->getSubstitutions().getReplacementTypes().size() == 1 &&
-         a.start->getSubstitutions().getConformances().empty());
-  auto *buffer = a.getBuffer();
-  assert(buffer->getType().getObjectType().isTrivial(function) &&
-         "only concrete trivial async-let results are implemented");
-
-  SILValue closure = a.start->getArguments()[1];
-  SILInstruction *consumer = a.start;
-  while (true) {
-    // The converted closure is private to this start, apart from cleanup.
-    for (auto *use : closure->getUses())
-      assert((use->getUser() == consumer ||
-              isa<DestroyValueInst, DebugValueInst>(use->getUser()) ||
-              isBuiltinInst(use->getUser(),
-                            BuiltinValueKind::EndAsyncLetLifetime)) &&
-             "shared initializer closure");
-    if ((a.initializer = dyn_cast<PartialApplyInst>(closure)))
-      break;
-    consumer = closure->getDefiningInstruction();
-    assert((isa<ConvertFunctionInst, ConvertEscapeToNoEscapeInst>(consumer)));
-    closure = consumer->getOperand(0);
-  }
-  assert(a.initializer->getSubstitutionMap().empty());
-  auto captures = a.initializer->getArguments();
-  // Trivial control values are forwarded too; only values with a tangent
-  // space are differentiation parameters. There is no capture-count limit.
-  for (auto capture : captures)
-    assert(capture->getType().isObject() &&
-           capture->getType().isTrivial(function) &&
-           "only by-value trivial async-let captures are implemented");
-  assert(isa<FunctionRefInst>(a.initializer->getCallee()));
-  assert(dominance.dominates(buffer, a.initializer) &&
-         dominance.dominates(a.initializer, start));
-
-  SmallVector<SILInstruction *, 2> finishes, ends, deallocs;
-  auto pointer = a.start->getArguments()[2];
-  for (auto *use : pointer->getUses()) {
-    auto *inst = use->getUser();
-    if (inst == a.start)
-      continue;
-    if (auto *addr = dyn_cast<PointerToAddressInst>(inst)) {
-      assert(addr->getType() == buffer->getType());
-      // An aggregate can be read whole or through typed field projections.
-      // The existing memory/projection visitors differentiate these accesses.
-      SmallVector<SILValue, 4> addresses{addr};
-      while (!addresses.empty()) {
-        auto address = addresses.pop_back_val();
-        for (auto *addressUse : address->getUses()) {
-          auto *user = addressUse->getUser();
-          if (isa<DebugValueInst>(user))
-            continue;
-          if (auto *field = dyn_cast<StructElementAddrInst>(user)) {
-            addresses.push_back(field);
-          } else if (auto *element = dyn_cast<TupleElementAddrInst>(user)) {
-            addresses.push_back(element);
-          } else if (auto *copy = dyn_cast<CopyAddrInst>(user)) {
-            assert(copy->getSrc() == address && !copy->isTakeOfSrc() &&
-                   "expected a nonconsuming async-let result copy");
-          } else {
-            auto *load = cast<LoadInst>(user);
-            assert(load->getOwnershipQualifier() ==
-                   LoadOwnershipQualifier::Trivial);
-          }
-        }
-      }
-      a.resultAddresses.push_back(addr);
-    } else if (auto *apply = dyn_cast<ApplyInst>(inst)) {
-      auto *callee = apply->getCalleeFunction();
-      assert(callee && apply->getArguments().size() == 2 &&
-             apply->getArguments()[0] == a.start &&
-             apply->getArguments()[1] == pointer);
-      if (callee->getName() == "swift_asyncLet_get")
-        a.gets.push_back(apply);
-      else {
-        assert(callee->getName() == "swift_asyncLet_finish");
-        finishes.push_back(apply);
-      }
-    } else {
-      assert(isBuiltinInst(inst, BuiltinValueKind::FinishAsyncLet));
-      auto args = cast<BuiltinInst>(inst)->getArguments();
-      assert(args.size() == 2 && args[0] == a.start && args[1] == pointer);
-      finishes.push_back(inst);
-    }
-  }
-  for (auto *use : a.start->getUses()) {
-    auto *inst = use->getUser();
-    if (a.isGet(inst) || llvm::is_contained(finishes, inst))
-      continue;
-    assert(isBuiltinInst(inst, BuiltinValueKind::EndAsyncLetLifetime));
-    ends.push_back(inst);
-  }
-  for (auto *use : buffer->getUses()) {
-    auto *inst = use->getUser();
-    if (inst == pointer->getDefiningInstruction() || isa<DebugValueInst>(inst))
-      continue;
-    deallocs.push_back(cast<DeallocStackInst>(inst));
-  }
-  assert(!finishes.empty() && !ends.empty() && !deallocs.empty());
-  assert(a.resultAddresses.empty() || !a.gets.empty());
-  // These are SSA dominance checks, not a second task-lifetime or AD-loop
-  // analysis. In particular, waits in alternative arms can precede a joined
-  // result read, and cleanup-only paths need not contain a numerical read.
-  for (auto *get : a.gets)
-    assert(dominance.dominates(start, get));
-  for (auto *address : a.resultAddresses)
-    assert(dominance.dominates(start, address));
-  for (auto *finish : finishes)
-    assert(dominance.dominates(start, finish));
-  for (auto *end : ends)
-    assert(dominance.dominates(start, end));
-  for (auto *dealloc : deallocs)
-    assert(dominance.dominates(buffer, dealloc));
-  LLVM_DEBUG({
-    getADDebugStream() << "Matched trivial async let with " << a.gets.size()
-                       << " wait(s), " << a.resultAddresses.size()
-                       << " result address(es), "
-                       << a.getParameterIndices()->getNumIndices()
-                       << " differentiable capture(s):\n"
-                       << *a.start << *a.initializer;
-  });
-  return a;
-}
-
-SmallVector<AsyncLetInfo, 2> swift::findAsyncLets(SILFunction &function) {
-  SmallVector<AsyncLetInfo, 2> result;
-  if (!EnableAsyncAutoDiff)
-    return result;
-  SmallVector<BuiltinInst *, 4> starts;
-  for (auto &bb : function)
-    for (auto &inst : bb)
-      if (auto *start = isBuiltinInst(
-              &inst, BuiltinValueKind::StartAsyncLetWithLocalBuffer))
-        starts.push_back(start);
-  if (starts.empty())
-    return result;
-  for (auto &bb : function)
-    for (auto &inst : bb)
-      if (auto *hop = dyn_cast<HopToExecutorInst>(&inst))
-        assert(isa<EnumInst>(hop->getTargetExecutor()) &&
-               !cast<EnumInst>(hop->getTargetExecutor())->hasOperand());
-  DominanceInfo dominance(&function);
-  for (auto *start : starts)
-    result.push_back(findAsyncLet(start, dominance));
-  return result;
-}
-
-const AsyncLetInfo *
-DifferentiableActivityInfo::getAsyncLet(SILInstruction *inst) const {
-  if (!inst)
-    return nullptr;
-  for (const auto &a : asyncLets)
-    if (inst == a.start || a.isGet(inst) || a.isResultAddress(inst) ||
-        inst == a.getBuffer() ||
-        inst == a.start->getArguments()[2]->getDefiningInstruction() ||
-        a.isInitializerInstruction(inst))
-      return &a;
-  return nullptr;
-}
-
 DifferentiableActivityInfo::DifferentiableActivityInfo(
     DifferentiableActivityCollection &parent, GenericSignature derivGenSig)
     : parent(parent), derivativeGenericSignature(derivGenSig) {
-  asyncLets = findAsyncLets(parent.function);
   analyze(parent.domInfo, parent.postDomInfo);
 }
 
@@ -381,10 +124,6 @@ void DifferentiableActivityInfo::setVariedAndPropagateToUsers(
     return;
   // Set the value as varied.
   variedValueSets[independentVariableIndex].insert(value);
-  if (auto *a = getAsyncLet(value->getDefiningInstruction());
-      a && value == a->getBuffer())
-    for (auto *address : a->resultAddresses)
-      setVariedAndPropagateToUsers(address, independentVariableIndex);
   // Propagate variedness to users.
   for (auto *use : value->getUses())
     propagateVaried(use, independentVariableIndex);
@@ -393,16 +132,6 @@ void DifferentiableActivityInfo::setVariedAndPropagateToUsers(
 void DifferentiableActivityInfo::propagateVaried(
     Operand *operand, unsigned independentVariableIndex) {
   auto *inst = operand->getUser();
-  if (auto *a = getAsyncLet(inst)) {
-    if (inst == a->start) {
-      if (operand->get() == a->start->getArguments()[1])
-        propagateVariedInwardsThroughProjections(
-            a->getBuffer(), independentVariableIndex);
-      return; // The handle is not the numerical result.
-    }
-    if (inst == a->start->getArguments()[2]->getDefiningInstruction())
-      return; // Do not mark the raw pointer varied.
-  }
   // Propagate variedness for the given operand.
   // General rule: mark results as varied and recursively propagate variedness
   // to users of results.
@@ -595,16 +324,6 @@ void DifferentiableActivityInfo::setUsefulAndPropagateToOperands(
   // Skip already-useful values to prevent infinite recursion.
   if (isUseful(value, dependentVariableIndex))
     return;
-  if (auto *a = getAsyncLet(value->getDefiningInstruction());
-      a && (value == a->getBuffer() ||
-            a->isResultAddress(value->getDefiningInstruction()))) {
-    setUseful(a->getBuffer(), dependentVariableIndex);
-    for (auto *address : a->resultAddresses)
-      setUseful(address, dependentVariableIndex);
-    setUsefulAndPropagateToOperands(a->start->getArguments()[1],
-                                   dependentVariableIndex);
-    return;
-  }
   if (value->getType().isAddress() ||
       value->getType().getClassDecl()) {
     propagateUsefulThroughAddress(value, dependentVariableIndex);

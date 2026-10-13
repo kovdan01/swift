@@ -225,7 +225,7 @@ public:
   void visit(SILInstruction *inst) {
     if (errorOccurred)
       return;
-    if (!activityInfo.getAsyncLets().empty())
+    if (!pullbackInfo.getAsyncLets().empty())
       Builder.setCurrentDebugScope(getOpScope(inst->getDebugScope()));
     TypeSubstCloner::visit(inst);
   }
@@ -247,11 +247,6 @@ public:
   AllocStackInst *getAsyncLetResult(const AsyncLetInfo &a) {
     return cast<AllocStackInst>(
         cast<TupleElementAddrInst>(getOpValue(a.getBuffer()))->getOperand());
-  }
-
-  const AsyncLetInfo *getActiveAsyncLet(SILInstruction *inst) {
-    auto *a = activityInfo.getAsyncLet(inst);
-    return a && activityInfo.isActive(a->getBuffer(), getConfig()) ? a : nullptr;
   }
 
   Type getAsyncLetResultASTType(const AsyncLetInfo &a) {
@@ -280,7 +275,7 @@ public:
         childType->getCalleeConvention(), childType->getParameters(), {},
         {result}, childType->getOptionalErrorResult(), {}, {}, getASTContext());
     SILOptFunctionBuilder functions(context.getTransform());
-    auto ordinal = unsigned(&a - activityInfo.getAsyncLets().data());
+    auto ordinal = unsigned(&a - pullbackInfo.getAsyncLets().data());
     auto name = (Twine("__async_ad_entry_") + vjp->getName() + "_" +
                  Twine(ordinal)).str();
     auto *entry = functions.createFunction(
@@ -347,7 +342,7 @@ public:
   }
 
   void visitAllocStackInst(AllocStackInst *inst) {
-    auto *a = getActiveAsyncLet(inst);
+    auto *a = pullbackInfo.getAsyncLet(inst);
     if (!a || inst != a->getBuffer()) {
       TypeSubstCloner::visitAllocStackInst(inst);
       return;
@@ -362,7 +357,7 @@ public:
   }
 
   void visitAddressToPointerInst(AddressToPointerInst *inst) {
-    auto *a = getActiveAsyncLet(inst);
+    auto *a = pullbackInfo.getAsyncLet(inst);
     if (!a || inst != a->start->getArguments()[2]->getDefiningInstruction()) {
       TypeSubstCloner::visitAddressToPointerInst(inst);
       return;
@@ -373,7 +368,7 @@ public:
   }
 
   void visitPointerToAddressInst(PointerToAddressInst *inst) {
-    auto *a = getActiveAsyncLet(inst);
+    auto *a = pullbackInfo.getAsyncLet(inst);
     if (a && a->isResultAddress(inst))
       mapValue(inst, getOpValue(a->getBuffer()));
     else
@@ -381,7 +376,7 @@ public:
   }
 
   void visitPartialApplyInst(PartialApplyInst *inst) {
-    auto *a = getActiveAsyncLet(inst);
+    auto *a = pullbackInfo.getAsyncLet(inst);
     if (!a || inst != a->initializer) {
       TypeSubstCloner::visitPartialApplyInst(inst);
       return;
@@ -398,7 +393,7 @@ public:
   }
 
   void visitConvertFunctionInst(ConvertFunctionInst *inst) {
-    auto *a = getActiveAsyncLet(inst);
+    auto *a = pullbackInfo.getAsyncLet(inst);
     if (!a || !a->isInitializerInstruction(inst)) {
       TypeSubstCloner::visitConvertFunctionInst(inst);
       return;
@@ -413,7 +408,7 @@ public:
   }
 
   void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *inst) {
-    auto *a = getActiveAsyncLet(inst);
+    auto *a = pullbackInfo.getAsyncLet(inst);
     if (!a || !a->isInitializerInstruction(inst)) {
       TypeSubstCloner::visitConvertEscapeToNoEscapeInst(inst);
       return;
@@ -428,7 +423,7 @@ public:
   }
 
   void visitBuiltinInst(BuiltinInst *inst) {
-    auto *a = getActiveAsyncLet(inst);
+    auto *a = pullbackInfo.getAsyncLet(inst);
     if (!a || inst != a->start) {
       TypeSubstCloner::visitBuiltinInst(inst);
       return;
@@ -446,7 +441,7 @@ public:
 
   void visitDeallocStackInst(DeallocStackInst *inst) {
     auto *a =
-        getActiveAsyncLet(inst->getOperand()->getDefiningInstruction());
+        pullbackInfo.getAsyncLet(inst->getOperand()->getDefiningInstruction());
     if (a && inst->getOperand() == a->getBuffer())
       Builder.createDeallocStack(inst->getLoc(), getAsyncLetResult(*a));
     else
@@ -1040,7 +1035,7 @@ public:
   // If an `apply` has active results or active inout arguments, replace it
   // with an `apply` of its VJP.
   void visitApplyInst(ApplyInst *ai) {
-    if (auto *a = getActiveAsyncLet(ai); a && a->isGet(ai)) {
+    if (auto *a = pullbackInfo.getAsyncLet(ai); a && a->isGet(ai)) {
       assert(pullbackInfo.shouldDifferentiateApplySite(ai));
       TypeSubstCloner::visitApplyInst(ai); // The real wait still executes.
       auto loc = ai->getLoc();

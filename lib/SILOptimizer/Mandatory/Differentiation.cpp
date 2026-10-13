@@ -33,6 +33,7 @@
 #include "swift/SIL/SILBuilder.h"
 #include "swift/SILOptimizer/Analysis/DifferentiableActivityAnalysis.h"
 #include "swift/SILOptimizer/Analysis/DominanceAnalysis.h"
+#include "swift/SILOptimizer/Analysis/DifferentiableActivityAnalysis.h"
 #include "swift/SILOptimizer/Differentiation/ADContext.h"
 #include "swift/SILOptimizer/Differentiation/JVPCloner.h"
 #include "swift/SILOptimizer/Differentiation/Thunk.h"
@@ -1354,6 +1355,69 @@ bool DifferentiationTransformer::canonicalizeDifferentiabilityWitness(
                                AutoDiffDerivativeFunctionKind::VJP);
 
     if (noDefault) {
+      // Use ordinary activity before preparing child derivatives. Inactive
+      // children are left alone, even if their numerical derivative is unavailable.
+      auto *analysis = context.getPassManager()
+                           .getAnalysis<DifferentiableActivityAnalysis>();
+      auto &activity = analysis->get(orig)->getActivityInfo(
+          vjp->getLoweredFunctionType()->getSubstGenericSignature(),
+          AutoDiffDerivativeFunctionKind::VJP);
+      auto &module = context.getModule();
+      auto &astCtx = context.getASTContext();
+      for (const auto &a : context.prepareAsyncLets(
+               orig, vjp, activity, witness->getConfig())) {
+        auto *child = cast<FunctionRefInst>(a.initializer->getCallee())
+                          ->getReferencedFunction();
+        auto childType = child->getLoweredFunctionType()
+                             ->getUnsubstitutedType(module);
+        auto captures = a.initializer->getArguments();
+        assert(!child->empty() && !child->isSerialized());
+        assert(!child->getActorIsolation().isActorIsolated());
+        assert(!childType->getSubstGenericSignature() && childType->isAsync() &&
+               !childType->isCoroutine() && childType->hasErrorResult());
+        assert(childType->getNumParameters() == captures.size() &&
+               childType->getNumResults() == 1 &&
+               childType->getNumIndirectFormalResults() == 1);
+        assert(child->getArgument(0)->getType() == a.getBuffer()->getType());
+        for (unsigned i = 0; i != captures.size(); ++i)
+          assert(child->getArgument(i + 1)->getType() == captures[i]->getType());
+
+        // Differentiate the original initializer with ordinary AD. Its body
+        // can contain conversions, calls, branches or loops; those do not need
+        // async-let-specific numerical rules. Trivial primal/tangent types do
+        // not imply that arbitrary saved derivative state is task-transferable.
+        for (auto &bb : *child) {
+          for (auto &inst : bb) {
+            assert(!isa<ThrowInst>(&inst) &&
+                   "throwing async-let results are not implemented");
+            assert(!isBuiltinInst(&inst,
+                                  BuiltinValueKind::StartAsyncLetWithLocalBuffer) &&
+                   "nested async-let initializers need recursive preparation");
+            if (auto *hop = dyn_cast<HopToExecutorInst>(&inst))
+              assert(isa<EnumInst>(hop->getTargetExecutor()) &&
+                     !cast<EnumInst>(hop->getTargetExecutor())->hasOperand());
+          }
+        }
+        auto *parameters = a.getParameterIndices();
+        assert(parameters->getNumIndices() != 0 &&
+               a.getBuffer()->getType().isDifferentiable(module) &&
+               "selected child needs a differentiable result and captures");
+        // Check the actual tangent types, not just the primal representations.
+        (void)a.getPullbackType();
+        auto *results = IndexSubset::get(astCtx, 1, {0});
+        auto *childWitness = getExactDifferentiabilityWitness(
+            module, child, parameters, results);
+        if (!childWitness)
+          childWitness = SILDifferentiabilityWitness::createDefinition(
+              module, SILLinkage::Private, child, DifferentiabilityKind::Reverse,
+              parameters, results, GenericSignature(), nullptr, nullptr,
+              /*isSerialized*/ false, /*isDefault*/ false);
+        if (canonicalizeDifferentiabilityWitness(
+                childWitness, invoker, IsNotSerialized))
+          return true;
+        LLVM_DEBUG(getADDebugStream() << "Prepared existing async-let initializer:\n"
+                                     << *childWitness->getVJP());
+      }
       // Emit VJP function.
       VJPCloner cloner(context, witness, vjp, invoker);
       if (cloner.run())
@@ -1788,66 +1852,6 @@ void Differentiation::run() {
   for (auto invokerPair : context.getInvokers()) {
     auto *witness = invokerPair.first;
     auto invoker = invokerPair.second;
-    bool childError = false;
-    for (const auto &a : findAsyncLets(*witness->getOriginalFunction())) {
-      auto *child = cast<FunctionRefInst>(a.initializer->getCallee())
-                        ->getReferencedFunction();
-      auto childType = child->getLoweredFunctionType()
-                           ->getUnsubstitutedType(module);
-      auto captures = a.initializer->getArguments();
-      assert(!child->empty() && !child->isSerialized());
-      assert(!child->getActorIsolation().isActorIsolated());
-      assert(!childType->getSubstGenericSignature() && childType->isAsync() &&
-             !childType->isCoroutine() && childType->hasErrorResult());
-      assert(childType->getNumParameters() == captures.size() &&
-             childType->getNumResults() == 1 &&
-             childType->getNumIndirectFormalResults() == 1);
-      assert(child->getArgument(0)->getType() == a.getBuffer()->getType());
-      for (unsigned i = 0; i != captures.size(); ++i)
-        assert(child->getArgument(i + 1)->getType() == captures[i]->getType());
-
-      // Differentiate the original initializer with ordinary AD. Its body
-      // can contain conversions, calls, branches or loops; those do not need
-      // async-let-specific numerical rules. Trivial primal/tangent types do
-      // not imply that arbitrary saved derivative state is task-transferable.
-      for (auto &bb : *child) {
-        for (auto &inst : bb) {
-          assert(!isa<ThrowInst>(&inst) &&
-                 "throwing async-let results are not implemented");
-          assert(!isBuiltinInst(&inst,
-                                BuiltinValueKind::StartAsyncLetWithLocalBuffer) &&
-                 "nested async-let initializers need recursive preparation");
-          if (auto *hop = dyn_cast<HopToExecutorInst>(&inst))
-            assert(isa<EnumInst>(hop->getTargetExecutor()) &&
-                   !cast<EnumInst>(hop->getTargetExecutor())->hasOperand());
-        }
-      }
-      auto *parameters = a.getParameterIndices();
-      if (parameters->getNumIndices() == 0 ||
-          !a.getBuffer()->getType().isDifferentiable(module))
-        continue;
-      // Check the actual tangent types, not just the primal representations.
-      (void)a.getPullbackType();
-      auto *results = IndexSubset::get(astCtx, 1, {0});
-      auto *childWitness = getExactDifferentiabilityWitness(
-          module, child, parameters, results);
-      if (!childWitness)
-        childWitness = SILDifferentiabilityWitness::createDefinition(
-            module, SILLinkage::Private, child, DifferentiabilityKind::Reverse,
-            parameters, results, GenericSignature(), nullptr, nullptr,
-            /*isSerialized*/ false, /*isDefault*/ false);
-      if (transformer.canonicalizeDifferentiabilityWitness(
-              childWitness, invoker, IsNotSerialized)) {
-        childError = true;
-        break;
-      }
-      LLVM_DEBUG(getADDebugStream() << "Prepared existing async-let initializer:\n"
-                                   << *childWitness->getVJP());
-    }
-    if (childError) {
-      errorOccurred = true;
-      continue;
-    }
     if (transformer.canonicalizeDifferentiabilityWitness(
             witness, invoker,
             witness->getOriginalFunction()->getSerializedKind()))
