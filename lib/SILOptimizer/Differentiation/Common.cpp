@@ -24,6 +24,20 @@
 
 #define DEBUG_TYPE "differentiation"
 
+#include "swift/AST/SemanticAttrs.h"
+#include "swift/AST/TypeCheckRequests.h"
+#include "swift/Basic/Assertions.h"
+#include "swift/Basic/STLExtras.h"
+#include "swift/SIL/ApplySite.h"
+#include "swift/SILOptimizer/Analysis/ArraySemantic.h"
+#include "swift/SILOptimizer/Analysis/DifferentiableActivityAnalysis.h"
+#include "swift/SILOptimizer/Differentiation/ADContext.h"
+
+namespace swift {
+namespace autodiff {
+
+raw_ostream &getADDebugStream() { return llvm::dbgs() << "[AD] "; }
+
 // Given a pointer_to_address instruction, return corresponding
 // startAsyncLetWithLocalBuffer provided that input instruction
 // is the address of the async let result buffer (so, the last operand)
@@ -157,7 +171,7 @@ bool AsyncLetInfo::isResultAddress(SILInstruction *inst) const {
 // preserves instruction for instruction. Only validate the use/def associations
 // needed to change the result type. Ordinary AD owns control-flow history.
 static AsyncLetInfo findAsyncLet(BuiltinInst *start,
-                                DominanceInfo &dominance) {
+                                 DominanceInfo &dominance) {
   auto &function = *start->getFunction();
   AsyncLetInfo a;
   a.start = start;
@@ -336,20 +350,6 @@ const AsyncLetInfo *getAsyncLet(
       return &a;
   return nullptr;
 }
-
-#include "swift/AST/SemanticAttrs.h"
-#include "swift/AST/TypeCheckRequests.h"
-#include "swift/Basic/Assertions.h"
-#include "swift/Basic/STLExtras.h"
-#include "swift/SIL/ApplySite.h"
-#include "swift/SILOptimizer/Analysis/ArraySemantic.h"
-#include "swift/SILOptimizer/Analysis/DifferentiableActivityAnalysis.h"
-#include "swift/SILOptimizer/Differentiation/ADContext.h"
-
-namespace swift {
-namespace autodiff {
-
-raw_ostream &getADDebugStream() { return llvm::dbgs() << "[AD] "; }
 
 //===----------------------------------------------------------------------===//
 // Helpers
