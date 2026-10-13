@@ -299,36 +299,8 @@ Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
         fnTy->getUnsubstitutedType(original->getModule()));
   }
 
-  // IRGen requires decls to have AST types (not `SILFunctionType`), so we
-  // convert the `SILFunctionType` of the linear map to a `FunctionType` with
-  // the same parameters and results.
-  auto silFnTy = linearMapSILType.castTo<SILFunctionType>();
-  SmallVector<AnyFunctionType::Param, 8> params;
-  for (auto &param : silFnTy->getParameters()) {
-    ParameterTypeFlags flags;
-    if (param.isAutoDiffSemanticResult())
-      flags = flags.withInOut(true);
-
-    params.push_back(
-        AnyFunctionType::Param(param.getInterfaceType(), Identifier(), flags));
-  }
-
-  AnyFunctionType *astFnTy;
-  if (auto genSig = silFnTy->getSubstGenericSignature()) {
-    // FIXME: Verify ExtInfo state is correct, not working by accident.
-    GenericFunctionType::ExtInfo info;
-    astFnTy = GenericFunctionType::get(
-        genSig, params, /* yields */ {},
-        silFnTy->getAllResultsInterfaceType().getASTType(), info);
-  } else {
-    FunctionType::ExtInfo info;
-    astFnTy = FunctionType::get(
-        params, /* yields */ {},
-        silFnTy->getAllResultsInterfaceType().getASTType(), info);
-  }
-
   Type resultType =
-      astFnTy->hasArchetype() ? astFnTy->mapTypeOutOfEnvironment() : astFnTy;
+      getLinearMapASTType(linearMapSILType.castTo<SILFunctionType>());
   if (fai.getKind() == FullApplySiteKind::TryApplyInst)
     resultType = resultType->wrapInOptionalType();
 
