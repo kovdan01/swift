@@ -1,6 +1,7 @@
 //===--- ADContext.h - Differentiation Context ----------------*- C++ -*---===//
 //
 // This source file is part of the Swift.org open source project
+#include <memory>
 //
 // Copyright (c) 2019 - 2020 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
@@ -128,11 +129,35 @@ private:
 public:
   /// Construct an ADContext for the given module.
   explicit ADContext(SILModuleTransform &transform);
+  // Indirection keeps descriptor addresses stable while child derivative
+  // preparation inserts other entries and DenseMap grows.
+  llvm::DenseMap<SILFunction *,
+                 std::unique_ptr<SmallVector<AsyncLetInfo, 2>>> asyncLets;
+
 
   // No copying.
   ADContext(const ADContext &) = delete;
 
   //--------------------------------------------------------------------------//
+  ArrayRef<AsyncLetInfo> prepareAsyncLets(
+      SILFunction *original, SILFunction *vjp,
+      const DifferentiableActivityInfo &activity, const AutoDiffConfig &config) {
+    auto found = asyncLets.find(vjp);
+    if (found == asyncLets.end()) {
+      auto entries = std::make_unique<SmallVector<AsyncLetInfo, 2>>(
+          findAsyncLets(*original, activity, config));
+      found = asyncLets.try_emplace(vjp, std::move(entries)).first;
+    }
+    return *found->second;
+  }
+
+  ArrayRef<AsyncLetInfo> getAsyncLets(SILFunction *derivative) const {
+    auto found = asyncLets.find(derivative);
+    if (found == asyncLets.end())
+      return {};
+    return *found->second;
+  }
+
   // General utilities
   //--------------------------------------------------------------------------//
 

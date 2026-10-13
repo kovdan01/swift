@@ -21,6 +21,7 @@
 #include "swift/AST/SynthesizedFileUnit.h"
 #include "swift/SIL/ApplySite.h"
 #include "swift/SILOptimizer/Analysis/DifferentiableActivityAnalysis.h"
+#include "swift/SILOptimizer/Differentiation/Common.h"
 #include "llvm/ADT/DenseMap.h"
 
 namespace swift {
@@ -62,6 +63,9 @@ private:
 
   /// Activity info of the original function.
   const DifferentiableActivityInfo &activityInfo;
+
+  /// Selected task descriptors owned by ADContext for this derivative.
+  ArrayRef<AsyncLetInfo> asyncLets;
 
   /// The original function's loop info.
   SILLoopInfo *loopInfo;
@@ -123,6 +127,11 @@ private:
                                              SILFunction *derivative);
 
 public:
+  ArrayRef<AsyncLetInfo> getAsyncLets() const { return asyncLets; }
+  const AsyncLetInfo *getAsyncLet(SILInstruction *inst) const {
+    return swift::autodiff::getAsyncLet(asyncLets, inst);
+  }
+
   bool shouldDifferentiateApplySite(FullApplySite applySite);
   bool shouldDifferentiateInstruction(SILInstruction *inst);
 
