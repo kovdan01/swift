@@ -227,6 +227,23 @@ void DifferentiableActivityInfo::propagateVaried(
           for (auto *arg : succBB->getArguments())
             setVariedAndPropagateToUsers(arg, i);
   }
+  // startAsyncLetWithLocalBuffer takes its last argument as a result buffer:
+  // startAsyncLetWithLocalBuffer: <T> (
+  //     _ taskOptions: Optional<Builtin.RawPointer>,
+  //     __owned @escaping () async throws -> sending T,
+  //     _ resultBuf: Builtin.RawPointer
+  // ) -> Builtin.RawPointer
+  // We treat it similar to full apply site to allow further diffefentiation.
+  else if (auto *bi = dyn_cast<BuiltinInst>(inst);
+           bi && bi->getBuiltinKind() ==
+                     BuiltinValueKind::StartAsyncLetWithLocalBuffer) {
+    if (isVaried(operand->get(), i)) {
+      auto resultBuf = bi->getArguments().back();
+      propagateVariedInwardsThroughProjections(resultBuf, i);
+      // Do not mark result as varied, we do not want task context to end
+      // being active
+    }
+  }
   // Handle everything else.
   else {
     for (auto &op : inst->getAllOperands()) {
@@ -423,6 +440,16 @@ void DifferentiableActivityInfo::propagateUsefulThroughAddress(
       if (Projection::isAddressProjection(res) || isa<BeginAccessInst>(res) ||
           isa<BeginBorrowInst>(res) || isa<InitEnumDataAddrInst>(res))
         propagateUsefulThroughAddress(res, dependentVariableIndex);
+    }
+  }
+  if (auto *pta = dyn_cast_or_null<PointerToAddressInst>(
+          value->getDefiningInstruction())) {
+    if (auto *bi = getAsyncLetStart(pta)) {
+      // Mark the second operand (async let closure) as useful
+      auto closure = bi->getArguments()[1];
+      assert(closure->getType().isAsyncFunction() && "expected async closure");
+      propagateUseful(closure->getDefiningInstruction(),
+                      dependentVariableIndex);
     }
   }
 }
