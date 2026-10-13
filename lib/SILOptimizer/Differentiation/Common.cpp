@@ -18,7 +18,6 @@
 #include "swift/AST/AutoDiff.h"
 #include "swift/AST/Builtins.h"
 #include "swift/AST/SubstitutionMap.h"
-#include "swift/SIL/AbstractionPattern.h"
 #include "swift/SILOptimizer/Analysis/DominanceAnalysis.h"
 #include "llvm/Support/CommandLine.h"
 #include "swift/SIL/SILDifferentiabilityWitness.h"
@@ -75,32 +74,61 @@ IndexSubset *AsyncLetInfo::getParameterIndices() const {
   return IndexSubset::get(function.getASTContext(), captures.size(), indices);
 }
 
-FunctionType *AsyncLetInfo::getPullbackType() const {
+Type getLinearMapASTType(CanSILFunctionType silFnTy) {
+  SmallVector<AnyFunctionType::Param, 8> params;
+  for (auto &param : silFnTy->getParameters()) {
+    ParameterTypeFlags flags;
+    if (param.isAutoDiffSemanticResult())
+      flags = flags.withInOut(true);
+    params.push_back(
+        AnyFunctionType::Param(param.getInterfaceType(), Identifier(), flags));
+  }
+  AnyFunctionType *astFnTy;
+  if (auto genSig = silFnTy->getSubstGenericSignature()) {
+    // FIXME: Verify ExtInfo state is correct, not working by accident.
+    GenericFunctionType::ExtInfo info;
+    astFnTy = GenericFunctionType::get(
+        genSig, params, /* yields */ {},
+        silFnTy->getAllResultsInterfaceType().getASTType(), info);
+  } else {
+    FunctionType::ExtInfo info;
+    astFnTy = FunctionType::get(
+        params, /* yields */ {},
+        silFnTy->getAllResultsInterfaceType().getASTType(), info);
+  }
+  Type resultType =
+      astFnTy->hasArchetype() ? astFnTy->mapTypeOutOfEnvironment() : astFnTy;
+  return resultType;
+}
+
+Type AsyncLetInfo::getPullbackType() const {
   auto &function = *start->getFunction();
-  auto &ctx = function.getASTContext();
-  auto tangentType = [&](SILType primal) -> CanType {
-    auto space = primal.getASTType()->getAutoDiffTangentSpace(
-        LookUpConformanceInModule());
-    assert(space && "an active async-let value must have a tangent space");
-    auto tangent = space->getCanonicalType();
-    auto lowered = function.getLoweredType(
-        Lowering::AbstractionPattern::getOpaque(), tangent).getObjectType();
-    assert(lowered.isTrivial(function) &&
-           "nontrivial or address-only async-let tangents are not implemented");
-    return tangent;
-  };
-  AnyFunctionType::Param seed(tangentType(getBuffer()->getType()), Identifier(),
-                             ParameterTypeFlags());
-  auto captures = initializer->getArguments();
-  SmallVector<TupleTypeElt, 4> fields;
-  for (auto index : getParameterIndices()->getIndices())
-    fields.emplace_back(tangentType(captures[index]->getType()));
-  assert(!fields.empty() && "an active child must have differentiable captures");
-  // A single capture's tangent is one result, even if it is itself a tuple.
-  Type gradients = fields.size() == 1 ? fields.front().getType()
-                                     : TupleType::get(fields, ctx);
-  return FunctionType::get({seed}, /*yields*/ {}, gradients,
-                           FunctionType::ExtInfo());
+  auto &module = function.getModule();
+  auto *child = cast<FunctionRefInst>(initializer->getCallee())
+                    ->getReferencedFunction();
+  auto *results = IndexSubset::get(function.getASTContext(), 1, {0});
+  auto *witness = getExactDifferentiabilityWitness(
+      module, child, getParameterIndices(), results);
+  assert(witness && witness->getVJP() && "prepare the child VJP first");
+  // Ordinary AD is the authority for the seed and gradient types. Do not
+  // reconstruct a parallel signature by looking up tangent types here.
+  auto derivativeType = witness->getVJP()->getLoweredFunctionType()
+                            ->getUnsubstitutedType(module);
+  auto pullbackType = derivativeType->getResults().back()
+                          .getSILStorageInterfaceType()
+                          .castTo<SILFunctionType>()
+                          ->getUnsubstitutedType(module);
+  assert(!pullbackType->isAsync() && !pullbackType->hasErrorResult() &&
+         !pullbackType->getSubstGenericSignature());
+  // The closure itself is owned. Only its numerical interface is restricted
+  // to trivial values by this prototype.
+  for (auto parameter : pullbackType->getParameters())
+    assert(parameter.getSILStorageInterfaceType().getObjectType()
+               .isTrivial(function) && "nontrivial async-let seed");
+  for (auto result : pullbackType->getResults())
+    assert(result.getSILStorageInterfaceType().getObjectType()
+               .isTrivial(function) && "nontrivial async-let gradient");
+  return getLinearMapASTType(pullbackType);
 }
 
 bool AsyncLetInfo::isInitializerInstruction(SILInstruction *inst) const {

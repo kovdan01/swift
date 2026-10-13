@@ -51,6 +51,10 @@ bool shouldDifferentiateAsyncLet(BuiltinInst *start,
                                 const DifferentiableActivityInfo &activity,
                                 const AutoDiffConfig &config);
 
+/// Convert a linear map's lowered function signature to the AST function type
+/// used by saved-value tuples. Shared with ordinary call differentiation.
+Type getLinearMapASTType(CanSILFunctionType type);
+
 bool isExperimentalAsyncAutoDiffEnabled();
 
 // Transformation data for one selected child. Activity is owned exclusively by
@@ -64,7 +68,7 @@ struct AsyncLetInfo {
 
   AllocStackInst *getBuffer() const;
   IndexSubset *getParameterIndices() const;
-  FunctionType *getPullbackType() const;
+  Type getPullbackType() const;
   bool isInitializerInstruction(SILInstruction *inst) const;
 };
 
