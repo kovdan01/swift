@@ -581,14 +581,10 @@ bool LinearMapInfo::shouldDifferentiateInstruction(SILInstruction *inst) {
       return true;
 
   // Should differentiate `startAsyncLetWithLocalBuffer` with
-  // active result buffer
+  // active result buffer. Reuse the shared PR #93158 predicate.
   if (auto *bi = dyn_cast<BuiltinInst>(inst);
-      bi &&
-      bi->getBuiltinKind() == BuiltinValueKind::StartAsyncLetWithLocalBuffer) {
-    auto resultBuf = bi->getArguments().back();
-    if (activityInfo.isActive(resultBuf, config))
-      return true;
-  }
+      bi && shouldDifferentiateAsyncLet(bi, activityInfo, config))
+    return true;
 
   return false;
 }
