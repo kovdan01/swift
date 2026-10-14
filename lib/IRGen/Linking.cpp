@@ -616,9 +616,6 @@ SILDeclRef::Kind LinkEntity::getSILDeclRefKind() const {
     return SILDeclRef::Kind::Allocator;
   case Kind::DistributedThunkAsyncFunctionPointer:
   case Kind::AsyncFunctionPointerAST:
-    return static_cast<SILDeclRef::Kind>(
-        (Data & AsyncFunctionPointerDeclKindMask) >>
-        AsyncFunctionPointerDeclKindShift);
   case Kind::CoroFunctionPointerAST:
   case Kind::DistributedThunkCoroFunctionPointer:
     return static_cast<SILDeclRef::Kind>(
@@ -632,13 +629,6 @@ SILDeclRef LinkEntity::getSILDeclRef() const {
   auto ref = SILDeclRef(const_cast<ValueDecl *>(getDecl()), getSILDeclRefKind());
   if (getKind() == Kind::DistributedAccessor)
     return ref.getDistributedThunkDeclRef();
-  if (getKind() == Kind::AsyncFunctionPointerAST ||
-      getKind() == Kind::DistributedThunkAsyncFunctionPointer) {
-    ref.isForeign = (Data & AsyncFunctionPointerIsForeignMask) != 0;
-    if (SecondaryPointer)
-      ref = ref.asAutoDiffDerivativeFunction(
-          static_cast<AutoDiffDerivativeFunctionIdentifier *>(SecondaryPointer));
-  }
   return ref;
 }
 
