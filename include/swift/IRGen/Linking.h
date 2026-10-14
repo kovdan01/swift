@@ -131,14 +131,6 @@ class LinkEntity {
   enum : unsigned {
     KindShift = 0, KindMask = 0xFF,
 
-    // These fields appear in AsyncFunctionPointerAST and
-    // DistributedThunkAsyncFunctionPointer. Their secondary pointer stores
-    // the optional AutoDiffDerivativeFunctionIdentifier.
-    AsyncFunctionPointerDeclKindShift = 8,
-    AsyncFunctionPointerDeclKindMask = 0xFF00,
-    AsyncFunctionPointerIsForeignShift = 16,
-    AsyncFunctionPointerIsForeignMask = 0x10000,
-
     // This field appears in the ValueWitness kind.
     ValueWitnessShift = 8, ValueWitnessMask = 0xFF00,
 
@@ -1400,11 +1392,8 @@ public:
                           ? Kind::DistributedThunkAsyncFunctionPointer
                           : Kind::AsyncFunctionPointerAST,
                       declRef.getAbstractFunctionDecl());
-    entity.Data |=
-        LINKENTITY_SET_FIELD(AsyncFunctionPointerDeclKind,
-                             unsigned(declRef.kind)) |
-        LINKENTITY_SET_FIELD(AsyncFunctionPointerIsForeign, declRef.isForeign);
-    entity.SecondaryPointer = declRef.getDerivativeFunctionIdentifier();
+    entity.SecondaryPointer =
+        reinterpret_cast<void *>(static_cast<uintptr_t>(declRef.kind));
     return entity;
   }
 
