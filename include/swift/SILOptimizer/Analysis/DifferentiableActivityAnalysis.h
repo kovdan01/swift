@@ -54,7 +54,6 @@
 #include "swift/SILOptimizer/Analysis/Analysis.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/SmallVector.h"
 
 using llvm::SmallDenseMap;
 using llvm::SmallDenseSet;
@@ -103,7 +102,6 @@ enum class ActivityFlags : unsigned {
 };
 
 using Activity = OptionSet<ActivityFlags>;
-
 
 /// Result of activity analysis on a function. Accepts queries for whether a
 /// value is "varied", "useful" or "active" against certain differentiation
@@ -182,7 +180,6 @@ public:
   explicit DifferentiableActivityInfo(
       DifferentiableActivityCollection &parent,
       GenericSignature derivativeGenericSignature);
-
 
   /// Returns true if the given value is varied for the given independent
   /// variable index.

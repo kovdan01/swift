@@ -14,7 +14,6 @@
 #include "swift/SIL/SILInstruction.h"
 #define DEBUG_TYPE "differentiation"
 
-#include "swift/AST/Builtins.h"
 #include "swift/SILOptimizer/Analysis/DifferentiableActivityAnalysis.h"
 #include "swift/SILOptimizer/Differentiation/Common.h"
 
