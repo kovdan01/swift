@@ -118,18 +118,15 @@ Type getLinearMapASTType(CanSILFunctionType silFnTy) {
 Type AsyncLetInfo::getPullbackType() const {
   auto &function = *start->getFunction();
   auto &module = function.getModule();
-  auto *child = cast<FunctionRefInst>(initializer->getCallee())
-                    ->getReferencedFunction();
-  auto *results = IndexSubset::get(function.getASTContext(), 1, {0});
-  auto *witness = getExactDifferentiabilityWitness(
-      module, child, getParameterIndices(), results);
-  assert(witness && witness->getVJP() && "prepare the child VJP first");
-  // Ordinary AD is the authority for the seed and gradient types. Do not
-  // reconstruct a parallel signature by looking up tangent types here.
-  auto derivativeType = witness->getVJP()->getLoweredFunctionType()
-                            ->getUnsubstitutedType(module);
-  auto pullbackType = derivativeType->getResults().back()
-                          .getSILStorageInterfaceType()
+  assert(taskVJP && "prepare the child VJP first");
+  auto derivativeType = taskVJP->getLoweredFunctionType();
+  assert(derivativeType->getNumResults() == 1 &&
+         derivativeType->getSingleResult().isFormalIndirect());
+  auto payload = derivativeType->getSingleResult()
+                     .getSILStorageInterfaceType().getObjectType();
+  assert(payload.is<TupleType>() &&
+         payload.castTo<TupleType>()->getNumElements() == 2);
+  auto pullbackType = payload.getTupleElementType(1)
                           .castTo<SILFunctionType>()
                           ->getUnsubstitutedType(module);
   assert(!pullbackType->isAsync() && !pullbackType->hasErrorResult() &&

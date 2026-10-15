@@ -29,6 +29,10 @@ namespace autodiff {
 class ADContext;
 class PullbackCloner;
 
+/// The witness ABI is unchanged. A locally generated derivative can instead
+/// initialize one indirect (primal result, pullback) tuple, like a task closure.
+enum class VJPResultLayout { Standard, IndirectTuple };
+
 /// A helper class for generating VJP functions.
 class VJPCloner final {
   class Implementation;
@@ -41,6 +45,11 @@ public:
   /// to-be-generated pullback function.
   explicit VJPCloner(ADContext &context, SILDifferentiabilityWitness *witness,
                      SILFunction *vjp, DifferentiationInvoker invoker);
+  /// Generate directly into the requested result layout, without a wrapper or
+  /// a differentiability witness advertising a noncanonical derivative type.
+  VJPCloner(ADContext &context, SILFunction *original,
+            const AutoDiffConfig &config, SILFunction *vjp,
+            DifferentiationInvoker invoker, VJPResultLayout resultLayout);
   ~VJPCloner();
 
   ADContext &getContext() const;
@@ -48,7 +57,6 @@ public:
   SILFunction &getOriginal() const;
   SILFunction &getVJP() const;
   SILFunction &getPullback() const;
-  SILDifferentiabilityWitness *getWitness() const;
   const AutoDiffConfig &getConfig() const;
   DifferentiationInvoker getInvoker() const;
   LinearMapInfo &getPullbackInfo() const;
