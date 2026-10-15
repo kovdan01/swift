@@ -57,8 +57,9 @@ class VJPCloner::Implementation final
   /// The original function.
   SILFunction *const original;
 
-  /// The differentiability witness.
-  SILDifferentiabilityWitness *const witness;
+  /// Differentiation is independent of the result's calling convention.
+  const AutoDiffConfig config;
+  const VJPResultLayout resultLayout;
 
   /// The VJP function.
   SILFunction *const vjp;
@@ -100,13 +101,11 @@ class VJPCloner::Implementation final
 
   ASTContext &getASTContext() const { return vjp->getASTContext(); }
   SILModule &getModule() const { return vjp->getModule(); }
-  const AutoDiffConfig &getConfig() const {
-    return witness->getConfig();
-  }
+  const AutoDiffConfig &getConfig() const { return config; }
 
-  Implementation(VJPCloner &parent, ADContext &context,
-                 SILDifferentiabilityWitness *witness, SILFunction *vjp,
-                 DifferentiationInvoker invoker);
+  Implementation(VJPCloner &parent, ADContext &context, SILFunction *original,
+                 const AutoDiffConfig &config, SILFunction *vjp,
+                 DifferentiationInvoker invoker, VJPResultLayout resultLayout);
 
   /// Creates an empty pullback function, to be filled in by `PullbackCloner`.
   SILFunction *createEmptyPullback();
@@ -159,8 +158,11 @@ class VJPCloner::Implementation final
     auto vjpFuncTy = vjp->getLoweredFunctionType();
     const auto &conv = vjp->getConventions();
 
-    return conv.getSILType(vjpFuncTy->getResults().back(),
-                           vjp->getTypeExpansionContext());
+    auto result = conv.getSILType(vjpFuncTy->getResults().back(),
+                                 vjp->getTypeExpansionContext());
+    if (resultLayout == VJPResultLayout::IndirectTuple)
+      return result.getObjectType().getTupleElementType(1);
+    return result;
   }
 
   GenericSignature getBuiltinAutoDiffAllocateSubcontextDecl() {
@@ -256,90 +258,6 @@ public:
     return TupleType::get(fields, getASTContext());
   }
 
-  SILFunction *createAsyncLetEntry(const AsyncLetInfo &a) {
-    auto *child = cast<FunctionRefInst>(a.initializer->getCallee())
-                      ->getReferencedFunction();
-    auto *parameters = a.getParameterIndices();
-    auto *results = IndexSubset::get(getASTContext(), 1, {0});
-    assert(parameters->getNumIndices() >= 1);
-    auto *childWitness = getExactDifferentiabilityWitness(
-        getModule(), child, parameters, results);
-    assert(childWitness && childWitness->getVJP());
-    auto *childVJP = childWitness->getVJP();
-    auto childType =
-        child->getLoweredFunctionType()->getUnsubstitutedType(getModule());
-    auto payload = getAsyncLetResult(a)->getType().getObjectType();
-    SILResultInfo result(payload.getASTType(), ResultConvention::Indirect);
-    auto entryType = SILFunctionType::get(
-        nullptr, childType->getExtInfo(), SILCoroutineKind::None,
-        childType->getCalleeConvention(), childType->getParameters(), {},
-        {result}, childType->getOptionalErrorResult(), {}, {}, getASTContext());
-    SILOptFunctionBuilder functions(context.getTransform());
-    auto ordinal = unsigned(&a - pullbackInfo.getAsyncLets().data());
-    auto name = (Twine("__async_ad_entry_") + vjp->getName() + "_" +
-                 Twine(ordinal)).str();
-    auto *entry = functions.createFunction(
-        SILLinkage::Private, getASTContext().getIdentifier(name).str(), entryType,
-        child->getActorIsolation(), nullptr, child->getLocation(), child->isBare(),
-        IsNotTransparent, IsNotSerialized, IsNotDynamic, IsNotDistributed,
-        IsNotRuntimeAccessible);
-    entry->setDebugScope(
-        new (getModule()) SILDebugScope(child->getLocation(), entry));
-    entry->setHasLoweredAddresses(child->hasLoweredAddresses());
-    context.recordGeneratedFunction(entry);
-    entry->createBasicBlock();
-    createEntryArguments(entry);
-    SILBuilder builder(entry->getEntryBlock(), entry->getDebugScope());
-    auto loc = a.start->getLoc();
-    auto valueAddress =
-        builder.createTupleElementAddr(loc, entry->getArgument(0), 0);
-    auto pbAddress = builder.createTupleElementAddr(loc, entry->getArgument(0), 1);
-
-    // Preserve the existing child's nil-executor hop, including its SIL type.
-    HopToExecutorInst *hop = nullptr;
-    for (auto &inst : child->front())
-      if ((hop = dyn_cast<HopToExecutorInst>(&inst)))
-        break;
-    assert(hop);
-    auto *nil = cast<EnumInst>(hop->getTargetExecutor());
-    auto executor =
-        builder.createEnum(loc, SILValue(), nil->getElement(), nil->getType());
-    builder.createHopToExecutor(loc, executor, hop->isMandatory());
-    auto *ref = builder.createFunctionRef(loc, childVJP);
-    context.recordGeneratedFunctionReference(ref);
-    auto derivativeType = childVJP->getLoweredFunctionType();
-    auto *normal = entry->createBasicBlock();
-    auto pbType = derivativeType->getDirectFormalResultsType(
-        getModule(), TypeExpansionContext::minimal(), entry->hasLoweredAddresses());
-    auto pb = normal->createPhiArgument(pbType, OwnershipKind::Owned);
-    assert(pbType.is<SILFunctionType>());
-    auto *error = entry->createBasicBlock();
-    auto errorType =
-        derivativeType->getOptionalErrorResult()->getSILStorageInterfaceType();
-    auto exception = error->createPhiArgument(errorType, OwnershipKind::Owned);
-    SmallVector<SILValue, 3> arguments{valueAddress};
-    for (auto argument : entry->getArgumentsWithoutIndirectResults())
-      arguments.push_back(argument);
-    builder.createTryApply(loc, ref, SubstitutionMap(), arguments, normal, error);
-    builder.setInsertionPoint(normal);
-    builder.createHopToExecutor(loc, executor, hop->isMandatory());
-    auto storedPB = reabstractFunction(
-        builder, functions, loc, pb,
-        pbAddress->getType().getObjectType().castTo<SILFunctionType>(),
-        [](SubstitutionMap map) { return map; });
-    builder.createStore(loc, storedPB, pbAddress, StoreOwnershipQualifier::Init);
-    auto unit = builder.createTuple(
-        loc, SILType::getEmptyTupleType(getASTContext()), {});
-    builder.createReturn(loc, unit);
-    builder.setInsertionPoint(error);
-    builder.createHopToExecutor(loc, executor, hop->isMandatory());
-    builder.createThrow(loc, exception);
-#ifndef NDEBUG
-    entry->verify();
-#endif
-    LLVM_DEBUG(getADDebugStream() << "Async-let VJP result adapter:\n" << *entry);
-    return entry;
-  }
 
   void visitAllocStackInst(AllocStackInst *inst) {
     auto *a = pullbackInfo.getAsyncLet(inst);
@@ -381,7 +299,12 @@ public:
       TypeSubstCloner::visitPartialApplyInst(inst);
       return;
     }
-    auto *ref = Builder.createFunctionRef(inst->getLoc(), createAsyncLetEntry(*a));
+    assert(a->taskVJP && !a->taskVJP->empty());
+    assert(a->taskVJP->getLoweredFunctionType()->getSingleResult()
+                   .getSILStorageInterfaceType().getObjectType() ==
+               getAsyncLetResult(*a)->getType().getObjectType() &&
+           "task and derivative must use the same result storage");
+    auto *ref = Builder.createFunctionRef(inst->getLoc(), a->taskVJP);
     context.recordGeneratedFunctionReference(ref);
     auto captures = getOpValueArray<2>(inst->getArguments());
     auto *closure = Builder.createPartialApply(
@@ -502,9 +425,26 @@ public:
                    .isCompatible()) {
       pullbackValue = Builder.createConvertFunction(loc, pullbackPartialApply,
                                                     pullbackType);
+    } else if (resultLayout == VJPResultLayout::IndirectTuple) {
+      // Only the synchronous pullback's storage convention may differ. There
+      // is no async call or result adapter between this VJP and the task.
+      SILOptFunctionBuilder functions(context.getTransform());
+      pullbackValue = reabstractFunction(
+          Builder, functions, loc, pullbackPartialApply, pullbackFnType,
+          [](SubstitutionMap map) { return map; });
     } else {
       llvm::report_fatal_error("Pullback value type is not ABI-compatible "
                                "with the returned pullback type");
+    }
+
+    if (resultLayout == VJPResultLayout::IndirectTuple) {
+      assert(origResults.empty() && "expected one indirect primal result");
+      auto output = *vjp->getIndirectResults().begin();
+      auto pullbackAddress = Builder.createTupleElementAddr(loc, output, 1);
+      Builder.createStore(loc, pullbackValue, pullbackAddress,
+                          StoreOwnershipQualifier::Init);
+      Builder.createReturn(ri->getLoc(), origResult);
+      return;
     }
 
     // Return a tuple of the original result and pullback.
@@ -1488,21 +1428,18 @@ getActivityInfoHelper(ADContext &context, SILFunction *original,
   return activityInfo;
 }
 
-VJPCloner::Implementation::Implementation(VJPCloner &cloner, ADContext &context,
-                                          SILDifferentiabilityWitness *witness,
-                                          SILFunction *vjp,
-                                          DifferentiationInvoker invoker)
-    : TypeSubstCloner(*vjp, *witness->getOriginalFunction(),
-                      getSubstitutionMap(witness->getOriginalFunction(), vjp)),
-      cloner(cloner), context(context),
-      original(witness->getOriginalFunction()), witness(witness),
-      vjp(vjp), invoker(invoker),
-      activityInfo(getActivityInfoHelper(
-          context, original, witness->getConfig(), vjp)),
+VJPCloner::Implementation::Implementation(
+    VJPCloner &cloner, ADContext &context, SILFunction *original,
+    const AutoDiffConfig &config, SILFunction *vjp,
+    DifferentiationInvoker invoker, VJPResultLayout resultLayout)
+    : TypeSubstCloner(*vjp, *original, getSubstitutionMap(original, vjp)),
+      cloner(cloner), context(context), original(original), config(config),
+      resultLayout(resultLayout), vjp(vjp), invoker(invoker),
+      activityInfo(getActivityInfoHelper(context, original, config, vjp)),
       loopInfo(context.getPassManager().getAnalysis<SILLoopAnalysis>()
                    ->get(original)),
       pullbackInfo(context, AutoDiffLinearMapKind::Pullback, original, vjp,
-                   witness->getConfig(), activityInfo, loopInfo) {
+                   config, activityInfo, loopInfo) {
   // Create empty pullback function.
   pullback = createEmptyPullback();
   context.recordGeneratedFunction(pullback);
@@ -1511,7 +1448,15 @@ VJPCloner::Implementation::Implementation(VJPCloner &cloner, ADContext &context,
 VJPCloner::VJPCloner(ADContext &context,
                      SILDifferentiabilityWitness *witness, SILFunction *vjp,
                      DifferentiationInvoker invoker)
-    : impl(*new Implementation(*this, context, witness, vjp, invoker)) {}
+    : VJPCloner(context, witness->getOriginalFunction(), witness->getConfig(),
+                vjp, invoker, VJPResultLayout::Standard) {}
+
+VJPCloner::VJPCloner(ADContext &context, SILFunction *original,
+                     const AutoDiffConfig &config, SILFunction *vjp,
+                     DifferentiationInvoker invoker,
+                     VJPResultLayout resultLayout)
+    : impl(*new Implementation(*this, context, original, config, vjp, invoker,
+                               resultLayout)) {}
 
 VJPCloner::~VJPCloner() { delete &impl; }
 
@@ -1520,9 +1465,6 @@ SILModule &VJPCloner::getModule() const { return impl.getModule(); }
 SILFunction &VJPCloner::getOriginal() const { return *impl.original; }
 SILFunction &VJPCloner::getVJP() const { return *impl.vjp; }
 SILFunction &VJPCloner::getPullback() const { return *impl.pullback; }
-SILDifferentiabilityWitness *VJPCloner::getWitness() const {
-  return impl.witness;
-}
 const AutoDiffConfig &VJPCloner::getConfig() const {
   return impl.getConfig();
 }
@@ -1557,7 +1499,8 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
   // signature: when witness generic signature has same-type requirements
   // binding all generic parameters to concrete types, VJP function type uses
   // all the concrete types and VJP generic signature is null.
-  auto witnessCanGenSig = witness->getDerivativeGenericSignature().getCanonicalSignature();
+  auto witnessCanGenSig =
+      getConfig().derivativeGenericSignature.getCanonicalSignature();
   auto lookupConformance = LookUpConformanceInModule();
 
   // Given a type, returns its formal SIL parameter info.
@@ -1638,7 +1581,7 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
   SmallVector<SILYieldInfo, 8> pbYields;
   SmallVector<SILResultInfo, 8> adjResults;
   auto origParams = origTy->getParameters();
-  auto config = witness->getConfig();
+  auto config = getConfig();
 
   // Add pullback parameters based on original result indices.
   SmallVector<unsigned, 4> semanticResultParamIndices;
@@ -1746,6 +1689,8 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
   Mangle::DifferentiationMangler mangler(getASTContext());
   auto pbName = mangler.mangleLinearMap(
       original->getName(), AutoDiffLinearMapKind::Pullback, config);
+  if (resultLayout == VJPResultLayout::IndirectTuple)
+    pbName += "_task_result"; // Do not collide with a canonical witness PB.
   // Set pullback generic signature equal to VJP generic signature.
   // Do not use witness generic signature, which may have same-type requirements
   // binding all generic parameters to concrete types.
@@ -1881,6 +1826,18 @@ bool VJPCloner::Implementation::run() {
   SmallVector<SILValue, 4> entryArgs;
   entryArgs.assign(entry->getArguments().begin(),
                    entry->getArguments().end());
+  if (resultLayout == VJPResultLayout::IndirectTuple) {
+    assert(original->getLoweredFunctionType()->getNumResults() == 1 &&
+           original->getLoweredFunctionType()->getNumIndirectFormalResults() == 1 &&
+           vjp->getLoweredFunctionType()->getNumResults() == 1 &&
+           vjp->getLoweredFunctionType()->getNumIndirectFormalResults() == 1);
+    Builder.setInsertionPoint(entry);
+    // Clone the primal directly into field 0. The ordinary VJP return visitor
+    // initializes field 1 with the generated pullback, then returns ().
+    entryArgs[0] = Builder.createTupleElementAddr(
+        original->getLocation(), entryArgs[0], 0);
+    assert(entryArgs[0]->getType() == original->getArgument(0)->getType());
+  }
 
   cloneFunctionBody(original, entry, entryArgs);
   // If errors occurred, back out.

@@ -166,9 +166,6 @@ private:
   SILModule &getModule() const { return getContext().getModule(); }
   ASTContext &getASTContext() const { return getPullback().getASTContext(); }
   SILFunction &getOriginal() const { return vjpCloner.getOriginal(); }
-  SILDifferentiabilityWitness *getWitness() const {
-    return vjpCloner.getWitness();
-  }
   DifferentiationInvoker getInvoker() const { return vjpCloner.getInvoker(); }
   LinearMapInfo &getPullbackInfo() const { return vjpCloner.getPullbackInfo(); }
   const AutoDiffConfig &getConfig() const { return vjpCloner.getConfig(); }
@@ -259,8 +256,7 @@ private:
   std::optional<TangentSpace> getTangentSpace(CanType type) {
     // Use witness generic signature to remap types.
     type =
-        getWitness()->getDerivativeGenericSignature().getReducedType(
-            type);
+        getConfig().derivativeGenericSignature.getReducedType(type);
     return type->getAutoDiffTangentSpace(
         LookUpConformanceInModule());
   }

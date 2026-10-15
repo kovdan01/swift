@@ -62,6 +62,9 @@ bool isExperimentalAsyncAutoDiffEnabled();
 struct AsyncLetInfo {
   BuiltinInst *start = nullptr;
   PartialApplyInst *initializer = nullptr;
+  // A derivative body with one indirect (value, pullback) result. This is not
+  // a witness entry: ordinary witness derivatives keep their canonical ABI.
+  SILFunction *taskVJP = nullptr;
   SmallVector<ApplyInst *, 2> gets;
   bool isGet(SILInstruction *inst) const;
   bool isResultAddress(SILInstruction *inst) const;
