@@ -1435,7 +1435,9 @@ bool DifferentiationTransformer::canonicalizeDifferentiabilityWitness(
         Mangle::DifferentiationMangler mangler(astCtx);
         auto name = mangler.mangleDerivativeFunction(
             child->getName(), AutoDiffDerivativeFunctionKind::VJP, childConfig);
-        name += "_task_result";
+        // This private result-ABI variant is not a canonical Swift symbol.
+        // Keep it outside the $s namespace instead of corrupting that mangling.
+        name = "__autodiff_task_result_" + name;
         a.taskVJP = module.lookUpFunction(name);
         if (!a.taskVJP) {
           SILOptFunctionBuilder functions(context.getTransform());

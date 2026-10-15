@@ -1689,8 +1689,10 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
   Mangle::DifferentiationMangler mangler(getASTContext());
   auto pbName = mangler.mangleLinearMap(
       original->getName(), AutoDiffLinearMapKind::Pullback, config);
+  // Use a private identifier rather than appending arbitrary text to a
+  // Swift mangling. IRGen will mangle its partial-application forwarders.
   if (resultLayout == VJPResultLayout::IndirectTuple)
-    pbName += "_task_result"; // Do not collide with a canonical witness PB.
+    pbName = "__autodiff_task_result_" + pbName;
   // Set pullback generic signature equal to VJP generic signature.
   // Do not use witness generic signature, which may have same-type requirements
   // binding all generic parameters to concrete types.
