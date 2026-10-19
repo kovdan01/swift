@@ -996,6 +996,33 @@ public:
     visitSILInstruction(bi);
   }
 
+  /// Accumulate one returned gradient using the ordinary tangent representation.
+  /// Consumes a direct result; borrows an indirect result, whose storage remains
+  /// initialized for its caller to destroy. Shared by calls and async-let waits.
+  void accumulatePullbackResult(SILBasicBlock *bb, SILValue originalValue,
+                                SILValue gradient, SILLocation loc) {
+    assert(gradient->getType().getObjectType() ==
+           getRemappedTangentType(originalValue->getType()).getObjectType());
+    if (getTangentValueCategory(originalValue) == SILValueCategory::Address) {
+      if (gradient->getType().isAddress()) {
+        addToAdjointBuffer(bb, originalValue, gradient, loc);
+        return;
+      }
+      auto *storage = builder.createAllocStack(loc, gradient->getType());
+      builder.emitStoreValueOperation(loc, gradient, storage,
+                                      StoreOwnershipQualifier::Init);
+      addToAdjointBuffer(bb, originalValue, storage, loc);
+      builder.emitDestroyAddrAndFold(loc, storage);
+      builder.createDeallocStack(loc, storage);
+      return;
+    }
+    if (gradient->getType().isAddress())
+      gradient = builder.emitLoadValueOperation(
+          loc, gradient, LoadOwnershipQualifier::Copy);
+    recordTemporary(gradient);
+    addAdjointValue(bb, originalValue, makeConcreteAdjointValue(gradient), loc);
+  }
+
   /// Handle `apply` instruction.
   ///   Original: (y0, y1, ...) = apply @fn (x0, x1, ...)
   ///    Adjoint: (adj[x0], adj[x1], ...) += apply @fn_pullback (adj[y0], ...)
@@ -1013,10 +1040,9 @@ public:
       // do not reabstract it back into the task field's all-indirect form.
       auto buffer = getAdjointBuffer(bb, a->getBuffer());
       SmallVector<SILValue, 8> arguments;
-      SmallVector<AllocStackInst *, 4> indirectResults;
+      SmallVector<AllocStackInst *, 4> indirectResults, consumedSeeds;
       for (auto result : type->getIndirectFormalResults()) {
         auto resultType = remapType(result.getSILStorageInterfaceType());
-        assert(resultType.getObjectType().isTrivial(getPullback()));
         auto *storage = builder.createAllocStack(loc, resultType);
         indirectResults.push_back(storage);
         arguments.push_back(storage);
@@ -1027,7 +1053,7 @@ public:
       for (auto parameter : type->getParameters()) {
         auto expected = remapType(parameter.getSILStorageInterfaceType());
         assert(!parameter.isIndirectInOut() &&
-               expected.getObjectType().isTrivial(getPullback()));
+               !parameter.isAutoDiffSemanticResult());
         while (!seeds.empty() &&
                seeds.back()->getType().getObjectType() !=
                    expected.getObjectType()) {
@@ -1038,14 +1064,37 @@ public:
         }
         assert(!seeds.empty() && "missing pullback seed component");
         auto seed = seeds.pop_back_val();
-        arguments.push_back(expected.isAddress()
-                                ? seed
-                                : builder.emitLoadValueOperation(
-                                      loc, seed, LoadOwnershipQualifier::Copy));
+        switch (parameter.getConvention()) {
+        case ParameterConvention::Indirect_In_Guaranteed:
+          arguments.push_back(seed);
+          break;
+        case ParameterConvention::Indirect_In: {
+          // Do not let a consuming parameter invalidate the result adjoint.
+          auto *copy = builder.createAllocStack(loc, seed->getType());
+          builder.createCopyAddr(loc, seed, copy, IsNotTake, IsInitialization);
+          consumedSeeds.push_back(copy);
+          arguments.push_back(copy);
+          break;
+        }
+        case ParameterConvention::Direct_Owned:
+          arguments.push_back(builder.emitLoadValueOperation(
+              loc, seed, LoadOwnershipQualifier::Copy));
+          break;
+        case ParameterConvention::Direct_Guaranteed:
+        case ParameterConvention::Direct_Unowned:
+          arguments.push_back(recordTemporary(builder.emitLoadValueOperation(
+              loc, seed, LoadOwnershipQualifier::Copy)));
+          break;
+        default:
+          llvm_unreachable("unsupported pullback seed convention");
+        }
       }
       assert(seeds.empty() && "unconsumed pullback seed components");
       auto *call = builder.createApply(loc, pb, SubstitutionMap(), arguments);
       builder.emitDestroyValueOperation(loc, pb);
+      // The callee consumed these initialized copies; only storage remains.
+      for (auto *storage : llvm::reverse(consumedSeeds))
+        builder.createDeallocStack(loc, storage);
       SmallVector<SILValue, 8> directResults, gradients;
       if (type->getNumResults() - type->getNumIndirectFormalResults() == 1)
         directResults.push_back(call);
@@ -1059,19 +1108,15 @@ public:
       unsigned resultIndex = 0;
       for (auto parameter : parameters->getIndices()) {
         auto gradient = gradients[resultIndex++];
-        if (gradient->getType().isAddress())
-          gradient = builder.emitLoadValueOperation(
-              loc, gradient, LoadOwnershipQualifier::Take);
-        assert(gradient->getType().isTrivial(getPullback()) &&
-               gradient->getType() ==
-                   getRemappedTangentType(captures[parameter]->getType()));
-        recordTemporary(gradient);
         if (getActivityInfo().isActive(captures[parameter], getConfig()))
-          addAdjointValue(bb, captures[parameter],
-                          makeConcreteAdjointValue(gradient), loc);
+          accumulatePullbackResult(bb, captures[parameter], gradient, loc);
+        else if (gradient->getType().isObject())
+          builder.emitDestroyValueOperation(loc, gradient);
       }
-      for (auto *storage : llvm::reverse(indirectResults))
+      for (auto *storage : llvm::reverse(indirectResults)) {
+        builder.emitDestroyAddrAndFold(loc, storage);
         builder.createDeallocStack(loc, storage);
+      }
       builder.emitZeroIntoBuffer(loc, buffer, IsNotInitialization);
       return;
     }
@@ -1369,21 +1414,7 @@ public:
       if (paramInfo.isAutoDiffSemanticResult())
         continue;
       auto tan = *allResultsIt++;
-      if (tan->getType().isAddress()) {
-        addToAdjointBuffer(bb, origArg, tan, loc);
-      } else {
-        if (origArg->getType().isAddress()) {
-          auto *tmpBuf = builder.createAllocStack(loc, tan->getType());
-          builder.emitStoreValueOperation(loc, tan, tmpBuf,
-                                          StoreOwnershipQualifier::Init);
-          addToAdjointBuffer(bb, origArg, tmpBuf, loc);
-          builder.emitDestroyAddrAndFold(loc, tmpBuf);
-          builder.createDeallocStack(loc, tmpBuf);
-        } else {
-          recordTemporary(tan);
-          addAdjointValue(bb, origArg, makeConcreteAdjointValue(tan), loc);
-        }
-      }
+      accumulatePullbackResult(bb, origArg, tan, loc);
     }
 
     // Propagate adjoints for yields
