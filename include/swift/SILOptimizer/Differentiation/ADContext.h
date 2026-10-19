@@ -138,7 +138,7 @@ public:
   ADContext(const ADContext &) = delete;
 
   //--------------------------------------------------------------------------//
-  MutableArrayRef<AsyncLetInfo> prepareAsyncLets(
+  ArrayRef<AsyncLetInfo> prepareAsyncLets(
       SILFunction *original, SILFunction *vjp,
       const DifferentiableActivityInfo &activity, const AutoDiffConfig &config) {
     auto found = asyncLets.find(vjp);

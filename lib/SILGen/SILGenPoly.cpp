@@ -6752,8 +6752,19 @@ SILFunction *SILGenModule::getOrCreateCustomDerivativeThunk(
 
   // Collect thunk arguments, converting ownership.
   SmallVector<SILValue, 8> arguments;
-  for (auto indRes : indirectResults)
-    arguments.push_back(indRes.getLValueAddress());
+  SILValue aggregateResult;
+  if (thunkSGF.useLoweredAddresses() &&
+      thunkFnTy->hasIndirectAutoDiffResult()) {
+    assert(indirectResults.size() == 1 && fnRefType->getNumResults() == 2 &&
+           fnRefType->getResults().front().isFormalIndirect() &&
+           fnRefType->getResults().back().isFormalDirect());
+    aggregateResult = indirectResults.front().getLValueAddress();
+    arguments.push_back(
+        thunkSGF.B.createTupleElementAddr(loc, aggregateResult, 0));
+  } else {
+    for (auto indRes : indirectResults)
+      arguments.push_back(indRes.getLValueAddress());
+  }
   for (auto indErrorRes : indirectErrorResults)
     arguments.push_back(indErrorRes.getLValueAddress());
   forwardFunctionArguments(thunkSGF, loc, fnRefType, params, arguments);
@@ -6786,22 +6797,26 @@ SILFunction *SILGenModule::getOrCreateCustomDerivativeThunk(
 
   // If self ordering is not necessary and linear map types are unchanged,
   // return the `apply` instruction.
-  auto linearMapFnType = cast<SILFunctionType>(
-      thunk
-          ->mapTypeIntoEnvironment(
-              fnRefType->getResults().back().getInterfaceType())
-          ->getCanonicalType());
-  auto targetLinearMapFnType =
-      thunk
-          ->mapTypeIntoEnvironment(
-              thunkFnTy->getResults().back().getSILStorageInterfaceType())
-          .castTo<SILFunctionType>();
-  SILFunctionConventions conv(
-      thunkFnTy, SILAddressConventions::forFunction(thunkSGF.F));
+  auto linearMapFnType = thunk->mapTypeIntoEnvironment(
+      fnRefType->getAutoDiffLinearMapType(M, thunkSGF.getTypeExpansionContext()))
+                             .castTo<SILFunctionType>();
+  auto targetLinearMapFnType = thunk->mapTypeIntoEnvironment(
+      thunkFnTy->getAutoDiffLinearMapType(M, thunkSGF.getTypeExpansionContext()))
+                                   .castTo<SILFunctionType>();
 
   // Create return instruction in the thunk, first deallocating local
   // allocations and freeing arguments-to-free.
   auto createReturn = [&](SILValue retValue) {
+    if (aggregateResult) {
+      // The registered derivative initializes field 0 indirectly; the existing
+      // custom-derivative thunk stores its returned (possibly reordered) map.
+      auto destination =
+          thunkSGF.B.createTupleElementAddr(loc, aggregateResult, 1);
+      thunkSGF.B.createStore(loc, retValue, destination,
+                            StoreOwnershipQualifier::Init);
+      retValue = thunkSGF.B.createTuple(
+          loc, SILType::getEmptyTupleType(getASTContext()), ArrayRef<SILValue>{});
+    }
     // Emit cleanups.
     thunkSGF.Cleanups.emitCleanupsForReturn(CleanupLocation(loc),
                                             NotForUnwind);
@@ -6826,20 +6841,6 @@ SILFunction *SILGenModule::getOrCreateCustomDerivativeThunk(
   linearMap = thunkSGF.getThunkedAutoDiffLinearMap(
       linearMap, linearMapKind, linearMapFnType, targetLinearMapFnType,
       reorderSelf);
-  auto typeExpansionContext = thunkSGF.getTypeExpansionContext();
-  SILType linearMapResultType =
-      thunk
-          ->getLoweredType(thunk
-                               ->mapTypeIntoEnvironment(
-                                   conv.getSILResultType(typeExpansionContext))
-                               .getASTType())
-          .getCategoryType(
-              conv.getSILResultType(typeExpansionContext).getCategory());
-  if (auto tupleType = linearMapResultType.getAs<TupleType>()) {
-    linearMapResultType = SILType::getPrimitiveType(
-        tupleType->getElementTypes().back()->getCanonicalType(),
-        conv.getSILResultType(typeExpansionContext).getCategory());
-  }
 
   auto targetLinearMapUnsubstFnType =
       SILType::getPrimitiveObjectType(targetLinearMapFnType);

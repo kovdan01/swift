@@ -6190,6 +6190,16 @@ public:
       CanType origTypeOfAbstraction = CanType(),
       bool isDefaultDerivative = false);
 
+  /// These queries are for derivative function types. An async VJP of a
+  /// non-coroutine with one indirect result and no semantic-result parameters
+  /// returns one indirect (primal, pullback) tuple. This is its canonical ABI,
+  /// independent of whether the original is used as a task initializer.
+  bool hasIndirectAutoDiffResult() const;
+
+  /// Return the substituted differential/pullback type, whether it is the last
+  /// formal result or the last field of a single indirect derivative result.
+  SILType getAutoDiffLinearMapType(SILModule &M, TypeExpansionContext context);
+
   /// If \p M is nullptr, the type is not substituted.
   uint16_t getPointerAuthDiscriminator(SILModule *M);
 

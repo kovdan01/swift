@@ -28,7 +28,6 @@
 #include "swift/AST/LazyResolver.h"
 #include "swift/AST/ParameterList.h"
 #include "swift/AST/SubstitutionMap.h"
-#include "swift/SIL/AbstractionPattern.h"
 #include "swift/SIL/FormalLinkage.h"
 #include "swift/SIL/PrettyStackTrace.h"
 #include "swift/SIL/SILBuilder.h"
@@ -1404,71 +1403,21 @@ bool DifferentiationTransformer::canonicalizeDifferentiabilityWitness(
                a.getBuffer()->getType().isDifferentiable(module) &&
                "selected child needs a differentiable result and captures");
         auto *results = IndexSubset::get(astCtx, 1, {0});
-        assert(child->getLinkage() == SILLinkage::Private &&
-               "task-result VJPs are local derivatives of implicit initializers");
-        assert(!getExactDifferentiabilityWitness(
-                   module, child, parameters, results) &&
-               "custom initializer derivative requires explicit result-ABI handling");
-        AutoDiffConfig childConfig(parameters, results);
-        // Ask ordinary AD for the numerical interface, but choose the same
-        // single-indirect-result layout as a closure returning the whole pair.
-        // This function is not installed in a canonical differentiability witness.
-        auto derivativeType = childType->getAutoDiffDerivativeFunctionType(
-            parameters, results, AutoDiffDerivativeFunctionKind::VJP,
-            context.getTypeConverter(), LookUpConformanceInModule());
-        auto nativePBType = derivativeType->getResults().back()
-                                .getSILStorageInterfaceType()
-                                .castTo<SILFunctionType>()
-                                ->getUnsubstitutedType(module);
-        auto pbASTType = getLinearMapASTType(nativePBType);
-        SmallVector<TupleTypeElt, 2> fields{
-            a.getBuffer()->getType().getASTType(), pbASTType};
-        auto resultASTType = TupleType::get(fields, astCtx);
-        auto payload =
-            vjp->getLoweredType(Lowering::AbstractionPattern::getOpaque(),
-                                resultASTType).getObjectType();
-        SILResultInfo result(payload.getASTType(), ResultConvention::Indirect);
-        auto taskType = SILFunctionType::get(
-            nullptr, childType->getExtInfo(), SILCoroutineKind::None,
-            childType->getCalleeConvention(), childType->getParameters(), {},
-            {result}, childType->getOptionalErrorResult(), {}, {}, astCtx);
-        Mangle::DifferentiationMangler mangler(astCtx);
-        auto name = mangler.mangleDerivativeFunction(
-            child->getName(), AutoDiffDerivativeFunctionKind::VJP, childConfig);
-        // This private result-ABI variant is not a canonical Swift symbol.
-        // Keep it outside the $s namespace instead of corrupting that mangling.
-        name = "__autodiff_task_result_" + name;
-        a.taskVJP = module.lookUpFunction(name);
-        if (!a.taskVJP) {
-          SILOptFunctionBuilder functions(context.getTransform());
-          a.taskVJP = functions.createFunction(
-              SILLinkage::Private, astCtx.getIdentifier(name).str(), taskType,
-              child->getActorIsolation(), nullptr, child->getLocation(),
-              child->isBare(), IsNotTransparent, IsNotSerialized, IsNotDynamic,
-              IsNotDistributed, IsNotRuntimeAccessible);
-          a.taskVJP->setDebugScope(
-              new (module) SILDebugScope(child->getLocation(), a.taskVJP));
-          a.taskVJP->setHasLoweredAddresses(child->hasLoweredAddresses());
-          a.taskVJP->inheritDerivedFrom(child);
-          context.recordGeneratedFunction(a.taskVJP);
-          // Generate the derivative body itself in the task's result storage.
-          // There is no call to a separately generated native child VJP.
-          VJPCloner childCloner(context, child, childConfig, a.taskVJP, invoker,
-                                VJPResultLayout::IndirectTuple);
-          if (childCloner.run())
-            return true;
-          auto *pm = &context.getPassManager();
-          pm->getSwiftPassInvocation()->initializeNestedSwiftPassInvocation(
-              a.taskVJP);
-          lowerAddress(pm, a.taskVJP);
-          pm->getSwiftPassInvocation()->deinitializeNestedSwiftPassInvocation();
-        } else {
-          assert(a.taskVJP->getLoweredFunctionType() == taskType &&
-                 !a.taskVJP->empty() && "inconsistent task-result VJP");
-        }
+        auto *childWitness = getExactDifferentiabilityWitness(
+            module, child, parameters, results);
+        if (!childWitness)
+          childWitness = SILDifferentiabilityWitness::createDefinition(
+              module, SILLinkage::Private, child, DifferentiabilityKind::Reverse,
+              parameters, results, GenericSignature(), nullptr, nullptr,
+              /*isSerialized*/ false, /*isDefault*/ false);
+        if (canonicalizeDifferentiabilityWitness(
+                childWitness, invoker, IsNotSerialized))
+          return true;
+        assert(childWitness->getVJP()->getLoweredFunctionType()
+                   ->hasIndirectAutoDiffResult());
         (void)a.getPullbackType();
-        LLVM_DEBUG(getADDebugStream() << "Prepared direct task-result VJP:\n"
-                                     << *a.taskVJP);
+        LLVM_DEBUG(getADDebugStream() << "Prepared canonical async-let VJP:\n"
+                                     << *childWitness->getVJP());
       }
       // Emit VJP function.
       VJPCloner cloner(context, witness, vjp, invoker);

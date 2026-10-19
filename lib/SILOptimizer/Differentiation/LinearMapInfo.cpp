@@ -289,18 +289,12 @@ Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
               LookUpConformanceInModule())
           ->getUnsubstitutedType(original->getModule());
 
-  auto linearMapSILType = derivativeFnType->getAllResultsInterfaceType();
-  if (auto tupleType = linearMapSILType.getAs<TupleType>()) {
-    linearMapSILType = SILType::getPrimitiveObjectType(
-        tupleType.getElementType(tupleType->getElements().size() - 1));
-  }
-  if (auto fnTy = linearMapSILType.getAs<SILFunctionType>()) {
-    linearMapSILType = SILType::getPrimitiveObjectType(
-        fnTy->getUnsubstitutedType(original->getModule()));
-  }
-
+  auto linearMapSILType = derivativeFnType->getAutoDiffLinearMapType(
+      original->getModule(), derivative->getTypeExpansionContext());
+  auto linearMapFnType = linearMapSILType.castTo<SILFunctionType>()
+                             ->getUnsubstitutedType(original->getModule());
   Type resultType =
-      getLinearMapASTType(linearMapSILType.castTo<SILFunctionType>());
+      getLinearMapASTType(linearMapFnType);
   if (fai.getKind() == FullApplySiteKind::TryApplyInst)
     resultType = resultType->wrapInOptionalType();
 
