@@ -250,8 +250,13 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
         module, builder.getTypeExpansionContext(), thunk->hasLoweredAddresses());
     auto storage = indirect->getSingleResult().getSILStorageInterfaceType()
                        .getObjectType();
+    // Every nontrivial direct component must transfer ownership to/from the
+    // aggregate. Do not treat a borrowed result as an owned tuple field.
     return storage.is<TupleType>() && aggregate == storage &&
-           storage.isTrivial(*thunk);
+           llvm::all_of(direct->getResults(), [&](SILResultInfo result) {
+             return result.getConvention() == ResultConvention::Owned ||
+                    result.getSILStorageInterfaceType().isTrivial(*thunk);
+           });
   };
   bool packResults = !fromAggregate && !toAggregate &&
                      canPackResults(fromType, toType);
@@ -357,11 +362,14 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
   SmallVector<SILValue, 4> results;
   // Extract all direct results.
   SmallVector<SILValue, 4> directResults;
-  // One formal tuple result is not several formal results.
-  if (fromType->getNumResults() - fromType->getNumIndirectFormalResults() == 1)
-    directResults.push_back(applyResult);
-  else
-    extractAllElements(applyResult, builder, directResults);
+  // Packing consumes the entire aggregate below. Destructuring it first
+  // would consume an owned tuple twice. Other paths use formal result order.
+  if (!packResults) {
+    if (fromType->getNumResults() - fromType->getNumIndirectFormalResults() == 1)
+      directResults.push_back(applyResult);
+    else
+      extractAllElements(applyResult, builder, directResults);
+  }
 
   auto fromDirResultsIter = directResults.begin();
   auto fromIndResultsIter = fromIndirectResults.begin();

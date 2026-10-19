@@ -144,14 +144,8 @@ Type AsyncLetInfo::getPullbackType() const {
                           ->getUnsubstitutedType(module);
   assert(!pullbackType->isAsync() && !pullbackType->hasErrorResult() &&
          !pullbackType->getSubstGenericSignature());
-  // The closure itself is owned. Only its numerical interface is restricted
-  // to trivial values by this prototype.
-  for (auto parameter : pullbackType->getParameters())
-    assert(parameter.getSILStorageInterfaceType().getObjectType()
-               .isTrivial(function) && "nontrivial async-let seed");
-  for (auto result : pullbackType->getResults())
-    assert(result.getSILStorageInterfaceType().getObjectType()
-               .isTrivial(function) && "nontrivial async-let gradient");
+  // Use the canonical pullback conventions, including owned and indirect
+  // gradients. Capture or tangent triviality is not an AD requirement.
   return getLinearMapASTType(pullbackType);
 }
 
@@ -216,13 +210,15 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
     closure = consumer->getOperand(0);
   }
   assert(a.initializer->getSubstitutionMap().empty());
-  auto captures = a.initializer->getArguments();
-  // Trivial control values are forwarded too; only values with a tangent
-  // space are differentiation parameters. There is no capture-count limit.
-  for (auto capture : captures)
-    assert(capture->getType().isObject() &&
-           capture->getType().isTrivial(function) &&
-           "only by-value trivial async-let captures are implemented");
+  // Preserve SILGen's capture ownership and lifetime through the replacement
+  // partial_apply. Passive captures need no Differentiable conformance.
+  // Shared inout state is not an independent captured differentiation input.
+  auto initializerType = a.initializer->getCallee()->getType()
+                             .castTo<SILFunctionType>();
+  for (auto parameter : initializerType->getParameters())
+    assert(!parameter.isIndirectInOut() &&
+           !parameter.isAutoDiffSemanticResult() &&
+           "mutable inout async-let captures are not implemented");
   assert(isa<FunctionRefInst>(a.initializer->getCallee()));
   assert(dominance.dominates(buffer, a.initializer) &&
          dominance.dominates(a.initializer, start));
