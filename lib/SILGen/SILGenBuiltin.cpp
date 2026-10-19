@@ -1309,7 +1309,8 @@ static ManagedValue emitBuiltinAutoDiffApplyDerivativeFunction(
       loc, kind, origFnVal.getValue());
   SILType derivativeType = derivativeFn->getType();
   auto derivativeFnType = derivativeType.castTo<SILFunctionType>();
-  assert(derivativeFnType->getNumResults() == 2);
+  assert(derivativeFnType->getNumResults() == 2 ||
+         derivativeFnType->hasIndirectAutoDiffResult());
   assert(derivativeFnType->getNumParameters() == origFnArgVals.size());
 
   auto derivativeFnUnsubstType =
@@ -1336,7 +1337,9 @@ static ManagedValue emitBuiltinAutoDiffApplyDerivativeFunction(
     auto indResBuffer = SGF.getBufferForExprResult(
         loc, derivativeFnType->getAllResultsInterfaceType(), C);
     SmallVector<SILValue, 3> applyArgs;
-    applyArgs.push_back(SGF.B.createTupleElementAddr(loc, indResBuffer, 0));
+    applyArgs.push_back(derivativeFnType->hasIndirectAutoDiffResult()
+                            ? indResBuffer
+                            : SGF.B.createTupleElementAddr(loc, indResBuffer, 0));
     if (derivativeFnType->hasIndirectErrorResult())
       applyArgs.push_back(SGF.IndirectErrorResult);
 
@@ -1347,9 +1350,10 @@ static ManagedValue emitBuiltinAutoDiffApplyDerivativeFunction(
 
     derivativeFn = SILValue();
 
-    SGF.B.createStore(loc, differential,
-                      SGF.B.createTupleElementAddr(loc, indResBuffer, 1),
-                      StoreOwnershipQualifier::Init);
+    if (!derivativeFnType->hasIndirectAutoDiffResult())
+      SGF.B.createStore(loc, differential,
+                        SGF.B.createTupleElementAddr(loc, indResBuffer, 1),
+                        StoreOwnershipQualifier::Init);
     return SGF.manageBufferForExprResult(
         indResBuffer, SGF.getTypeLowering(indResBuffer->getType()), C);
   }

@@ -115,18 +115,31 @@ Type getLinearMapASTType(CanSILFunctionType silFnTy) {
   return resultType;
 }
 
+SILFunction *AsyncLetInfo::getVJP() const {
+  auto &function = *start->getFunction();
+  auto *child = cast<FunctionRefInst>(initializer->getCallee())
+                    ->getReferencedFunction();
+  auto *results = IndexSubset::get(function.getASTContext(), 1, {0});
+  auto *witness = getExactDifferentiabilityWitness(
+      function.getModule(), child, getParameterIndices(), results);
+  assert(witness && witness->getVJP() && "prepare the child witness first");
+  return witness->getVJP();
+}
+
+SILType AsyncLetInfo::getResultStorageType() const {
+  auto *vjp = getVJP();
+  auto type = vjp->getLoweredFunctionType();
+  assert(type->hasIndirectAutoDiffResult());
+  return type->getAllResultsSubstType(vjp->getModule(),
+                                     vjp->getTypeExpansionContext());
+}
+
 Type AsyncLetInfo::getPullbackType() const {
   auto &function = *start->getFunction();
   auto &module = function.getModule();
-  assert(taskVJP && "prepare the child VJP first");
-  auto derivativeType = taskVJP->getLoweredFunctionType();
-  assert(derivativeType->getNumResults() == 1 &&
-         derivativeType->getSingleResult().isFormalIndirect());
-  auto payload = derivativeType->getSingleResult()
-                     .getSILStorageInterfaceType().getObjectType();
-  assert(payload.is<TupleType>() &&
-         payload.castTo<TupleType>()->getNumElements() == 2);
-  auto pullbackType = payload.getTupleElementType(1)
+  auto pullbackType = getVJP()->getLoweredFunctionType()
+                          ->getAutoDiffLinearMapType(
+                              module, function.getTypeExpansionContext())
                           .castTo<SILFunctionType>()
                           ->getUnsubstitutedType(module);
   assert(!pullbackType->isAsync() && !pullbackType->hasErrorResult() &&
