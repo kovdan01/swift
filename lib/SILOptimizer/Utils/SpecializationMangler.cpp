@@ -75,6 +75,39 @@ void FunctionSignatureSpecializationMangler::setArgumentDifferentiableFunctionPr
   Info.inst = differentiableFunction;
 }
 
+// Compose the existing component-explosion and closure-propagation names without
+// creating an intermediate SIL function. The first part encodes the bundle's
+// component types; the second encodes their capture-free closure identities.
+// A type-only name is not sufficient for a function that embeds those identities.
+std::string
+FunctionSignatureSpecializationMangler::mangleWithDifferentiableFunctionComponents(
+    ArrayRef<SILInstruction *> componentRoots) {
+  unsigned numPreservedArgs = unsigned(OrigArgs.size());
+  for (auto arg : OrigArgs) {
+    if (arg.kind == ArgumentModifier::DifferentiableFunctionProp) {
+      --numPreservedArgs;
+    } else {
+      ASSERT(arg.kind == ArgumentModifier::Unmodified);
+    }
+  }
+  ASSERT(!componentRoots.empty() &&
+         componentRoots.size() == 3 * (OrigArgs.size() - numPreservedArgs));
+
+  FunctionSignatureSpecializationMangler concrete(
+      Function->getASTContext(), Pass, Serialized, Function);
+  concrete.FunctionName = mangle();
+  concrete.Function = nullptr;
+  // The virtual signature has the original non-bundle arguments followed by
+  // three component slots per removed argument. All slots are specialized away.
+  auto unmodified = concrete.OrigArgs.front();
+  concrete.OrigArgs.assign(numPreservedArgs + componentRoots.size(), unmodified);
+  for (unsigned i = 0; i != componentRoots.size(); ++i) {
+    ASSERT(isa<ThinToThickFunctionInst>(componentRoots[i]));
+    concrete.setArgumentClosureProp(numPreservedArgs + i, componentRoots[i]);
+  }
+  return concrete.mangle();
+}
+
 void FunctionSignatureSpecializationMangler::setArgumentConstantProp(
     unsigned OrigArgIdx, SILInstruction *constInst) {
   auto &Info = OrigArgs[OrigArgIdx];

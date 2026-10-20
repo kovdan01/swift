@@ -115,6 +115,7 @@ public:
   void setArgumentClosureProp(unsigned OrigArgIdx, SILInstruction *closure);
   void setArgumentClosurePropPreviousArg(unsigned OrigArgIdx, unsigned otherArgIdx);
   void setArgumentDifferentiableFunctionProp(unsigned OrigArgIdx, SILInstruction *differentiableFunction);
+  std::string mangleWithDifferentiableFunctionComponents(ArrayRef<SILInstruction *> componentRoots);
   void setArgumentDead(unsigned OrigArgIdx);
   void setArgumentOwnedToGuaranteed(unsigned OrigArgIdx);
   void setArgumentGuaranteedToOwned(unsigned OrigArgIdx);

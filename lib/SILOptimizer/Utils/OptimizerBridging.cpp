@@ -450,25 +450,21 @@ BridgedOwnedString BridgedPassContext::mangleWithExplodedPackArgs(
 }
 
 BridgedOwnedString BridgedPassContext::mangleWithDifferentiableFunctionArgs(
-    BridgedArrayRef bridgedDifferentiableFunctionArgs, BridgedFunction applySiteCallee
-    ) const {
-  auto pass = Demangle::SpecializationPass::ClosureSpecializer;
-  auto serializedKind = applySiteCallee.getFunction()->getSerializedKind();
-  Mangle::FunctionSignatureSpecializationMangler mangler(applySiteCallee.getFunction()->getASTContext(),
-                                                         pass, serializedKind, applySiteCallee.getFunction());
+    BridgedArrayRef bridgedDifferentiableFunctionArgs,
+    BridgedArrayRef bridgedComponentRoots, BridgedFunction applySiteCallee) const {
+  auto *callee = applySiteCallee.getFunction();
+  Mangle::FunctionSignatureSpecializationMangler mangler(
+      callee->getASTContext(), Demangle::SpecializationPass::ClosureSpecializer,
+      callee->getSerializedKind(), callee);
 
-  auto closureArgs = bridgedDifferentiableFunctionArgs.unbridged<ClosureArgMangling>();
-
-  for (ClosureArgMangling argElmt : closureArgs) {
-    auto closureArgIndex = (unsigned)argElmt.argIdx;
-    if (SILInstruction *inst = argElmt.inst.unbridged()) {
-      mangler.setArgumentDifferentiableFunctionProp(closureArgIndex, inst);
-    } else {
-      mangler.setArgumentClosurePropPreviousArg(closureArgIndex, argElmt.otherArgIdx);
-    }
+  for (auto arg : bridgedDifferentiableFunctionArgs.unbridged<ClosureArgMangling>()) {
+    mangler.setArgumentDifferentiableFunctionProp(unsigned(arg.argIdx), arg.inst.unbridged());
   }
-
-  return BridgedOwnedString(mangler.mangle());
+  SmallVector<SILInstruction *, 8> components;
+  for (auto root : bridgedComponentRoots.unbridged<ClosureArgMangling>()) {
+    components.push_back(root.inst.unbridged());
+  }
+  return BridgedOwnedString(mangler.mangleWithDifferentiableFunctionComponents(components));
 }
 
 BridgedOwnedString BridgedPassContext::mangleWithChangedRepresentation(BridgedFunction applySiteCallee) const {

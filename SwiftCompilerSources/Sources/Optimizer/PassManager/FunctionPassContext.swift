@@ -158,22 +158,24 @@ struct FunctionPassContext : MutatingContext {
     }
   }
 
-  func mangle(withDifferentiableFunctionArguments args: [(argumentIndex: Int, argumentValue: ClosureArgumentMangling)], from applySiteCallee: Function) -> String {
+  func mangle(withDifferentiableFunctionArguments args: [(argumentIndex: Int, function: DifferentiableFunctionInst)],
+              componentClosureRoots: [SingleValueInstruction], from applySiteCallee: Function) -> String {
     let bridgedArgManglings = args.map {
-      switch $0.argumentValue {
-      case .closure(let closure):
-        return BridgedPassContext.ClosureArgMangling(argIdx: $0.argumentIndex,
-                                                     inst: Optional<Instruction>(closure).bridged,
-                                                     otherArgIdx: -1)
-      case .previousArgumentIndex(let idx):
-        return BridgedPassContext.ClosureArgMangling(argIdx: $0.argumentIndex,
-                                                     inst: OptionalBridgedInstruction(),
-                                                     otherArgIdx: idx)
-      }
+      BridgedPassContext.ClosureArgMangling(argIdx: $0.argumentIndex,
+                                           inst: Optional<Instruction>($0.function).bridged,
+                                           otherArgIdx: -1)
     }
 
-    return bridgedArgManglings.withBridgedArrayRef{ bridgedDifferentiableFunctionArgs in
-      String(taking: bridgedPassContext.mangleWithDifferentiableFunctionArgs(bridgedDifferentiableFunctionArgs, applySiteCallee.bridged))
+    let bridgedComponentRoots = componentClosureRoots.enumerated().map { index, root in
+      BridgedPassContext.ClosureArgMangling(argIdx: index,
+                                           inst: Optional<Instruction>(root).bridged,
+                                           otherArgIdx: -1)
+    }
+    return bridgedArgManglings.withBridgedArrayRef { bridgedDifferentiableFunctionArgs in
+      bridgedComponentRoots.withBridgedArrayRef { bridgedRoots in
+        String(taking: bridgedPassContext.mangleWithDifferentiableFunctionArgs(
+          bridgedDifferentiableFunctionArgs, bridgedRoots, applySiteCallee.bridged))
+      }
     }
   }
 

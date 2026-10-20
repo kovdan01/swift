@@ -1,5 +1,7 @@
 // RUN: %target-sil-opt -enable-sil-verify-all -closure-specialization %s > %t
-// RUN: %FileCheck %s --check-prefix=COMPONENTS < %t
+// RUN: %FileCheck %s --check-prefix=COMPONENTS-A < %t
+// RUN: %FileCheck %s --check-prefix=COMPONENTS-B < %t
+// RUN: %FileCheck %s --check-prefix=NO-STAGE < %t
 // RUN: %FileCheck %s --check-prefix=TWO-OWNED < %t
 // RUN: %FileCheck %s --check-prefix=TWO-GUARANTEED < %t
 // RUN: %FileCheck %s --check-prefix=MIXED < %t
@@ -18,14 +20,40 @@ sil @primal : $@convention(thin) (Double) -> Double
 sil @derivative_a : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
 sil @derivative_b : $@convention(thin) (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)
 
-// The first call creates a type-based specialization with the same SSA value
-// in its JVP and VJP slots. The second call must reuse that specialization with
-// distinct values in those slots. Reconstructing from a global map keyed by
-// source component SSA would incorrectly use the JVP parameter for both slots.
+// These calls have the same component types but different VJP identities.
+// Direct cloning must give them different specializations, with no component
+// parameters. Sharing the first construction's JVP/VJP SSA value must not make
+// the second specialization use derivative_a in place of derivative_b.
 //
 // Only the original component is copied: this makes the first aggregate owned
 // while keeping its repeated derivative component at ownership none. Repeating
 // a consumed owned derivative operand would make the input SIL invalid.
+// COMPONENTS-A-LABEL: sil [ossa] @same_and_distinct_components :
+// COMPONENTS-A: function_ref @[[FN_A:\$s8read_vjp[^ ]+]] : $@convention(thin) (Double) -> Double
+// COMPONENTS-A: } // end sil function
+// COMPONENTS-A: sil shared [noinline] [ossa] @[[FN_A]] : $@convention(thin) (Double) -> Double {
+// COMPONENTS-A-NOT: } // end sil function
+// COMPONENTS-A-DAG: %[[A_REF:[0-9]+]] = function_ref @derivative_a :
+// COMPONENTS-A-DAG: %[[A:[0-9]+]] = thin_to_thick_function %[[A_REF]]
+// COMPONENTS-A-NOT: } // end sil function
+// COMPONENTS-A: differentiable_function {{.*}} with_derivative {%[[A]], %[[A]]}
+// COMPONENTS-A: } // end sil function
+// COMPONENTS-B-LABEL: sil [ossa] @same_and_distinct_components :
+// COMPONENTS-B: function_ref @{{\$s8read_vjp[^ ]+}} : $@convention(thin) (Double) -> Double
+// COMPONENTS-B: function_ref @[[FN_B:\$s8read_vjp[^ ]+]] : $@convention(thin) (Double) -> Double
+// COMPONENTS-B: } // end sil function
+// COMPONENTS-B: sil shared [noinline] [ossa] @[[FN_B]] : $@convention(thin) (Double) -> Double {
+// COMPONENTS-B-NOT: } // end sil function
+// COMPONENTS-B-DAG: %[[A_REF:[0-9]+]] = function_ref @derivative_a :
+// COMPONENTS-B-DAG: %[[A:[0-9]+]] = thin_to_thick_function %[[A_REF]]
+// COMPONENTS-B-DAG: %[[B_REF:[0-9]+]] = function_ref @derivative_b :
+// COMPONENTS-B-DAG: %[[B:[0-9]+]] = thin_to_thick_function %[[B_REF]]
+// COMPONENTS-B-NOT: } // end sil function
+// COMPONENTS-B: differentiable_function {{.*}} with_derivative {%[[A]], %[[B]]}
+// COMPONENTS-B: } // end sil function
+// No component-exploded function is emitted, even under this single-pass run.
+// NO-STAGE: sil_stage canonical
+// NO-STAGE-NOT: {{^sil .*Tf1[naC0-9]*a[naC0-9]*_n :}}
 sil [ossa] @same_and_distinct_components : $@convention(thin) (Double) -> (Double, Double) {
 bb0(%x : $Double):
   %original_ref = function_ref @primal : $@convention(thin) (Double) -> Double
@@ -47,25 +75,6 @@ bb0(%x : $Double):
   return %result : $(Double, Double)
 }
 
-// The name ending at Tf1na_n selects the component-exploded specialization,
-// before ordinary closure propagation adds the concrete component identities.
-// COMPONENTS-LABEL: sil shared [noinline] [ossa] @$s8read_vjp{{[^ ]*}}Tf1na_n :
-// COMPONENTS-SAME: $@convention(thin) (Double, @owned @callee_guaranteed (Double) -> Double, @owned @callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), @owned @callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)) -> Double {
-// COMPONENTS: bb0(%[[X:[0-9]+]] : $Double, %[[ORIGINAL:[0-9]+]] : @owned $@callee_guaranteed (Double) -> Double, %[[JVP:[0-9]+]] : @owned $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), %[[VJP:[0-9]+]] : @owned $@callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)):
-// The reconstructed bundle consumes copies, not the owned parameters.
-// A direct component apply exposed by simplification must be able to reuse
-// the parameter independently (test2). Retaining an owned bundle also lets
-// reabstraction-thunk specialization continue (test3).
-// COMPONENTS: %[[C_ORIGINAL:[0-9]+]] = copy_value %[[ORIGINAL]]
-// COMPONENTS: %[[C_JVP:[0-9]+]] = copy_value %[[JVP]]
-// COMPONENTS: %[[C_VJP:[0-9]+]] = copy_value %[[VJP]]
-// COMPONENTS: %[[DFI:[0-9]+]] = differentiable_function [parameters 0] [results 0] %[[C_ORIGINAL]] with_derivative {%[[C_JVP]], %[[C_VJP]]}
-// The verifier checks that the aggregate and the three owned component
-// parameters have independent, balanced lifetimes.
-// COMPONENTS-DAG: destroy_value %[[ORIGINAL]]
-// COMPONENTS-DAG: destroy_value %[[JVP]]
-// COMPONENTS-DAG: destroy_value %[[VJP]]
-// COMPONENTS-LABEL: } // end sil function
 sil [noinline] [ossa] @read_vjp : $@convention(thin) (Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> Double {
 bb0(%x : $Double, %function : @guaranteed $@differentiable(reverse) @callee_guaranteed (Double) -> Double):
   %vjp = differentiable_function_extract [vjp] %function : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
@@ -77,9 +86,9 @@ bb0(%x : $Double, %function : @guaranteed $@differentiable(reverse) @callee_guar
 
 // All three components below are contextless values with ownership none, so
 // the aggregate also has ownership none. Such a value may be passed to two
-// consuming parameters. Its rebuilt owned counterpart needs an independent
-// owned value for each parameter; consuming the same rebuilt value twice is
-// invalid. The verifier run checks both copies' lifetimes after specialization.
+// consuming parameters. Direct cloning preserves ownership none, so both
+// parameters can still use that value without introducing independent owners.
+// This must not be implemented by promoting the root and adding copies.
 sil [ossa] @duplicate_owned_root : $@convention(thin) (Double) -> (Double, Double) {
 bb0(%x : $Double):
   %original_ref = function_ref @primal : $@convention(thin) (Double) -> Double
@@ -94,16 +103,13 @@ bb0(%x : $Double):
   return %result : $(Double, Double)
 }
 
-// Exactly one component triple is added for the repeated root.
-// TWO-OWNED-LABEL: sil shared [noinline] [ossa] @$s14take_two_owned{{[^ ]*}}Tf1naC1_n :
-// TWO-OWNED-SAME: $@convention(thin) (Double, @owned @callee_guaranteed (Double) -> Double, @owned @callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), @owned @callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)) -> (Double, Double) {
+// TWO-OWNED-LABEL: sil shared [noinline] [ossa] @$s14take_two_owned{{[^ ]*}} : $@convention(thin) (Double) -> (Double, Double) {
+// TWO-OWNED-NOT: copy_value
 // TWO-OWNED: %[[ROOT:[0-9]+]] = differentiable_function
-// TWO-OWNED: %[[FIRST:[0-9]+]] = copy_value %[[ROOT]]
-// TWO-OWNED: %[[SECOND:[0-9]+]] = copy_value %[[ROOT]]
-// TWO-OWNED: destroy_value %[[FIRST]]
-// TWO-OWNED: destroy_value %[[SECOND]]
-// TWO-OWNED: destroy_value %[[ROOT]]
+// TWO-OWNED-SAME: ownership: none
+// TWO-OWNED-NOT: copy_value
 // TWO-OWNED: return
+// TWO-OWNED-NOT: copy_value
 // TWO-OWNED-LABEL: } // end sil function
 sil [noinline] [ossa] @take_two_owned : $@convention(thin) (Double, @owned @differentiable(reverse) @callee_guaranteed (Double) -> Double, @owned @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> (Double, Double) {
 bb0(%x : $Double, %first : @owned $@differentiable(reverse) @callee_guaranteed (Double) -> Double, %second : @owned $@differentiable(reverse) @callee_guaranteed (Double) -> Double):
@@ -133,17 +139,17 @@ bb0(%x : $Double):
   return %result : $(Double, Double)
 }
 
-// The two guaranteed parameters borrow the same local owner, with two complete
-// borrow scopes and one final destruction of that owner.
-// TWO-GUARANTEED-LABEL: sil shared [noinline] [ossa] @$s19take_two_guaranteed{{[^ ]*}}Tf1naC1_n :
-// TWO-GUARANTEED-SAME: $@convention(thin) (Double, @owned @callee_guaranteed (Double) -> Double, @owned @callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), @owned @callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)) -> (Double, Double) {
+// No begin_borrow is needed when the cloned root still has ownership none.
+// TWO-GUARANTEED-LABEL: sil shared [noinline] [ossa] @$s19take_two_guaranteed{{[^ ]*}} : $@convention(thin) (Double) -> (Double, Double) {
+// TWO-GUARANTEED-NOT: begin_borrow
+// TWO-GUARANTEED-NOT: copy_value
 // TWO-GUARANTEED: %[[ROOT:[0-9]+]] = differentiable_function
-// TWO-GUARANTEED: %[[FIRST:[0-9]+]] = begin_borrow %[[ROOT]]
-// TWO-GUARANTEED: %[[SECOND:[0-9]+]] = begin_borrow %[[ROOT]]
-// TWO-GUARANTEED-DAG: end_borrow %[[FIRST]]
-// TWO-GUARANTEED-DAG: end_borrow %[[SECOND]]
-// TWO-GUARANTEED: destroy_value %[[ROOT]]
-// TWO-GUARANTEED: return
+// TWO-GUARANTEED-SAME: ownership: none
+// TWO-GUARANTEED-NEXT: %{{[0-9]+}} = apply %[[ROOT]]
+// TWO-GUARANTEED-NEXT: %{{[0-9]+}} = apply %[[ROOT]]
+// TWO-GUARANTEED-NOT: begin_borrow
+// TWO-GUARANTEED-NOT: copy_value
+// TWO-GUARANTEED-NOT: destroy_value
 // TWO-GUARANTEED-LABEL: } // end sil function
 sil [noinline] [ossa] @take_two_guaranteed : $@convention(thin) (Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> (Double, Double) {
 bb0(%x : $Double, %first : @guaranteed $@differentiable(reverse) @callee_guaranteed (Double) -> Double, %second : @guaranteed $@differentiable(reverse) @callee_guaranteed (Double) -> Double):
@@ -167,18 +173,15 @@ bb0(%x : $Double):
   return %result : $(Double, Double)
 }
 
-// Consuming one parameter must not consume the owner still needed by the other
-// parameter's borrow. This catches mapping both formals directly to ROOT.
-// MIXED-LABEL: sil shared [noinline] [ossa] @$s10take_mixed{{[^ ]*}}Tf1naC1_n :
-// MIXED-SAME: $@convention(thin) (Double, @owned @callee_guaranteed (Double) -> Double, @owned @callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double), @owned @callee_guaranteed (Double) -> (Double, @owned @callee_guaranteed (Double) -> Double)) -> (Double, Double) {
+// The none root can serve an owned and a guaranteed formal without a new copy.
+// The ordinary body cloner handles ownership-independent uses of that root.
+// MIXED-LABEL: sil shared [noinline] [ossa] @$s10take_mixed{{[^ ]*}} : $@convention(thin) (Double) -> (Double, Double) {
+// MIXED-NOT: copy_value
 // MIXED: %[[ROOT:[0-9]+]] = differentiable_function
-// MIXED: %[[OWNED:[0-9]+]] = copy_value %[[ROOT]]
-// MIXED: %[[GUARANTEED:[0-9]+]] = begin_borrow %[[ROOT]]
-// MIXED: destroy_value %[[OWNED]]
-// MIXED: apply %[[GUARANTEED]]
-// MIXED: end_borrow %[[GUARANTEED]]
-// MIXED: destroy_value %[[ROOT]]
+// MIXED-SAME: ownership: none
+// MIXED-NOT: copy_value
 // MIXED: return
+// MIXED-NOT: copy_value
 // MIXED-LABEL: } // end sil function
 sil [noinline] [ossa] @take_mixed : $@convention(thin) (Double, @owned @differentiable(reverse) @callee_guaranteed (Double) -> Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> (Double, Double) {
 bb0(%x : $Double, %owned : @owned $@differentiable(reverse) @callee_guaranteed (Double) -> Double, %guaranteed : @guaranteed $@differentiable(reverse) @callee_guaranteed (Double) -> Double):
@@ -219,9 +222,9 @@ bb0(%function : @owned $@differentiable(reverse) @callee_guaranteed (Double) -> 
   return %function : $@differentiable(reverse) @callee_guaranteed (Double) -> Double
 }
 
-// An ownership-none convert_function outside the aggregate must be rebuilt
-// with the ownership of its new operand. An identity conversion isolates this
-// ownership case from component type conversions and reabstraction thunks.
+// An ownership-none convert_function outside the aggregate stays ownership
+// none when its complete expression is cloned. No conversion repair is needed.
+// This isolates outer conversions from the component conversions in Swift case 2.
 sil [ossa] @converted_root : $@convention(thin) (Double) -> Double {
 bb0(%x : $Double):
   %original_ref = function_ref @primal : $@convention(thin) (Double) -> Double
@@ -237,16 +240,16 @@ bb0(%x : $Double):
   return %result : $Double
 }
 
-// OUTER-CONVERT-LABEL: sil shared [noinline] [ossa] @$s15apply_converted{{[^ ]*}}Tf1na_n :
+// OUTER-CONVERT-LABEL: sil shared [noinline] [ossa] @$s15apply_converted{{[^ ]*}} : $@convention(thin) (Double) -> Double {
+// OUTER-CONVERT-NOT: copy_value
 // OUTER-CONVERT: %[[ROOT:[0-9]+]] = differentiable_function
-// OUTER-CONVERT: %[[INPUT:[0-9]+]] = copy_value %[[ROOT]]
-// OUTER-CONVERT: %[[CONVERTED:[0-9]+]] = convert_function %[[INPUT]] to $@differentiable(reverse) @callee_guaranteed (Double) -> Double
-// OUTER-CONVERT: %[[BORROW:[0-9]+]] = begin_borrow %[[CONVERTED]]
-// OUTER-CONVERT: apply %[[BORROW]]
-// OUTER-CONVERT: end_borrow %[[BORROW]]
-// OUTER-CONVERT: destroy_value %[[CONVERTED]]
-// OUTER-CONVERT: destroy_value %[[ROOT]]
-// OUTER-CONVERT: return
+// OUTER-CONVERT-SAME: ownership: none
+// OUTER-CONVERT-NEXT: %[[CONVERTED:[0-9]+]] = convert_function %[[ROOT]] to $@differentiable(reverse) @callee_guaranteed (Double) -> Double
+// OUTER-CONVERT-SAME: ownership: none
+// OUTER-CONVERT-NEXT: %{{[0-9]+}} = apply %[[CONVERTED]]
+// OUTER-CONVERT-NOT: copy_value
+// OUTER-CONVERT-NOT: begin_borrow
+// OUTER-CONVERT-NOT: destroy_value
 // OUTER-CONVERT-LABEL: } // end sil function
 sil [noinline] [ossa] @apply_converted : $@convention(thin) (Double, @guaranteed @differentiable(reverse) @callee_guaranteed (Double) -> Double) -> Double {
 bb0(%x : $Double, %function : @guaranteed $@differentiable(reverse) @callee_guaranteed (Double) -> Double):
@@ -256,15 +259,13 @@ bb0(%x : $Double, %function : @guaranteed $@differentiable(reverse) @callee_guar
 
 sil @should_repeat : $@convention(thin) () -> Builtin.Int1
 
-// The component copies are created before the original bundle, but the new
-// consuming call is in a loop that can be bypassed. makeAvailable must supply
-// a fresh owned triple per iteration and clean up the retained copies on exits.
-// The verifier checks these lifetimes; require that the call was specialized so
-// this cannot pass by leaving the original guaranteed bundle argument intact.
+// The bundle is outside a bypassable loop. Direct cloning introduces no
+// component transport or lifetime-extension problem across the loop: the new
+// call only passes x. Keep checking that specialization actually happened.
 // CONTROL-FLOW-LABEL: sil [ossa] @loop_root :
 // CONTROL-FLOW: cond_br
-// CONTROL-FLOW: function_ref @$s8read_vjp{{[^ ]*}}Tf1
-// CONTROL-FLOW: apply
+// CONTROL-FLOW: %[[FN:[0-9]+]] = function_ref @$s8read_vjp{{[^ ]*}} : $@convention(thin) (Double) -> Double
+// CONTROL-FLOW: apply %[[FN]](%{{[0-9]+}})
 // CONTROL-FLOW: cond_br
 // CONTROL-FLOW: return
 // CONTROL-FLOW-LABEL: } // end sil function
