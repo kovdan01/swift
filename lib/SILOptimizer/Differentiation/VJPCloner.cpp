@@ -908,7 +908,8 @@ public:
       if (source != target) {
         if (source->isABICompatibleWith(target, *vjp).isCompatible()) {
           pb = Builder.createConvertFunction(
-              loc, pb, SILType::getPrimitiveObjectType(target));
+              loc, pb, SILType::getPrimitiveObjectType(target),
+              /*withoutActuallyEscaping*/ false);
         } else {
           pb = reabstractFunction(
               Builder, functions, loc, pb, target,
