@@ -1369,24 +1369,33 @@ bool DifferentiationTransformer::canonicalizeDifferentiabilityWitness(
                orig, vjp, activity, witness->getConfig())) {
         auto *child = cast<FunctionRefInst>(a.initializer->getCallee())
                           ->getReferencedFunction();
-        auto childType = child->getLoweredFunctionType()
-                             ->getUnsubstitutedType(module);
+        // Check the call-site types, not equality between archetypes from the
+        // child and parent generic environments.
+        ApplySite initializer(a.initializer);
+        auto childType = initializer.getSubstCalleeType();
+        auto childConv = initializer.getSubstCalleeConv();
+        auto expansion = orig->getTypeExpansionContext();
         auto captures = a.initializer->getArguments();
         assert(!child->empty() && !child->isSerialized());
         assert(!child->getActorIsolation().isActorIsolated());
-        assert(!childType->getSubstGenericSignature() && childType->isAsync() &&
-               !childType->isCoroutine() && childType->hasErrorResult());
+        assert(childType->isAsync() && !childType->isCoroutine() &&
+               childType->hasErrorResult());
         assert(childType->getNumParameters() == captures.size() &&
                childType->getNumResults() == 1 &&
                childType->getNumIndirectFormalResults() == 1);
-        assert(child->getArgument(0)->getType() == a.getBuffer()->getType());
+        assert(childConv.getNumIndirectSILResults() == 1 &&
+               childConv.getNumIndirectSILErrorResults() == 0);
+        assert(childConv.getSILArgumentType(0, expansion) ==
+               a.getBuffer()->getType());
         for (unsigned i = 0; i != captures.size(); ++i)
-          assert(child->getArgument(i + 1)->getType() == captures[i]->getType());
+          assert(childConv.getSILArgumentType(
+                     childConv.getSILArgIndexOfFirstParam() + i, expansion) ==
+                 captures[i]->getType());
 
         // Differentiate the original initializer with ordinary AD. Its body
         // can contain conversions, calls, branches or loops; those do not need
-        // async-let-specific numerical rules. Trivial primal/tangent types do
-        // not imply that arbitrary saved derivative state is task-transferable.
+        // async-let-specific numerical rules. Ownership correctness does not
+        // imply that arbitrary saved derivative state is task-transferable.
         for (auto &bb : *child) {
           for (auto &inst : bb) {
             assert(!isa<ThrowInst>(&inst) &&
@@ -1406,11 +1415,20 @@ bool DifferentiationTransformer::canonicalizeDifferentiabilityWitness(
         auto *results = IndexSubset::get(astCtx, 1, {0});
         auto *childWitness = getExactDifferentiabilityWitness(
             module, child, parameters, results);
-        if (!childWitness)
+        if (!childWitness) {
+          // Constrain the declaration's generic signature, not the parent's
+          // substituted call type. Use the ordinary AD requirement builder.
+          auto declarationType = child->getLoweredFunctionType();
+          auto derivativeSignature =
+              autodiff::getConstrainedDerivativeGenericSignature(
+                  declarationType, parameters, results,
+                  declarationType->getInvocationGenericSignature(),
+                  LookUpConformanceInModule());
           childWitness = SILDifferentiabilityWitness::createDefinition(
               module, SILLinkage::Private, child, DifferentiabilityKind::Reverse,
-              parameters, results, GenericSignature(), nullptr, nullptr,
+              parameters, results, derivativeSignature, nullptr, nullptr,
               /*isSerialized*/ false, /*isDefault*/ false);
+        }
         if (canonicalizeDifferentiabilityWitness(
                 childWitness, invoker, IsNotSerialized))
           return true;

@@ -126,18 +126,39 @@ SILFunction *AsyncLetInfo::getVJP() const {
   return witness->getVJP();
 }
 
+SubstitutionMap AsyncLetInfo::getVJPSubstitutions() const {
+  auto type = getVJP()->getLoweredFunctionType();
+  if (!type->isPolymorphic())
+    return {};
+  // Match ordinary derivative partial application: reuse the initializer's
+  // replacements, looking up any derivative-signature conformances normally.
+  return SubstitutionMap::get(
+      type->getInvocationGenericSignature(),
+      QuerySubstitutionMap{initializer->getSubstitutionMap()},
+      LookUpConformanceInModule());
+}
+
+CanSILFunctionType AsyncLetInfo::getSubstVJPType() const {
+  auto &parent = *start->getFunction();
+  auto type = getVJP()->getLoweredFunctionType();
+  if (type->isPolymorphic())
+    type = type->substGenericArgs(parent.getModule(), getVJPSubstitutions(),
+                                 parent.getTypeExpansionContext());
+  return type;
+}
+
 SILType AsyncLetInfo::getResultStorageType() const {
-  auto *vjp = getVJP();
-  auto type = vjp->getLoweredFunctionType();
+  auto &parent = *start->getFunction();
+  auto type = getSubstVJPType();
   assert(type->hasIndirectAutoDiffResult());
-  return type->getAllResultsSubstType(vjp->getModule(),
-                                     vjp->getTypeExpansionContext());
+  return type->getAllResultsSubstType(parent.getModule(),
+                                     parent.getTypeExpansionContext());
 }
 
 Type AsyncLetInfo::getPullbackType() const {
   auto &function = *start->getFunction();
   auto &module = function.getModule();
-  auto pullbackType = getVJP()->getLoweredFunctionType()
+  auto pullbackType = getSubstVJPType()
                           ->getAutoDiffLinearMapType(
                               module, function.getTypeExpansionContext())
                           .castTo<SILFunctionType>()
@@ -184,14 +205,15 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
   assert(!function.isSerialized() &&
          !function.getActorIsolation().isActorIsolated());
   auto type = function.getLoweredFunctionType();
-  assert(!type->getSubstGenericSignature() && !type->hasErrorResult());
+  assert(!type->hasErrorResult() &&
+         "throwing async-let parents are not implemented");
   // Parent parameter/result conventions are handled by ordinary AD.
   assert(a.start->getArguments().size() == 3);
   assert(a.start->getSubstitutions().getReplacementTypes().size() == 1 &&
          a.start->getSubstitutions().getConformances().empty());
   auto *buffer = a.getBuffer();
-  assert(buffer->getType().getObjectType().isTrivial(function) &&
-         "only concrete trivial async-let results are implemented");
+  // The task owns the initialized result until finish. Parent reads copy or
+  // borrow it; its type may be nontrivial or address-only (including T).
 
   SILValue closure = a.start->getArguments()[1];
   SILInstruction *consumer = a.start;
@@ -209,7 +231,6 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
     assert((isa<ConvertFunctionInst, ConvertEscapeToNoEscapeInst>(consumer)));
     closure = consumer->getOperand(0);
   }
-  assert(a.initializer->getSubstitutionMap().empty());
   // Preserve SILGen's capture ownership and lifetime through the replacement
   // partial_apply. Passive captures need no Differentiable conformance.
   // Shared inout state is not an independent captured differentiation input.
@@ -225,6 +246,7 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
 
   SmallVector<SILInstruction *, 2> finishes, ends, deallocs;
   SmallVector<PointerToAddressInst *, 2> resultAddresses;
+  SmallVector<SILValue, 4> readAddresses{buffer};
   auto pointer = a.start->getArguments()[2];
   for (auto *use : pointer->getUses()) {
     auto *inst = use->getUser();
@@ -234,29 +256,7 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
       assert(getAsyncLetStart(addr) == start &&
              "inconsistent async-let result association");
       assert(addr->getType() == buffer->getType());
-      // An aggregate can be read whole or through typed field projections.
-      // The existing memory/projection visitors differentiate these accesses.
-      SmallVector<SILValue, 4> addresses{addr};
-      while (!addresses.empty()) {
-        auto address = addresses.pop_back_val();
-        for (auto *addressUse : address->getUses()) {
-          auto *user = addressUse->getUser();
-          if (isa<DebugValueInst>(user))
-            continue;
-          if (auto *field = dyn_cast<StructElementAddrInst>(user)) {
-            addresses.push_back(field);
-          } else if (auto *element = dyn_cast<TupleElementAddrInst>(user)) {
-            addresses.push_back(element);
-          } else if (auto *copy = dyn_cast<CopyAddrInst>(user)) {
-            assert(copy->getSrc() == address && !copy->isTakeOfSrc() &&
-                   "expected a nonconsuming async-let result copy");
-          } else {
-            auto *load = cast<LoadInst>(user);
-            assert(load->getOwnershipQualifier() ==
-                   LoadOwnershipQualifier::Trivial);
-          }
-        }
-      }
+      readAddresses.push_back(addr);
       resultAddresses.push_back(addr);
     } else if (auto *apply = dyn_cast<ApplyInst>(inst)) {
       auto *callee = apply->getCalleeFunction();
@@ -283,11 +283,42 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
     assert(isBuiltinInst(inst, BuiltinValueKind::EndAsyncLetLifetime));
     ends.push_back(inst);
   }
-  for (auto *use : buffer->getUses()) {
-    auto *inst = use->getUser();
-    if (inst == pointer->getDefiningInstruction() || isa<DebugValueInst>(inst))
-      continue;
-    deallocs.push_back(cast<DeallocStackInst>(inst));
+  // Use the existing load/borrow/copy/projection differentiation. A read must
+  // not consume the task-owned primal or destroy it before runtime cleanup.
+  // Also accept accesses folded directly onto the original typed allocation.
+  while (!readAddresses.empty()) {
+    auto address = readAddresses.pop_back_val();
+    for (auto *use : address->getUses()) {
+      auto *inst = use->getUser();
+      if (isa<DebugValueInst, EndAccessInst>(inst))
+        continue;
+      if (address == buffer) {
+        if (inst == pointer->getDefiningInstruction())
+          continue;
+        if (auto *dealloc = dyn_cast<DeallocStackInst>(inst)) {
+          deallocs.push_back(dealloc);
+          continue;
+        }
+      }
+      if (auto *field = dyn_cast<StructElementAddrInst>(inst)) {
+        readAddresses.push_back(field);
+      } else if (auto *element = dyn_cast<TupleElementAddrInst>(inst)) {
+        readAddresses.push_back(element);
+      } else if (auto *access = dyn_cast<BeginAccessInst>(inst)) {
+        assert(access->getAccessKind() == SILAccessKind::Read);
+        readAddresses.push_back(access);
+      } else if (auto *copy = dyn_cast<CopyAddrInst>(inst)) {
+        assert(copy->getSrc() == address && !copy->isTakeOfSrc() &&
+               "expected a nonconsuming async-let result copy");
+      } else if (isa<LoadBorrowInst>(inst)) {
+        // SILGen has established the borrow scope; preserve it unchanged.
+      } else {
+        auto *load = cast<LoadInst>(inst);
+        assert((load->getOwnershipQualifier() == LoadOwnershipQualifier::Trivial ||
+                load->getOwnershipQualifier() == LoadOwnershipQualifier::Copy) &&
+               "cannot take a task-owned result before finish");
+      }
+    }
   }
   assert(!finishes.empty() && !ends.empty() && !deallocs.empty());
   assert(resultAddresses.empty() || !a.gets.empty());
@@ -305,7 +336,7 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
   for (auto *dealloc : deallocs)
     assert(dominance.dominates(buffer, dealloc));
   LLVM_DEBUG({
-    getADDebugStream() << "Matched trivial async let with " << a.gets.size()
+    getADDebugStream() << "Matched async let with " << a.gets.size()
                        << " wait(s), " << resultAddresses.size()
                        << " result address(es), "
                        << a.getParameterIndices()->getNumIndices()

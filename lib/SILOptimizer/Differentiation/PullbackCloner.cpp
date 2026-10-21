@@ -1036,13 +1036,16 @@ public:
       SILValue pb = saved[index];
       auto type = pb->getType().castTo<SILFunctionType>();
       assert(!type->isAsync() && !type->hasErrorResult());
+      SILFunctionConventions conventions(
+          type, SILAddressConventions::forFunction(getPullback()));
+      auto expansion = getPullback().getTypeExpansionContext();
       // Invoke the saved closure with its actual conventions. In particular,
       // do not reabstract it back into the task field's all-indirect form.
       auto buffer = getAdjointBuffer(bb, a->getBuffer());
       SmallVector<SILValue, 8> arguments;
       SmallVector<AllocStackInst *, 4> indirectResults, consumedSeeds;
       for (auto result : type->getIndirectFormalResults()) {
-        auto resultType = remapType(result.getSILStorageInterfaceType());
+        auto resultType = conventions.getSILType(result, expansion);
         auto *storage = builder.createAllocStack(loc, resultType);
         indirectResults.push_back(storage);
         arguments.push_back(storage);
@@ -1051,7 +1054,9 @@ public:
       // function lowering. Project only tuples, never a nominal tangent type.
       SmallVector<SILValue, 4> seeds{buffer};
       for (auto parameter : type->getParameters()) {
-        auto expected = remapType(parameter.getSILStorageInterfaceType());
+        // Apply the closure's substitutions before interpreting its interface
+        // type parameters in the parent's pullback environment.
+        auto expected = conventions.getSILType(parameter, expansion);
         assert(!parameter.isIndirectInOut() &&
                !parameter.isAutoDiffSemanticResult());
         while (!seeds.empty() &&
