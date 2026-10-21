@@ -28,7 +28,9 @@
 #include "swift/AST/TypeCheckRequests.h"
 #include "swift/Basic/Assertions.h"
 #include "swift/Basic/STLExtras.h"
+#include "swift/SIL/AddressWalker.h"
 #include "swift/SIL/ApplySite.h"
+#include "swift/SIL/InstructionUtils.h"
 #include "swift/SILOptimizer/Analysis/ArraySemantic.h"
 #include "swift/SILOptimizer/Analysis/DifferentiableActivityAnalysis.h"
 #include "swift/SILOptimizer/Differentiation/ADContext.h"
@@ -37,24 +39,6 @@ namespace swift {
 namespace autodiff {
 
 raw_ostream &getADDebugStream() { return llvm::dbgs() << "[AD] "; }
-
-// Given a pointer_to_address instruction, return corresponding
-// startAsyncLetWithLocalBuffer provided that input instruction
-// is the address of the async let result buffer (so, the last operand)
-BuiltinInst *getAsyncLetStart(const PointerToAddressInst *pta) {
-  for (auto use : pta->getOperand()->getUses()) {
-    auto *bi = dyn_cast<BuiltinInst>(use->getUser());
-    if (!bi)
-      continue;
-
-    if (bi->getBuiltinKind() ==
-            BuiltinValueKind::StartAsyncLetWithLocalBuffer &&
-        use->getOperandNumber() == bi->getNumOperands() - 1)
-      return bi;
-  }
-
-  return nullptr;
-}
 
 bool shouldDifferentiateAsyncLet(
     BuiltinInst *start, const DifferentiableActivityInfo &activity,
@@ -171,15 +155,15 @@ Type AsyncLetInfo::getPullbackType() const {
 }
 
 bool AsyncLetInfo::isInitializerInstruction(SILInstruction *inst) const {
-  SILValue value = start->getArguments()[1];
-  while (true) {
-    if (value->getDefiningInstruction() == inst)
-      return true;
-    if (value == initializer)
-      return false;
-    // findAsyncLet has checked the conversion chain.
-    value = value->getDefiningInstruction()->getOperand(0);
-  }
+  if (!isa<PartialApplyInst, ConvertFunctionInst,
+           ConvertEscapeToNoEscapeInst>(inst))
+    return false;
+  // findAsyncLet checks that these conversions belong exclusively to this
+  // initializer/start. Discovery itself is shared with RegionAnalysis.
+  auto source = findAsyncLetPartialApplyFromStart(
+      SILValue(cast<SingleValueInstruction>(inst)));
+  return source && isa<PartialApplyInst *>(*source) &&
+         cast<PartialApplyInst *>(*source) == initializer;
 }
 
 bool AsyncLetInfo::isGet(SILInstruction *inst) const {
@@ -190,6 +174,51 @@ bool AsyncLetInfo::isResultAddress(SILInstruction *inst) const {
   auto *address = dyn_cast_or_null<PointerToAddressInst>(inst);
   return address && getAsyncLetStart(address) == start;
 }
+
+namespace {
+/// Only the ownership policy is AD-specific. Address traversal, including
+/// projection and access-scope traversal, belongs to TransitiveAddressWalker.
+struct AsyncLetResultUseVisitor
+    : TransitiveAddressWalker<AsyncLetResultUseVisitor> {
+  AddressToPointerInst *resultPointer;
+  SmallVectorImpl<SILInstruction *> &deallocs;
+
+  AsyncLetResultUseVisitor(AddressToPointerInst *resultPointer,
+                           SmallVectorImpl<SILInstruction *> &deallocs)
+      : resultPointer(resultPointer), deallocs(deallocs) {}
+
+  TransitiveUseVisitation visitTransitiveUseAsEndPointUse(Operand *) {
+    // Check the projection/access itself as well: e.g. a taking enum
+    // projection or a modifying access cannot be treated as an innocent path.
+    return TransitiveUseVisitation::BothUserAndUses;
+  }
+
+  bool visitUse(Operand *use) {
+    auto *inst = use->getUser();
+    if (inst == resultPointer || isIncidentalUse(inst))
+      return true;
+    if (isa<DeallocStackInst>(inst)) {
+      if (use->get() != resultPointer->getOperand())
+        return false;
+      deallocs.push_back(inst);
+      return true;
+    }
+    if (auto *access = dyn_cast<BeginAccessInst>(inst))
+      return access->getAccessKind() == SILAccessKind::Read;
+    if (Projection::isAddressProjection(inst))
+      return !isa<UncheckedTakeEnumDataAddrInst>(inst);
+    if (auto load = LoadOperation(inst)) {
+      auto ownership = load.getOwnershipQualifier();
+      return !ownership || *ownership == LoadOwnershipQualifier::Trivial ||
+             *ownership == LoadOwnershipQualifier::Copy;
+    }
+    if (auto *copy = dyn_cast<CopyAddrInst>(inst))
+      return use->getOperandNumber() == CopyLikeInstruction::Src &&
+             !copy->isTakeOfSrc();
+    return false;
+  }
+};
+} // namespace
 
 // Do not classify the CFG as a particular diamond or loop shape. SILGen has
 // already established the structured task lifetime, which the forward cloner
@@ -215,6 +244,14 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
   // The task owns the initialized result until finish. Parent reads copy or
   // borrow it; its type may be nontrivial or address-only (including T).
 
+  auto source = findAsyncLetPartialApplyFromStart(start);
+  assert(source && isa<PartialApplyInst *>(*source) &&
+         "expected an async-let initializer with captures");
+  a.initializer = cast<PartialApplyInst *>(*source);
+
+  // Discovery also recognizes reabstraction wrappers. The current AD rewrite
+  // only changes partial_apply and these two conversions, so validate that
+  // narrower rewrite contract separately instead of duplicating discovery.
   SILValue closure = a.start->getArguments()[1];
   SILInstruction *consumer = a.start;
   while (true) {
@@ -225,7 +262,7 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
               isBuiltinInst(use->getUser(),
                             BuiltinValueKind::EndAsyncLetLifetime)) &&
              "shared initializer closure");
-    if ((a.initializer = dyn_cast<PartialApplyInst>(closure)))
+    if (closure == a.initializer)
       break;
     consumer = closure->getDefiningInstruction();
     assert((isa<ConvertFunctionInst, ConvertEscapeToNoEscapeInst>(consumer)));
@@ -246,7 +283,6 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
 
   SmallVector<SILInstruction *, 2> finishes, ends, deallocs;
   SmallVector<PointerToAddressInst *, 2> resultAddresses;
-  SmallVector<SILValue, 4> readAddresses{buffer};
   auto pointer = a.start->getArguments()[2];
   for (auto *use : pointer->getUses()) {
     auto *inst = use->getUser();
@@ -256,7 +292,6 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
       assert(getAsyncLetStart(addr) == start &&
              "inconsistent async-let result association");
       assert(addr->getType() == buffer->getType());
-      readAddresses.push_back(addr);
       resultAddresses.push_back(addr);
     } else if (auto *apply = dyn_cast<ApplyInst>(inst)) {
       auto *callee = apply->getCalleeFunction();
@@ -283,43 +318,20 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
     assert(isBuiltinInst(inst, BuiltinValueKind::EndAsyncLetLifetime));
     ends.push_back(inst);
   }
-  // Use the existing load/borrow/copy/projection differentiation. A read must
-  // not consume the task-owned primal or destroy it before runtime cleanup.
-  // Also accept accesses folded directly onto the original typed allocation.
-  while (!readAddresses.empty()) {
-    auto address = readAddresses.pop_back_val();
-    for (auto *use : address->getUses()) {
-      auto *inst = use->getUser();
-      if (isa<DebugValueInst, EndAccessInst>(inst))
-        continue;
-      if (address == buffer) {
-        if (inst == pointer->getDefiningInstruction())
-          continue;
-        if (auto *dealloc = dyn_cast<DeallocStackInst>(inst)) {
-          deallocs.push_back(dealloc);
-          continue;
-        }
-      }
-      if (auto *field = dyn_cast<StructElementAddrInst>(inst)) {
-        readAddresses.push_back(field);
-      } else if (auto *element = dyn_cast<TupleElementAddrInst>(inst)) {
-        readAddresses.push_back(element);
-      } else if (auto *access = dyn_cast<BeginAccessInst>(inst)) {
-        assert(access->getAccessKind() == SILAccessKind::Read);
-        readAddresses.push_back(access);
-      } else if (auto *copy = dyn_cast<CopyAddrInst>(inst)) {
-        assert(copy->getSrc() == address && !copy->isTakeOfSrc() &&
-               "expected a nonconsuming async-let result copy");
-      } else if (isa<LoadBorrowInst>(inst)) {
-        // SILGen has established the borrow scope; preserve it unchanged.
-      } else {
-        auto *load = cast<LoadInst>(inst);
-        assert((load->getOwnershipQualifier() == LoadOwnershipQualifier::Trivial ||
-                load->getOwnershipQualifier() == LoadOwnershipQualifier::Copy) &&
-               "cannot take a task-owned result before finish");
-      }
-    }
-  }
+  // Preserve ordinary load/copy/projection differentiation. Check that the
+  // typed uses do not consume or mutate the task-owned result. The one raw
+  // pointer escape is checked above as part of the async-let runtime protocol.
+  auto checkResultUses = [&](SILValue address) {
+    AsyncLetResultUseVisitor visitor(
+        cast<AddressToPointerInst>(pointer), deallocs);
+    auto result = visitor.walk(address);
+    assert(result != AddressUseKind::Unknown &&
+           "unsupported or consuming async-let result use");
+    (void)result;
+  };
+  checkResultUses(buffer);
+  for (auto *address : resultAddresses)
+    checkResultUses(address);
   assert(!finishes.empty() && !ends.empty() && !deallocs.empty());
   assert(resultAddresses.empty() || !a.gets.empty());
   // These are SSA dominance checks, not a second task-lifetime or AD-loop

@@ -38,13 +38,6 @@ class ADContext;
 // Helpers
 //===----------------------------------------------------------------------===//
 
-/// Prints an "[AD] " prefix to `llvm::dbgs()` and returns the debug stream.
-/// This is being used to print short debug messages within the AD pass.
-
-/// The result-address association supplied by PR #93158. Shared by activity
-/// analysis and the transformation; do not maintain a second pointer-use search.
-BuiltinInst *getAsyncLetStart(const PointerToAddressInst *pta);
-
 /// PR #93158's start selection: inspect the result-buffer operand, not the
 /// returned task handle. This query does not compute or modify activity.
 bool shouldDifferentiateAsyncLet(BuiltinInst *start,
@@ -85,6 +78,8 @@ findAsyncLets(SILFunction &function, const DifferentiableActivityInfo &activity,
 const AsyncLetInfo *getAsyncLet(ArrayRef<AsyncLetInfo> asyncLets,
                                 SILInstruction *inst);
 
+/// Prints an "[AD] " prefix to `llvm::dbgs()` and returns the debug stream.
+/// This is being used to print short debug messages within the AD pass.
 raw_ostream &getADDebugStream();
 
 /// Given an element address from an `array.uninitialized_intrinsic` `apply`

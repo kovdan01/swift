@@ -448,6 +448,66 @@ SILValue swift::isPartialApplyOfReabstractionThunk(PartialApplyInst *PAI) {
   return Arg;
 }
 
+std::optional<AsyncLetSourceValue> swift::findAsyncLetPartialApplyFromStart(
+    SILValue value, function_ref<bool(SILValue)> acceptSource) {
+  if (!value->getType().is<SILFunctionType>() ||
+      (acceptSource && !acceptSource(value)))
+    return {};
+  SILValue temp = value;
+  while (true) {
+    if (isa<ConvertEscapeToNoEscapeInst>(temp) ||
+        isa<ConvertFunctionInst>(temp)) {
+      temp = cast<SingleValueInstruction>(temp)->getOperand(0);
+    }
+    if (temp == value)
+      break;
+    value = temp;
+  }
+
+  if (auto *ttfi = dyn_cast<ThinToThickFunctionInst>(value))
+    return {{ttfi}};
+  auto *pai = dyn_cast<PartialApplyInst>(value);
+  if (!pai)
+    return {};
+  if (auto *calleeFunction = pai->getCalleeFunction()) {
+    if (calleeFunction->isThunk() == IsReabstractionThunk) {
+      if (!pai->getNumArguments())
+        return {};
+      return findAsyncLetPartialApplyFromStart(pai->getArgument(0),
+                                              acceptSource);
+    }
+  }
+  return {{pai}};
+}
+
+std::optional<AsyncLetSourceValue> swift::findAsyncLetPartialApplyFromStart(
+    BuiltinInst *start, function_ref<bool(SILValue)> acceptSource) {
+  assert(start->getBuiltinKind() ==
+         BuiltinValueKind::StartAsyncLetWithLocalBuffer);
+  return findAsyncLetPartialApplyFromStart(start->getOperand(1), acceptSource);
+}
+
+std::optional<AsyncLetSourceValue> swift::findAsyncLetPartialApplyFromGet(
+    ApplyInst *get, function_ref<bool(SILValue)> acceptSource) {
+  auto *start = cast<BuiltinInst>(FullApplySite(get).getArgument(0));
+  return findAsyncLetPartialApplyFromStart(start, acceptSource);
+}
+
+BuiltinInst *swift::getAsyncLetStart(const PointerToAddressInst *pta) {
+  for (auto use : pta->getOperand()->getUses()) {
+    auto *bi = dyn_cast<BuiltinInst>(use->getUser());
+    if (!bi)
+      continue;
+
+    if (bi->getBuiltinKind() ==
+            BuiltinValueKind::StartAsyncLetWithLocalBuffer &&
+        use->getOperandNumber() == bi->getNumOperands() - 1)
+      return bi;
+  }
+
+  return nullptr;
+}
+
 bool swift::onlyUsedByAssignOrInit(PartialApplyInst *PAI) {
   bool usedByAssignOrInit = false;
   for (Operand *Op : PAI->getUses()) {
