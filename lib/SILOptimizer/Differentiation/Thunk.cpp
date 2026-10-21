@@ -173,6 +173,8 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
   SILBuilder builder(entry);
   createEntryArguments(thunk);
 
+  // buildThunkType has already mapped fromType and toType into genericEnv.
+  // Their component types are contextual, not inputs to mapTypeIntoEnvironment.
   SILAddressConventions silConv = SILAddressConventions::forFunction(*thunk);
   SILFunctionConventions fromConv(fromType, silConv);
   SILFunctionConventions toConv(toType, silConv);
@@ -203,8 +205,8 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
   SILValue fromAggregateBuffer;
   if (fromAggregate) {
     fromAggregateBuffer = builder.createAllocStack(
-        loc, thunk->mapTypeIntoEnvironment(fromType->getAllResultsSubstType(
-                 module, builder.getTypeExpansionContext())));
+        loc, fromType->getAllResultsSubstType(
+                 module, builder.getTypeExpansionContext()));
     localAllocations.push_back(cast<AllocStackInst>(fromAggregateBuffer));
     projectResults(fromAggregateBuffer, fromResults, fromIndirectResults);
   }
@@ -282,8 +284,8 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
       destination = *toArgIter++;
     if (!fromRes.isFormalIndirect() || fromAggregate)
       continue;
-    auto sourceType = thunk->mapTypeIntoEnvironment(
-        fromConv.getSILType(fromRes, builder.getTypeExpansionContext()));
+    auto sourceType =
+        fromConv.getSILType(fromRes, builder.getTypeExpansionContext());
     // Forward an unchanged indirect result. Otherwise the source writes a
     // temporary, which the result conversion below moves to its destination.
     SILValue source = destination;
@@ -337,10 +339,8 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
            !error.isFormalIndirect() && "expected the same direct error result");
     auto *normalBB = thunk->createBasicBlock();
     errorBB = thunk->createBasicBlock();
-    auto directType = thunk->mapTypeIntoEnvironment(
-        fromType->getDirectFormalResultsType(
-            module, builder.getTypeExpansionContext(),
-            thunk->hasLoweredAddresses()));
+    auto directType = fromType->getDirectFormalResultsType(
+        module, builder.getTypeExpansionContext(), thunk->hasLoweredAddresses());
     for (auto result : fromType->getResults())
       assert(result.isFormalIndirect() ||
              result.getConvention() == ResultConvention::Owned ||
@@ -348,9 +348,8 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
     applyResult = normalBB->createPhiArgument(
         directType, directType.isTrivial(*thunk) ? OwnershipKind::None
                                                : OwnershipKind::Owned);
-    errorBB->createPhiArgument(
-        thunk->mapTypeIntoEnvironment(error.getSILStorageInterfaceType()),
-        OwnershipKind::Owned);
+    errorBB->createPhiArgument(error.getSILStorageInterfaceType(),
+                               OwnershipKind::Owned);
     builder.createTryApply(loc, fnArg, SubstitutionMap(), arguments,
                            normalBB, errorBB);
     builder.setInsertionPoint(normalBB);
@@ -1058,9 +1057,9 @@ getOrCreateSubsetParametersThunkForDerivativeFunction(
   }
 
   auto linearMapType = linearMap->getType().castTo<SILFunctionType>();
-  auto linearMapTargetType = thunk->mapTypeIntoEnvironment(
-                                      targetType->getAutoDiffLinearMapType(
-                                          module, builder.getTypeExpansionContext())).castTo<SILFunctionType>();
+  // buildThunkType has already placed targetType in the thunk's context.
+  auto linearMapTargetType = targetType->getAutoDiffLinearMapType(
+      module, builder.getTypeExpansionContext()).castTo<SILFunctionType>();
   auto unsubstLinearMapType = linearMapType->getUnsubstitutedType(module);
   auto unsubstLinearMapTargetType =
       linearMapTargetType->getUnsubstitutedType(module);
