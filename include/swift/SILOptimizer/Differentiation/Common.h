@@ -69,6 +69,10 @@ struct AsyncLetInfo {
   AllocStackInst *getBuffer() const;
   IndexSubset *getParameterIndices() const;
   SILFunction *getVJP() const;
+  // Instantiate the canonical derivative in the original parent's context.
+  // The forward cloner subsequently remaps these into the parent VJP.
+  SubstitutionMap getVJPSubstitutions() const;
+  CanSILFunctionType getSubstVJPType() const;
   SILType getResultStorageType() const;
   Type getPullbackType() const;
   bool isInitializerInstruction(SILInstruction *inst) const;
