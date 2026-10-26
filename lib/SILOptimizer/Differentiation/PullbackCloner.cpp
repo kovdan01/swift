@@ -1408,9 +1408,16 @@ public:
       llvm::for_each(allResults, [&](SILValue v) { s << v; });
     });
 
-    // Accumulate adjoints for original differentiation parameters.
+    // An extracted VJP returns gradients for all of the callee's declared
+    // differentiation parameters, not just this call's active parameters.
+    // Consume results in that declared order, discarding inactive components
+    // wherever they occur rather than assuming they form a trailing suffix.
+    auto *pullbackParameters = applyInfo.config.parameterIndices;
+    auto calleeType = fai.getSubstCalleeType();
+    if (calleeType->isDifferentiable())
+      pullbackParameters = calleeType->getDifferentiabilityParameterIndices();
     auto allResultsIt = allResults.begin();
-    for (unsigned i : applyInfo.config.parameterIndices->getIndices()) {
+    for (unsigned i : pullbackParameters->getIndices()) {
       unsigned argIdx = fai.getNumIndirectSILResults() +
                         fai.getNumIndirectSILErrorResults() + i;
       auto origArg = fai.getArgument(argIdx);
@@ -1418,7 +1425,15 @@ public:
       auto paramInfo = fai.getSubstCalleeConv().getParamInfoForSILArg(argIdx);
       if (paramInfo.isAutoDiffSemanticResult())
         continue;
+      assert(allResultsIt != allResults.end() &&
+             "missing gradient for a differentiation parameter");
       auto tan = *allResultsIt++;
+      if (!applyInfo.config.parameterIndices->contains(i)) {
+        // Indirect results are destroyed with their buffers below.
+        if (tan->getType().isObject())
+          builder.emitDestroyValueOperation(loc, tan);
+        continue;
+      }
       accumulatePullbackResult(bb, origArg, tan, loc);
     }
 
@@ -1437,10 +1452,8 @@ public:
       }
     }
 
-    // Destroy unused pullback direct results. Needed for pullback results from
-    // VJPs extracted from `@differentiable` function callees, where the
-    // `@differentiable` function's differentiation parameter indices are a
-    // superset of the active `apply` parameter indices.
+    // Destroy any remaining unused direct results. Indirect results are
+    // destroyed with their result buffers below.
     while (allResultsIt != allResults.end()) {
       auto unusedPullbackDirectResult = *allResultsIt++;
       if (unusedPullbackDirectResult->getType().isAddress())
@@ -2098,6 +2111,13 @@ public:
   ///   Original: y = pointer_to_address x
   ///    Adjoint: nothing
   void visitPointerToAddressInst(PointerToAddressInst *ptai) {
+    if (auto *asyncLet = getPullbackInfo().getAsyncLet(ptai);
+        asyncLet && asyncLet->isResultAddress(ptai)) {
+      // getAdjointBuffer aliases this typed result address to the selected
+      // child's allocation. Loads and copies already accumulate into that
+      // buffer; the runtime transport pointer needs no separate adjoint.
+      return;
+    }
     // Check for unsupported projections
     auto *bb = ptai->getParent();
     auto adjSrc = getAdjointProjection(bb, ptai->getOperand());
