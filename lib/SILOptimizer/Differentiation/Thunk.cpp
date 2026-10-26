@@ -402,7 +402,7 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
               [](SubstitutionMap substMap) { return substMap; });
         else
           fromFn = builder.createConvertFunction(
-              loc, fromFn, SILType::getPrimitiveObjectType(toFnType), /*TODO withoutActuallyEscaping*/ false);
+              loc, fromFn, SILType::getPrimitiveObjectType(toFnType));
         if (toRes.isFormalIndirect())
           builder.emitStoreValueOperation(loc, fromFn, *toIndResultsIter++,
                                           StoreOwnershipQualifier::Init);

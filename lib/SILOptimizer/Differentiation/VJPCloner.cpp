@@ -322,7 +322,7 @@ public:
     mapValue(inst, Builder.createConvertFunction(
                        inst->getLoc(), operand,
                        SILType::getPrimitiveObjectType(type),
-                       inst->withoutActuallyEscaping()));
+                       inst->getConversionKind()));
   }
 
   void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *inst) {
@@ -978,8 +978,7 @@ public:
       if (source != target) {
         if (source->isABICompatibleWith(target, *vjp).isCompatible()) {
           pb = Builder.createConvertFunction(
-              loc, pb, SILType::getPrimitiveObjectType(target),
-              /*withoutActuallyEscaping*/ false);
+              loc, pb, SILType::getPrimitiveObjectType(target));
         } else {
           pb = reabstractFunction(
               Builder, functions, loc, pb, target,
