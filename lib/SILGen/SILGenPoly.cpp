@@ -3323,8 +3323,7 @@ public:
 
   void plan(AbstractionPattern innerOrigType, CanType innerSubstType,
             AbstractionPattern outerOrigType, CanType outerSubstType,
-            CanSILFunctionType innerFnType, CanSILFunctionType outerFnType,
-            bool isAutoDiffDerivative = false) {
+            CanSILFunctionType innerFnType, CanSILFunctionType outerFnType) {
     // Assert that the indirect results are set up like we expect.
     assert(InnerArgs.empty());
     assert(SGF.F.begin()->args_size() >=
@@ -3341,14 +3340,36 @@ public:
     UnsubstInnerFnType = innerFnType->getUnsubstitutedType(SGF.SGM.M);
     AllInnerResults = UnsubstInnerFnType->getResults();
 
-    // Canonical async VJPs can return the entire (value, pullback) pair in
-    // one indirect result even though their AST result pattern is a tuple.
-    // Change only the top-level result grouping; retain the component patterns
-    // so the existing planner can reabstract the primal and pullback normally.
+    // The lowered signature may pass a whole tuple in one indirect result,
+    // even when the abstraction pattern expands its elements. Distinguish that
+    // from a single surviving element of (T, ()): the storage must represent
+    // the entire substituted result, not just have a tuple type itself.
+    auto isIndirectTuple = [&](AbstractionPattern pattern, CanType substType,
+                               CanSILFunctionType type) {
+      if (!pattern.isTuple() || pattern.doesTupleVanish() ||
+          type->getNumResults() != 1 ||
+          !type->getSingleResult().isFormalIndirect())
+        return false;
+      auto tuple = dyn_cast<TupleType>(substType);
+      if (!tuple || tuple.containsPackExpansionType())
+        return false;
+      // The source value is contextual; the outer thunk type can still be an
+      // interface type. Compare in interface form, as in trivial conversions.
+      auto storageType = type->getSingleResult().getInterfaceType();
+      if (storageType->hasArchetype())
+        storageType = storageType->mapTypeOutOfEnvironment()->getCanonicalType();
+      if (substType->hasArchetype())
+        substType = substType->mapTypeOutOfEnvironment()->getCanonicalType();
+      auto storage = SILType::getPrimitiveObjectType(storageType);
+      return storage.is<TupleType>() &&
+             storage.isLoweringOf(SGF.getTypeExpansionContext(), SGF.SGM.M,
+                                  substType);
+    };
     bool innerAggregate =
-        isAutoDiffDerivative && innerFnType->hasIndirectAutoDiffResult();
-    bool outerAggregate =
-        isAutoDiffDerivative && outerFnType->hasIndirectAutoDiffResult();
+        isIndirectTuple(innerOrigType, innerSubstType, UnsubstInnerFnType);
+    bool outerAggregate = isIndirectTuple(
+        outerOrigType, outerSubstType,
+        outerFnType->getUnsubstitutedType(SGF.SGM.M));
     if (innerAggregate && outerAggregate) {
       expandSingle(innerOrigType, innerSubstType, outerOrigType, outerSubstType);
     } else if (innerAggregate) {
@@ -3361,7 +3382,7 @@ public:
       (void)expanded;
     } else if (outerAggregate) {
       auto outerResult = claimNextOuterResult();
-      assert(outerResult.second && "expected an indirect derivative result");
+      assert(outerResult.second && "expected an indirect tuple result");
       expandOuterIndirect(innerOrigType, innerSubstType,
                           outerOrigType, outerSubstType,
                           ManagedValue::forLValue(outerResult.second));
@@ -5586,7 +5607,6 @@ static void buildThunkBody(SILGenFunction &SGF, SILLocation loc,
                            CanAnyFunctionType outputSubstType,
                            CanSILFunctionType expectedType,
                            CanType dynamicSelfType,
-                           bool isAutoDiffDerivative = false,
                            llvm::function_ref<void(SILGenFunction &)> emitProlog
                                = [](SILGenFunction &){}) {
   PrettyStackTraceSILFunction stackTrace("emitting reabstraction thunk in",
@@ -5743,7 +5763,7 @@ static void buildThunkBody(SILGenFunction &SGF, SILLocation loc,
                      inputSubstType.getResult(),
                      outputOrigType.getFunctionResultType(),
                      outputSubstType.getResult(),
-                     fnType, thunkType, isAutoDiffDerivative);
+                     fnType, thunkType);
 
   // If the function we're calling has an indirect error result, create an
   // argument for it.
@@ -5886,8 +5906,7 @@ static ManagedValue createThunk(SILGenFunction &SGF,
                                 CanAnyFunctionType inputSubstType,
                                 AbstractionPattern outputOrigType,
                                 CanAnyFunctionType outputSubstType,
-                                const TypeLowering &expectedTL,
-                                bool isAutoDiffDerivative = false) {
+                                const TypeLowering &expectedTL) {
   auto substSourceType = fn.getType().castTo<SILFunctionType>();
   auto substExpectedType = expectedTL.getLoweredType().castTo<SILFunctionType>();
   
@@ -5990,7 +6009,7 @@ static ManagedValue createThunk(SILGenFunction &SGF,
                    outputOrigType,
                    outputSubstType,
                    expectedType,
-                   dynamicSelfType, isAutoDiffDerivative);
+                   dynamicSelfType);
     SGF.SGM.emitLazyConformancesForFunction(thunk);
   }
 
@@ -6122,8 +6141,7 @@ static ManagedValue createDifferentiableFunctionThunk(
     auto managedDerivativeFn = SGF.emitManagedRValueWithCleanup(derivativeFn);
     return createThunk(SGF, loc, managedDerivativeFn, derivativeFnInputOrigType,
                        derivativeFnInputSubstType, derivativeFnOutputOrigType,
-                       derivativeFnOutputSubstType, derivativeFnExpectedTL,
-                       /*isAutoDiffDerivative*/ true);
+                       derivativeFnOutputSubstType, derivativeFnExpectedTL);
   };
 
   auto jvpThunk = createDerivativeFnThunk(AutoDiffDerivativeFunctionKind::JVP);
@@ -7988,7 +8006,7 @@ ManagedValue SILGenFunction::emitActorIsolationErasureThunk(
     buildThunkBody(
         thunkSGF, loc, AbstractionPattern(isolatedType), isolatedType,
         AbstractionPattern(nonIsolatedType), nonIsolatedType, expectedType,
-        dynamicSelfType, /*isAutoDiffDerivative*/ false,
+        dynamicSelfType,
         [&loc, &globalActor](SILGenFunction &thunkSGF) {
           thunkSGF.emitPreconditionCheckExpectedExecutor(
               loc, ActorIsolation::forGlobalActor(globalActor), std::nullopt);

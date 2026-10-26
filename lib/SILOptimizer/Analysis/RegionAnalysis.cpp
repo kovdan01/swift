@@ -511,31 +511,7 @@ static bool isAsyncLetBeginPartialApply(PartialApplyInst *pai) {
     if (fas->isThunk())
       return false;
 
-  // Look through reabstraction thunks.
-  SILValue result = pai;
-  while (true) {
-    SILValue iter = result;
-
-    if (auto *use = iter->getSingleUse()) {
-      if (auto *maybeThunk = dyn_cast<PartialApplyInst>(use->getUser())) {
-        if (auto *fas = maybeThunk->getCalleeFunction()) {
-          if (fas->isThunk()) {
-            iter = maybeThunk;
-          }
-        }
-      }
-    }
-
-    if (auto *cfi = iter->getSingleUserOfType<ConvertFunctionInst>())
-      iter = cfi;
-    if (auto *cvt = iter->getSingleUserOfType<ConvertEscapeToNoEscapeInst>())
-      iter = cvt;
-
-    if (iter == result)
-      break;
-
-    result = iter;
-  }
+  SILValue result = lookThroughAsyncLetClosureUsers(pai);
 
   auto *bi = result->getSingleUserOfType<BuiltinInst>();
   if (!bi)

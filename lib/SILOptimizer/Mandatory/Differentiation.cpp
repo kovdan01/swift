@@ -1364,17 +1364,19 @@ bool DifferentiationTransformer::canonicalizeDifferentiabilityWitness(
           AutoDiffDerivativeFunctionKind::VJP);
       auto &module = context.getModule();
       auto &astCtx = context.getASTContext();
-      for (auto &a : context.prepareAsyncLets(
-               orig, vjp, activity, witness->getConfig())) {
-        auto *child = cast<FunctionRefInst>(a.initializer->getCallee())
+      // Validate once during preparation. The cloners subsequently query the
+      // immutable original SIL; no descriptor graph is retained in ADContext.
+      for (auto a : findAsyncLets(*orig, activity, witness->getConfig())) {
+        auto *partialApply = a.getInitializer();
+        auto *child = cast<FunctionRefInst>(partialApply->getCallee())
                           ->getReferencedFunction();
         // Check the call-site types, not equality between archetypes from the
         // child and parent generic environments.
-        ApplySite initializer(a.initializer);
+        ApplySite initializer(partialApply);
         auto childType = initializer.getSubstCalleeType();
         auto childConv = initializer.getSubstCalleeConv();
         auto expansion = orig->getTypeExpansionContext();
-        auto captures = a.initializer->getArguments();
+        auto captures = partialApply->getArguments();
         assert(!child->empty() && !child->isSerialized());
         assert(!child->getActorIsolation().isActorIsolated());
         assert(childType->isAsync() && !childType->isCoroutine() &&

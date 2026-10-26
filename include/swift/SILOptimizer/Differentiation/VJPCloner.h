@@ -48,6 +48,7 @@ public:
   SILFunction &getOriginal() const;
   SILFunction &getVJP() const;
   SILFunction &getPullback() const;
+  SILDifferentiabilityWitness *getWitness() const;
   const AutoDiffConfig &getConfig() const;
   DifferentiationInvoker getInvoker() const;
   LinearMapInfo &getPullbackInfo() const;

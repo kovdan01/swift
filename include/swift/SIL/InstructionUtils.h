@@ -195,6 +195,15 @@ std::optional<AsyncLetSourceValue> findAsyncLetPartialApplyFromGet(
 /// its result-buffer operand. This is not a general pointer-alias analysis.
 BuiltinInst *getAsyncLetStart(const PointerToAddressInst *address);
 
+/// Follow the unique reabstraction/conversion users of an async-let closure.
+/// Does not impose RegionAnalysis's Sendable or terminal-use policy.
+SILValue lookThroughAsyncLetClosureUsers(SILValue value);
+
+/// Resolve a start, wait, result buffer/pointer, or initializer-chain instruction
+/// to its async-let start. Inspects local use/def links, not the whole function.
+/// This query does not validate lifetime, ownership, or rewrite eligibility.
+BuiltinInst *getAsyncLetStart(SILInstruction *inst);
+
 /// Returns true if \p PAI is only used by an \c assign_or_init
 /// instruction as init or set function.
 bool onlyUsedByAssignOrInit(PartialApplyInst *PAI);

@@ -493,8 +493,29 @@ std::optional<AsyncLetSourceValue> swift::findAsyncLetPartialApplyFromGet(
   return findAsyncLetPartialApplyFromStart(start, acceptSource);
 }
 
-BuiltinInst *swift::getAsyncLetStart(const PointerToAddressInst *pta) {
-  for (auto use : pta->getOperand()->getUses()) {
+SILValue swift::lookThroughAsyncLetClosureUsers(SILValue result) {
+  while (true) {
+    SILValue iter = result;
+    if (auto *use = iter->getSingleUse()) {
+      if (auto *maybeThunk = dyn_cast<PartialApplyInst>(use->getUser())) {
+        if (auto *fas = maybeThunk->getCalleeFunction()) {
+          if (fas->isThunk())
+            iter = maybeThunk;
+        }
+      }
+    }
+    if (auto *cfi = iter->getSingleUserOfType<ConvertFunctionInst>())
+      iter = cfi;
+    if (auto *cvt = iter->getSingleUserOfType<ConvertEscapeToNoEscapeInst>())
+      iter = cvt;
+    if (iter == result)
+      return result;
+    result = iter;
+  }
+}
+
+static BuiltinInst *getAsyncLetStartForResultPointer(SILValue pointer) {
+  for (auto use : pointer->getUses()) {
     auto *bi = dyn_cast<BuiltinInst>(use->getUser());
     if (!bi)
       continue;
@@ -505,6 +526,55 @@ BuiltinInst *swift::getAsyncLetStart(const PointerToAddressInst *pta) {
       return bi;
   }
 
+  return nullptr;
+}
+
+BuiltinInst *swift::getAsyncLetStart(const PointerToAddressInst *pta) {
+  return getAsyncLetStartForResultPointer(pta->getOperand());
+}
+
+BuiltinInst *swift::getAsyncLetStart(SILInstruction *inst) {
+  if (!inst)
+    return nullptr;
+  if (auto *start = dyn_cast<BuiltinInst>(inst))
+    return start->getBuiltinKind() == BuiltinValueKind::StartAsyncLetWithLocalBuffer
+               ? start : nullptr;
+  if (auto *address = dyn_cast<PointerToAddressInst>(inst))
+    return getAsyncLetStart(static_cast<const PointerToAddressInst *>(address));
+  if (auto *pointer = dyn_cast<AddressToPointerInst>(inst))
+    return getAsyncLetStartForResultPointer(pointer);
+  if (auto *buffer = dyn_cast<AllocStackInst>(inst)) {
+    for (auto *use : buffer->getUses())
+      if (auto *pointer = dyn_cast<AddressToPointerInst>(use->getUser()))
+        if (auto *start = getAsyncLetStartForResultPointer(pointer))
+          return start;
+    return nullptr;
+  }
+  if (auto *get = dyn_cast<ApplyInst>(inst)) {
+    auto *callee = get->getCalleeFunction();
+    if (!callee || callee->getName() != "swift_asyncLet_get" ||
+        get->getNumArguments() != 2)
+      return nullptr;
+    auto *start = dyn_cast<BuiltinInst>(get->getArgument(0));
+    return start &&
+                   start->getBuiltinKind() ==
+                       BuiltinValueKind::StartAsyncLetWithLocalBuffer &&
+                   get->getArgument(1) == start->getArguments().back()
+               ? start : nullptr;
+  }
+  if (!isa<PartialApplyInst, ConvertFunctionInst,
+           ConvertEscapeToNoEscapeInst>(inst))
+    return nullptr;
+  auto closure = lookThroughAsyncLetClosureUsers(
+      SILValue(cast<SingleValueInstruction>(inst)));
+  // Cleanup may also use the closure. Only the start's closure operand
+  // establishes this association; unrelated captured closure operands do not.
+  for (auto *use : closure->getUses())
+    if (auto *start = dyn_cast<BuiltinInst>(use->getUser());
+        start && start->getBuiltinKind() ==
+                     BuiltinValueKind::StartAsyncLetWithLocalBuffer &&
+        use->getOperandNumber() == 1)
+      return start;
   return nullptr;
 }
 

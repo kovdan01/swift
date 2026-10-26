@@ -166,6 +166,9 @@ private:
   SILModule &getModule() const { return getContext().getModule(); }
   ASTContext &getASTContext() const { return getPullback().getASTContext(); }
   SILFunction &getOriginal() const { return vjpCloner.getOriginal(); }
+  SILDifferentiabilityWitness *getWitness() const {
+    return vjpCloner.getWitness();
+  }
   DifferentiationInvoker getInvoker() const { return vjpCloner.getInvoker(); }
   LinearMapInfo &getPullbackInfo() const { return vjpCloner.getPullbackInfo(); }
   const AutoDiffConfig &getConfig() const { return vjpCloner.getConfig(); }
@@ -256,7 +259,7 @@ private:
   std::optional<TangentSpace> getTangentSpace(CanType type) {
     // Use witness generic signature to remap types.
     type =
-        getConfig().derivativeGenericSignature.getReducedType(type);
+        getWitness()->getDerivativeGenericSignature().getReducedType(type);
     return type->getAutoDiffTangentSpace(
         LookUpConformanceInModule());
   }
@@ -652,7 +655,7 @@ private:
   /// This method first tries to find an existing entry in the adjoint buffer
   /// mapping. If no entry exists, creates a zero adjoint buffer.
   SILValue getAdjointBuffer(SILBasicBlock *origBB, SILValue originalValue) {
-    if (auto *a = getPullbackInfo().getAsyncLet(
+    if (auto a = getPullbackInfo().getAsyncLet(
             originalValue->getDefiningInstruction());
         a && a->isResultAddress(originalValue->getDefiningInstruction()))
       originalValue = a->getBuffer(); // One adjoint for the typed storage.
@@ -987,7 +990,7 @@ public:
   }
 
   void visitBuiltinInst(BuiltinInst *bi) {
-    if (auto *a = getPullbackInfo().getAsyncLet(bi); a && bi == a->start) {
+    if (auto a = getPullbackInfo().getAsyncLet(bi); a && bi == a->start) {
       // PR #93158 selects this instruction via its active raw result buffer.
       // Its numerical reverse action is emitted at the saved waits instead.
       assert(shouldDifferentiateAsyncLet(bi, getActivityInfo(), getConfig()));
@@ -1027,7 +1030,7 @@ public:
   ///   Original: (y0, y1, ...) = apply @fn (x0, x1, ...)
   ///    Adjoint: (adj[x0], adj[x1], ...) += apply @fn_pullback (adj[y0], ...)
   void visitApplyInst(ApplyInst *ai) {
-    if (auto *a = getPullbackInfo().getAsyncLet(ai); a && a->isGet(ai)) {
+    if (auto a = getPullbackInfo().getAsyncLet(ai); a && a->isGet(ai)) {
       auto *bb = ai->getParent();
       auto loc = ai->getLoc();
       auto index = getPullbackInfo().lookUpLinearMapIndex(ai);
@@ -1106,7 +1109,7 @@ public:
       else
         extractAllElements(call, builder, directResults);
       collectAllActualResultsInTypeOrder(call, directResults, gradients);
-      auto captures = a->initializer->getArguments();
+      auto captures = a->getInitializer()->getArguments();
       auto *parameters = a->getParameterIndices();
       assert(gradients.size() == parameters->getNumIndices() &&
              "expected one formal gradient per selected capture");
@@ -2111,7 +2114,7 @@ public:
   ///   Original: y = pointer_to_address x
   ///    Adjoint: nothing
   void visitPointerToAddressInst(PointerToAddressInst *ptai) {
-    if (auto *asyncLet = getPullbackInfo().getAsyncLet(ptai);
+    if (auto asyncLet = getPullbackInfo().getAsyncLet(ptai);
         asyncLet && asyncLet->isResultAddress(ptai)) {
       // getAdjointBuffer aliases this typed result address to the selected
       // child's allocation. Loads and copies already accumulate into that
@@ -2492,7 +2495,7 @@ bool PullbackCloner::Implementation::run() {
       // The recognized initializer chain carries dependency information, but
       // its capture adjoints are produced by the child pullback at the wait.
       // These closure values therefore need no independent adjoints.
-      if (auto *a = getPullbackInfo().getAsyncLet(v->getDefiningInstruction())) {
+      if (auto a = getPullbackInfo().getAsyncLet(v->getDefiningInstruction())) {
         if (a->isInitializerInstruction(v->getDefiningInstruction()))
           return false;
         // A typed result address aliases the child's allocation. Do not

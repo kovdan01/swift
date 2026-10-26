@@ -57,8 +57,8 @@ class VJPCloner::Implementation final
   /// The original function.
   SILFunction *const original;
 
-  /// Differentiation is independent of the result's calling convention.
-  const AutoDiffConfig config;
+  /// The differentiability witness.
+  SILDifferentiabilityWitness *const witness;
 
   /// The VJP function.
   SILFunction *const vjp;
@@ -100,10 +100,10 @@ class VJPCloner::Implementation final
 
   ASTContext &getASTContext() const { return vjp->getASTContext(); }
   SILModule &getModule() const { return vjp->getModule(); }
-  const AutoDiffConfig &getConfig() const { return config; }
+  const AutoDiffConfig &getConfig() const { return witness->getConfig(); }
 
-  Implementation(VJPCloner &parent, ADContext &context, SILFunction *original,
-                 const AutoDiffConfig &config, SILFunction *vjp,
+  Implementation(VJPCloner &parent, ADContext &context,
+                 SILDifferentiabilityWitness *witness, SILFunction *vjp,
                  DifferentiationInvoker invoker);
 
   /// Creates an empty pullback function, to be filled in by `PullbackCloner`.
@@ -221,7 +221,7 @@ public:
   void visit(SILInstruction *inst) {
     if (errorOccurred)
       return;
-    if (!pullbackInfo.getAsyncLets().empty())
+    if (isExperimentalAsyncAutoDiffEnabled() && original->isAsync())
       Builder.setCurrentDebugScope(getOpScope(inst->getDebugScope()));
     TypeSubstCloner::visit(inst);
   }
@@ -254,7 +254,7 @@ public:
 
 
   void visitAllocStackInst(AllocStackInst *inst) {
-    auto *a = pullbackInfo.getAsyncLet(inst);
+    auto a = pullbackInfo.getAsyncLet(inst);
     if (!a || inst != a->getBuffer()) {
       TypeSubstCloner::visitAllocStackInst(inst);
       return;
@@ -269,7 +269,7 @@ public:
   }
 
   void visitAddressToPointerInst(AddressToPointerInst *inst) {
-    auto *a = pullbackInfo.getAsyncLet(inst);
+    auto a = pullbackInfo.getAsyncLet(inst);
     if (!a || inst != a->start->getArguments()[2]->getDefiningInstruction()) {
       TypeSubstCloner::visitAddressToPointerInst(inst);
       return;
@@ -280,7 +280,7 @@ public:
   }
 
   void visitPointerToAddressInst(PointerToAddressInst *inst) {
-    auto *a = pullbackInfo.getAsyncLet(inst);
+    auto a = pullbackInfo.getAsyncLet(inst);
     if (a && a->isResultAddress(inst))
       mapValue(inst, getOpValue(a->getBuffer()));
     else
@@ -288,8 +288,8 @@ public:
   }
 
   void visitPartialApplyInst(PartialApplyInst *inst) {
-    auto *a = pullbackInfo.getAsyncLet(inst);
-    if (!a || inst != a->initializer) {
+    auto a = pullbackInfo.getAsyncLet(inst);
+    if (!a || inst != a->getInitializer()) {
       TypeSubstCloner::visitPartialApplyInst(inst);
       return;
     }
@@ -311,7 +311,7 @@ public:
   }
 
   void visitConvertFunctionInst(ConvertFunctionInst *inst) {
-    auto *a = pullbackInfo.getAsyncLet(inst);
+    auto a = pullbackInfo.getAsyncLet(inst);
     if (!a || !a->isInitializerInstruction(inst)) {
       TypeSubstCloner::visitConvertFunctionInst(inst);
       return;
@@ -326,7 +326,7 @@ public:
   }
 
   void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *inst) {
-    auto *a = pullbackInfo.getAsyncLet(inst);
+    auto a = pullbackInfo.getAsyncLet(inst);
     if (!a || !a->isInitializerInstruction(inst)) {
       TypeSubstCloner::visitConvertEscapeToNoEscapeInst(inst);
       return;
@@ -341,7 +341,7 @@ public:
   }
 
   void visitBuiltinInst(BuiltinInst *inst) {
-    auto *a = pullbackInfo.getAsyncLet(inst);
+    auto a = pullbackInfo.getAsyncLet(inst);
     if (!a || inst != a->start) {
       TypeSubstCloner::visitBuiltinInst(inst);
       return;
@@ -358,7 +358,7 @@ public:
   }
 
   void visitDeallocStackInst(DeallocStackInst *inst) {
-    auto *a =
+    auto a =
         pullbackInfo.getAsyncLet(inst->getOperand()->getDefiningInstruction());
     if (a && inst->getOperand() == a->getBuffer())
       Builder.createDeallocStack(inst->getLoc(), getAsyncLetResult(*a));
@@ -963,7 +963,7 @@ public:
   // If an `apply` has active results or active inout arguments, replace it
   // with an `apply` of its VJP.
   void visitApplyInst(ApplyInst *ai) {
-    if (auto *a = pullbackInfo.getAsyncLet(ai); a && a->isGet(ai)) {
+    if (auto a = pullbackInfo.getAsyncLet(ai); a && a->isGet(ai)) {
       assert(pullbackInfo.shouldDifferentiateApplySite(ai));
       TypeSubstCloner::visitApplyInst(ai); // The real wait still executes.
       auto loc = ai->getLoc();
@@ -1473,17 +1473,18 @@ getActivityInfoHelper(ADContext &context, SILFunction *original,
 }
 
 VJPCloner::Implementation::Implementation(
-    VJPCloner &cloner, ADContext &context, SILFunction *original,
-    const AutoDiffConfig &config, SILFunction *vjp,
-    DifferentiationInvoker invoker)
-    : TypeSubstCloner(*vjp, *original, getSubstitutionMap(original, vjp)),
-      cloner(cloner), context(context), original(original), config(config),
+    VJPCloner &cloner, ADContext &context, SILDifferentiabilityWitness *witness,
+    SILFunction *vjp, DifferentiationInvoker invoker)
+    : TypeSubstCloner(*vjp, *witness->getOriginalFunction(),
+                      getSubstitutionMap(witness->getOriginalFunction(), vjp)),
+      cloner(cloner), context(context),
+      original(witness->getOriginalFunction()), witness(witness),
       vjp(vjp), invoker(invoker),
-      activityInfo(getActivityInfoHelper(context, original, config, vjp)),
+      activityInfo(getActivityInfoHelper(context, original, getConfig(), vjp)),
       loopInfo(context.getPassManager().getAnalysis<SILLoopAnalysis>()
                    ->get(original)),
       pullbackInfo(context, AutoDiffLinearMapKind::Pullback, original, vjp,
-                   config, activityInfo, loopInfo) {
+                   getConfig(), activityInfo, loopInfo) {
   // Create empty pullback function.
   pullback = createEmptyPullback();
   context.recordGeneratedFunction(pullback);
@@ -1492,8 +1493,7 @@ VJPCloner::Implementation::Implementation(
 VJPCloner::VJPCloner(ADContext &context,
                      SILDifferentiabilityWitness *witness, SILFunction *vjp,
                      DifferentiationInvoker invoker)
-    : impl(*new Implementation(*this, context, witness->getOriginalFunction(),
-                               witness->getConfig(), vjp, invoker)) {}
+    : impl(*new Implementation(*this, context, witness, vjp, invoker)) {}
 
 VJPCloner::~VJPCloner() { delete &impl; }
 
@@ -1502,6 +1502,9 @@ SILModule &VJPCloner::getModule() const { return impl.getModule(); }
 SILFunction &VJPCloner::getOriginal() const { return *impl.original; }
 SILFunction &VJPCloner::getVJP() const { return *impl.vjp; }
 SILFunction &VJPCloner::getPullback() const { return *impl.pullback; }
+SILDifferentiabilityWitness *VJPCloner::getWitness() const {
+  return impl.witness;
+}
 const AutoDiffConfig &VJPCloner::getConfig() const {
   return impl.getConfig();
 }
@@ -1536,7 +1539,7 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
   // binding all generic parameters to concrete types, VJP function type uses
   // all the concrete types and VJP generic signature is null.
   auto witnessCanGenSig =
-      getConfig().derivativeGenericSignature.getCanonicalSignature();
+      witness->getDerivativeGenericSignature().getCanonicalSignature();
   auto lookupConformance = LookUpConformanceInModule();
 
   // Given a type, returns its formal SIL parameter info.

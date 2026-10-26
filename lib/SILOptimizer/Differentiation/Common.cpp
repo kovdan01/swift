@@ -56,6 +56,13 @@ bool isExperimentalAsyncAutoDiffEnabled() {
   return EnableAsyncAutoDiff;
 }
 
+PartialApplyInst *AsyncLetInfo::getInitializer() const {
+  auto source = findAsyncLetPartialApplyFromStart(start);
+  assert(source && isa<PartialApplyInst *>(*source) &&
+         "selected async let needs a captured initializer");
+  return cast<PartialApplyInst *>(*source);
+}
+
 AllocStackInst *AsyncLetInfo::getBuffer() const {
   auto *pointer = cast<AddressToPointerInst>(start->getArguments()[2]);
   return cast<AllocStackInst>(pointer->getOperand());
@@ -63,7 +70,7 @@ AllocStackInst *AsyncLetInfo::getBuffer() const {
 
 IndexSubset *AsyncLetInfo::getParameterIndices() const {
   auto &function = *start->getFunction();
-  auto captures = initializer->getArguments();
+  auto captures = getInitializer()->getArguments();
   SmallVector<unsigned, 4> indices;
   for (unsigned i = 0; i != captures.size(); ++i)
     if (captures[i]->getType().isDifferentiable(function.getModule()))
@@ -101,7 +108,7 @@ Type getLinearMapASTType(CanSILFunctionType silFnTy) {
 
 SILFunction *AsyncLetInfo::getVJP() const {
   auto &function = *start->getFunction();
-  auto *child = cast<FunctionRefInst>(initializer->getCallee())
+  auto *child = cast<FunctionRefInst>(getInitializer()->getCallee())
                     ->getReferencedFunction();
   auto *results = IndexSubset::get(function.getASTContext(), 1, {0});
   auto *witness = getExactDifferentiabilityWitness(
@@ -118,7 +125,7 @@ SubstitutionMap AsyncLetInfo::getVJPSubstitutions() const {
   // replacements, looking up any derivative-signature conformances normally.
   return SubstitutionMap::get(
       type->getInvocationGenericSignature(),
-      QuerySubstitutionMap{initializer->getSubstitutionMap()},
+      QuerySubstitutionMap{getInitializer()->getSubstitutionMap()},
       LookUpConformanceInModule());
 }
 
@@ -158,16 +165,11 @@ bool AsyncLetInfo::isInitializerInstruction(SILInstruction *inst) const {
   if (!isa<PartialApplyInst, ConvertFunctionInst,
            ConvertEscapeToNoEscapeInst>(inst))
     return false;
-  // findAsyncLet checks that these conversions belong exclusively to this
-  // initializer/start. Discovery itself is shared with RegionAnalysis.
-  auto source = findAsyncLetPartialApplyFromStart(
-      SILValue(cast<SingleValueInstruction>(inst)));
-  return source && isa<PartialApplyInst *>(*source) &&
-         cast<PartialApplyInst *>(*source) == initializer;
+  return swift::getAsyncLetStart(inst) == start;
 }
 
 bool AsyncLetInfo::isGet(SILInstruction *inst) const {
-  return llvm::any_of(gets, [&](ApplyInst *get) { return inst == get; });
+  return isa<ApplyInst>(inst) && swift::getAsyncLetStart(inst) == start;
 }
 
 bool AsyncLetInfo::isResultAddress(SILInstruction *inst) const {
@@ -227,8 +229,7 @@ struct AsyncLetResultUseVisitor
 static AsyncLetInfo findAsyncLet(BuiltinInst *start,
                                  DominanceInfo &dominance) {
   auto &function = *start->getFunction();
-  AsyncLetInfo a;
-  a.start = start;
+  AsyncLetInfo a(start);
 
   assert(function.isAsync());
   assert(!function.isSerialized() &&
@@ -244,11 +245,7 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
   // The task owns the initialized result until finish. Parent reads copy or
   // borrow it; its type may be nontrivial or address-only (including T).
 
-  auto source = findAsyncLetPartialApplyFromStart(start);
-  assert(source && isa<PartialApplyInst *>(*source) &&
-         "expected an async-let initializer with captures");
-  a.initializer = cast<PartialApplyInst *>(*source);
-
+  auto *initializer = a.getInitializer();
   // Discovery also recognizes reabstraction wrappers. The current AD rewrite
   // only changes partial_apply and these two conversions, so validate that
   // narrower rewrite contract separately instead of duplicating discovery.
@@ -262,7 +259,7 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
               isBuiltinInst(use->getUser(),
                             BuiltinValueKind::EndAsyncLetLifetime)) &&
              "shared initializer closure");
-    if (closure == a.initializer)
+    if (closure == initializer)
       break;
     consumer = closure->getDefiningInstruction();
     assert((isa<ConvertFunctionInst, ConvertEscapeToNoEscapeInst>(consumer)));
@@ -271,17 +268,18 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
   // Preserve SILGen's capture ownership and lifetime through the replacement
   // partial_apply. Passive captures need no Differentiable conformance.
   // Shared inout state is not an independent captured differentiation input.
-  auto initializerType = a.initializer->getCallee()->getType()
+  auto initializerType = initializer->getCallee()->getType()
                              .castTo<SILFunctionType>();
   for (auto parameter : initializerType->getParameters())
     assert(!parameter.isIndirectInOut() &&
            !parameter.isAutoDiffSemanticResult() &&
            "mutable inout async-let captures are not implemented");
-  assert(isa<FunctionRefInst>(a.initializer->getCallee()));
-  assert(dominance.dominates(buffer, a.initializer) &&
-         dominance.dominates(a.initializer, start));
+  assert(isa<FunctionRefInst>(initializer->getCallee()));
+  assert(dominance.dominates(buffer, initializer) &&
+         dominance.dominates(initializer, start));
 
   SmallVector<SILInstruction *, 2> finishes, ends, deallocs;
+  SmallVector<ApplyInst *, 2> gets;
   SmallVector<PointerToAddressInst *, 2> resultAddresses;
   auto pointer = a.start->getArguments()[2];
   for (auto *use : pointer->getUses()) {
@@ -298,8 +296,8 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
       assert(callee && apply->getArguments().size() == 2 &&
              apply->getArguments()[0] == a.start &&
              apply->getArguments()[1] == pointer);
-      if (callee->getName() == "swift_asyncLet_get")
-        a.gets.push_back(apply);
+      if (swift::getAsyncLetStart(apply) == start)
+        gets.push_back(apply);
       else {
         assert(callee->getName() == "swift_asyncLet_finish");
         finishes.push_back(apply);
@@ -333,11 +331,11 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
   for (auto *address : resultAddresses)
     checkResultUses(address);
   assert(!finishes.empty() && !ends.empty() && !deallocs.empty());
-  assert(resultAddresses.empty() || !a.gets.empty());
+  assert(resultAddresses.empty() || !gets.empty());
   // These are SSA dominance checks, not a second task-lifetime or AD-loop
   // analysis. In particular, waits in alternative arms can precede a joined
   // result read, and cleanup-only paths need not contain a numerical read.
-  for (auto *get : a.gets)
+  for (auto *get : gets)
     assert(dominance.dominates(start, get));
   for (auto *address : resultAddresses)
     assert(dominance.dominates(start, address));
@@ -348,12 +346,12 @@ static AsyncLetInfo findAsyncLet(BuiltinInst *start,
   for (auto *dealloc : deallocs)
     assert(dominance.dominates(buffer, dealloc));
   LLVM_DEBUG({
-    getADDebugStream() << "Matched async let with " << a.gets.size()
+    getADDebugStream() << "Matched async let with " << gets.size()
                        << " wait(s), " << resultAddresses.size()
                        << " result address(es), "
                        << a.getParameterIndices()->getNumIndices()
                        << " differentiable capture(s):\n"
-                       << *a.start << *a.initializer;
+                       << *a.start << *initializer;
   });
   return a;
 }
@@ -383,21 +381,15 @@ SmallVector<AsyncLetInfo, 2> findAsyncLets(
   return result;
 }
 
-const AsyncLetInfo *getAsyncLet(
-    ArrayRef<AsyncLetInfo> asyncLets, SILInstruction *inst) {
-  if (!inst)
-    return nullptr;
-  // Reuse the PR's association rather than duplicating its pointer-use walk.
-  if (auto *address = dyn_cast<PointerToAddressInst>(inst))
-    inst = getAsyncLetStart(address);
-  if (!inst)
-    return nullptr;
-  for (const auto &a : asyncLets)
-    if (inst == a.start || a.isGet(inst) || inst == a.getBuffer() ||
-        inst == a.start->getArguments()[2]->getDefiningInstruction() ||
-        a.isInitializerInstruction(inst))
-      return &a;
-  return nullptr;
+std::optional<AsyncLetInfo> getAsyncLet(
+    SILInstruction *inst, const DifferentiableActivityInfo &activity,
+    const AutoDiffConfig &config) {
+  if (!EnableAsyncAutoDiff)
+    return std::nullopt;
+  auto *start = swift::getAsyncLetStart(inst);
+  if (!start || !shouldDifferentiateAsyncLet(start, activity, config))
+    return std::nullopt;
+  return AsyncLetInfo(start);
 }
 
 //===----------------------------------------------------------------------===//

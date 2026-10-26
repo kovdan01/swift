@@ -64,9 +64,6 @@ private:
   /// Activity info of the original function.
   const DifferentiableActivityInfo &activityInfo;
 
-  /// Selected task descriptors owned by ADContext for this derivative.
-  ArrayRef<AsyncLetInfo> asyncLets;
-
   /// The original function's loop info.
   SILLoopInfo *loopInfo;
 
@@ -127,9 +124,10 @@ private:
                                              SILFunction *derivative);
 
 public:
-  ArrayRef<AsyncLetInfo> getAsyncLets() const { return asyncLets; }
-  const AsyncLetInfo *getAsyncLet(SILInstruction *inst) const {
-    return swift::autodiff::getAsyncLet(asyncLets, inst);
+  std::optional<AsyncLetInfo> getAsyncLet(SILInstruction *inst) const {
+    if (kind != AutoDiffLinearMapKind::Pullback)
+      return std::nullopt;
+    return swift::autodiff::getAsyncLet(inst, activityInfo, config);
   }
 
   bool shouldDifferentiateApplySite(FullApplySite applySite);

@@ -25,6 +25,7 @@
 #include "swift/SIL/TypeSubstCloner.h"
 #include "swift/SILOptimizer/Differentiation/DifferentiationInvoker.h"
 #include "swift/AST/AutoDiff.h"
+#include <optional>
 
 namespace swift {
 
@@ -50,12 +51,12 @@ Type getLinearMapASTType(CanSILFunctionType type);
 
 bool isExperimentalAsyncAutoDiffEnabled();
 
-// Transformation data for one selected child. Activity is owned exclusively by
-// DifferentiableActivityInfo. Waits and result accesses may be in different blocks.
+// A view of one selected child in the original SIL, not cached analysis state.
+// The original body is not rewritten while its derivative is generated.
 struct AsyncLetInfo {
-  BuiltinInst *start = nullptr;
-  PartialApplyInst *initializer = nullptr;
-  SmallVector<ApplyInst *, 2> gets;
+  BuiltinInst *start;
+  explicit AsyncLetInfo(BuiltinInst *start) : start(start) {}
+  PartialApplyInst *getInitializer() const;
   bool isGet(SILInstruction *inst) const;
   bool isResultAddress(SILInstruction *inst) const;
 
@@ -75,8 +76,9 @@ SmallVector<AsyncLetInfo, 2>
 findAsyncLets(SILFunction &function, const DifferentiableActivityInfo &activity,
               const AutoDiffConfig &config);
 
-const AsyncLetInfo *getAsyncLet(ArrayRef<AsyncLetInfo> asyncLets,
-                                SILInstruction *inst);
+std::optional<AsyncLetInfo>
+getAsyncLet(SILInstruction *inst, const DifferentiableActivityInfo &activity,
+            const AutoDiffConfig &config);
 
 /// Prints an "[AD] " prefix to `llvm::dbgs()` and returns the debug stream.
 /// This is being used to print short debug messages within the AD pass.
