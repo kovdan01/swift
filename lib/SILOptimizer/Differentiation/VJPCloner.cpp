@@ -100,7 +100,9 @@ class VJPCloner::Implementation final
 
   ASTContext &getASTContext() const { return vjp->getASTContext(); }
   SILModule &getModule() const { return vjp->getModule(); }
-  const AutoDiffConfig &getConfig() const { return witness->getConfig(); }
+  const AutoDiffConfig &getConfig() const {
+    return witness->getConfig();
+  }
 
   Implementation(VJPCloner &parent, ADContext &context,
                  SILDifferentiabilityWitness *witness, SILFunction *vjp,
@@ -1472,19 +1474,21 @@ getActivityInfoHelper(ADContext &context, SILFunction *original,
   return activityInfo;
 }
 
-VJPCloner::Implementation::Implementation(
-    VJPCloner &cloner, ADContext &context, SILDifferentiabilityWitness *witness,
-    SILFunction *vjp, DifferentiationInvoker invoker)
+VJPCloner::Implementation::Implementation(VJPCloner &cloner, ADContext &context,
+                                          SILDifferentiabilityWitness *witness,
+                                          SILFunction *vjp,
+                                          DifferentiationInvoker invoker)
     : TypeSubstCloner(*vjp, *witness->getOriginalFunction(),
                       getSubstitutionMap(witness->getOriginalFunction(), vjp)),
       cloner(cloner), context(context),
       original(witness->getOriginalFunction()), witness(witness),
       vjp(vjp), invoker(invoker),
-      activityInfo(getActivityInfoHelper(context, original, getConfig(), vjp)),
+      activityInfo(getActivityInfoHelper(
+          context, original, witness->getConfig(), vjp)),
       loopInfo(context.getPassManager().getAnalysis<SILLoopAnalysis>()
                    ->get(original)),
       pullbackInfo(context, AutoDiffLinearMapKind::Pullback, original, vjp,
-                   getConfig(), activityInfo, loopInfo) {
+                   witness->getConfig(), activityInfo, loopInfo) {
   // Create empty pullback function.
   pullback = createEmptyPullback();
   context.recordGeneratedFunction(pullback);
@@ -1538,8 +1542,7 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
   // signature: when witness generic signature has same-type requirements
   // binding all generic parameters to concrete types, VJP function type uses
   // all the concrete types and VJP generic signature is null.
-  auto witnessCanGenSig =
-      witness->getDerivativeGenericSignature().getCanonicalSignature();
+  auto witnessCanGenSig = witness->getDerivativeGenericSignature().getCanonicalSignature();
   auto lookupConformance = LookUpConformanceInModule();
 
   // Given a type, returns its formal SIL parameter info.
@@ -1620,7 +1623,7 @@ SILFunction *VJPCloner::Implementation::createEmptyPullback() {
   SmallVector<SILYieldInfo, 8> pbYields;
   SmallVector<SILResultInfo, 8> adjResults;
   auto origParams = origTy->getParameters();
-  auto config = getConfig();
+  auto config = witness->getConfig();
 
   // Add pullback parameters based on original result indices.
   SmallVector<unsigned, 4> semanticResultParamIndices;

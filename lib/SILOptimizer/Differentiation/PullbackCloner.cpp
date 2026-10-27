@@ -259,7 +259,8 @@ private:
   std::optional<TangentSpace> getTangentSpace(CanType type) {
     // Use witness generic signature to remap types.
     type =
-        getWitness()->getDerivativeGenericSignature().getReducedType(type);
+        getWitness()->getDerivativeGenericSignature().getReducedType(
+            type);
     return type->getAutoDiffTangentSpace(
         LookUpConformanceInModule());
   }

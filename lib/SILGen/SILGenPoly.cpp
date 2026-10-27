@@ -8006,8 +8006,7 @@ ManagedValue SILGenFunction::emitActorIsolationErasureThunk(
     buildThunkBody(
         thunkSGF, loc, AbstractionPattern(isolatedType), isolatedType,
         AbstractionPattern(nonIsolatedType), nonIsolatedType, expectedType,
-        dynamicSelfType,
-        [&loc, &globalActor](SILGenFunction &thunkSGF) {
+        dynamicSelfType, [&loc, &globalActor](SILGenFunction &thunkSGF) {
           thunkSGF.emitPreconditionCheckExpectedExecutor(
               loc, ActorIsolation::forGlobalActor(globalActor), std::nullopt);
         });
