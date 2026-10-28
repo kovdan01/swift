@@ -149,6 +149,18 @@ private:
 /// Emit a task-entry reabstraction body for an ordinary async initializer VJP.
 /// The optimizer owns the declaration and its generic environment; SILGen owns
 /// call/result adaptation, including ownership and throwing cleanup.
+// SimpleRequest prints its arguments for request diagnostics. This request's
+// pointer and canonical-type arguments have no generic simple_display overload;
+// keep the display customization local to this particular request signature.
+inline void simple_display(
+    llvm::raw_ostream &out,
+    const std::tuple<SILFunction *, CanSILFunctionType, CanType, CanType> &args) {
+  out << "(thunk=" << static_cast<const void *>(std::get<0>(args))
+      << ", expected=" << static_cast<const void *>(std::get<1>(args).getPointer())
+      << ", formal=" << static_cast<const void *>(std::get<2>(args).getPointer())
+      << ", dynamicSelf="
+      << static_cast<const void *>(std::get<3>(args).getPointer()) << ")";
+}
 class EmitAutoDiffAsyncLetThunkRequest
     : public SimpleRequest<
           EmitAutoDiffAsyncLetThunkRequest,
