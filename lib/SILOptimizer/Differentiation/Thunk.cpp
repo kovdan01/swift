@@ -129,38 +129,6 @@ static void forwardFunctionArgumentsConvertingOwnership(
   }
 }
 
-/// Emit a thunk's call and continue on its successful edge. Result storage is
-/// uninitialized on the error edge; the caller supplies only its input/temp
-/// cleanup, not successful-result destruction.
-static SILValue emitThunkApply(
-    SILBuilder &builder, SILLocation loc, SILValue callee,
-    SubstitutionMap substitutions, CanSILFunctionType calleeType,
-    ArrayRef<SILValue> arguments, llvm::function_ref<void()> emitErrorCleanup) {
-  if (!calleeType->hasErrorResult())
-    return builder.createApply(loc, callee, substitutions, arguments);
-
-  auto &function = builder.getFunction();
-  auto error = *calleeType->getOptionalErrorResult();
-  assert(!error.isFormalIndirect() &&
-         "indirect errors in differentiation thunks are not implemented");
-  auto directType = calleeType->getDirectFormalResultsType(
-      function.getModule(), builder.getTypeExpansionContext(),
-      function.hasLoweredAddresses());
-  auto *normalBB = function.createBasicBlock();
-  auto *errorBB = function.createBasicBlock();
-  auto result = normalBB->createPhiArgument(
-      directType, directType.isTrivial(function) ? OwnershipKind::None
-                                               : OwnershipKind::Owned);
-  auto exception = errorBB->createPhiArgument(
-      error.getSILStorageInterfaceType(), OwnershipKind::Owned);
-  builder.createTryApply(loc, callee, substitutions, arguments, normalBB, errorBB);
-  builder.setInsertionPoint(errorBB);
-  emitErrorCleanup();
-  builder.createThrow(loc, exception);
-  builder.setInsertionPoint(normalBB);
-  return result;
-}
-
 SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
                                            SILModule &module, SILLocation loc,
                                            SILFunction *caller,
@@ -205,88 +173,16 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
   SILBuilder builder(entry);
   createEntryArguments(thunk);
 
-  // buildThunkType has already mapped fromType and toType into genericEnv.
-  // Their component types are contextual, not inputs to mapTypeIntoEnvironment.
   SILAddressConventions silConv = SILAddressConventions::forFunction(*thunk);
   SILFunctionConventions fromConv(fromType, silConv);
   SILFunctionConventions toConv(toType, silConv);
   assert(toConv.useLoweredAddresses());
 
-  // Normalize only the top-level result grouping. Nominal primal/tangent
-  // values and nested tuples remain whole components. Exact aggregate
-  // packing is the same per-result conversion, not a separate emitter.
-  auto canMoveResult = [&](SILResultInfo result) {
-    return result.isFormalIndirect() ||
-           result.getConvention() == ResultConvention::Owned ||
-           result.getSILStorageInterfaceType().isTrivial(*thunk);
-  };
-  auto canExpandTupleResult = [&](CanSILFunctionType direct,
-                                   CanSILFunctionType indirect) {
-    if (direct->getNumResults() == 1 ||
-        direct->getNumIndirectFormalResults() ||
-        indirect->getNumResults() != 1 ||
-        !indirect->getSingleResult().isFormalIndirect())
-      return false;
-    auto aggregate = direct->getDirectFormalResultsType(
-        module, builder.getTypeExpansionContext(), thunk->hasLoweredAddresses());
-    auto storage = indirect->getSingleResult().getSILStorageInterfaceType()
-                       .getObjectType();
-    // Every nontrivial direct component must transfer ownership to/from the
-    // aggregate. Do not treat a borrowed result as an owned tuple field.
-    return storage.is<TupleType>() && aggregate == storage &&
-           llvm::all_of(direct->getResults(), canMoveResult);
-  };
-  // When both sides already describe the same single result, the existing
-  // one-to-one conversion can forward/copy it as a whole (including a tuple).
-  bool sameSingleResult =
-      fromType->getNumResults() == 1 && toType->getNumResults() == 1 &&
-      canMoveResult(fromType->getSingleResult()) &&
-      canMoveResult(toType->getSingleResult()) &&
-      fromType->getSingleResult().getSILStorageInterfaceType().getObjectType() ==
-          toType->getSingleResult().getSILStorageInterfaceType().getObjectType();
-  bool fromAggregate =
-      !sameSingleResult && (fromType->hasIndirectAutoDiffResult() ||
-                            canExpandTupleResult(toType, fromType));
-  bool toAggregate =
-      !sameSingleResult && (toType->hasIndirectAutoDiffResult() ||
-                            canExpandTupleResult(fromType, toType));
-  SmallVector<SILResultInfo, 4> fromResults(fromType->getResults().begin(),
-                                          fromType->getResults().end());
-  SmallVector<SILResultInfo, 4> toResults(toType->getResults().begin(),
-                                        toType->getResults().end());
-  SmallVector<SILValue, 4> fromIndirectResults, toIndirectResults;
-  SmallVector<AllocStackInst *, 4> localAllocations;
-  auto projectResults = [&](SILValue aggregate,
-                            SmallVectorImpl<SILResultInfo> &results,
-                            SmallVectorImpl<SILValue> &addresses) {
-    results.clear();
-    auto tuple = aggregate->getType().castTo<TupleType>();
-    for (unsigned i : range(tuple->getNumElements())) {
-      auto field = builder.createTupleElementAddr(loc, aggregate, i);
-      results.emplace_back(field->getType().getASTType(),
-                           ResultConvention::Indirect);
-      addresses.push_back(field);
-    }
-  };
-  SILValue fromAggregateBuffer;
-  if (fromAggregate) {
-    fromAggregateBuffer = builder.createAllocStack(
-        loc, fromType->getAllResultsSubstType(
-                 module, builder.getTypeExpansionContext()));
-    localAllocations.push_back(cast<AllocStackInst>(fromAggregateBuffer));
-    projectResults(fromAggregateBuffer, fromResults, fromIndirectResults);
-  }
-  if (toAggregate) {
-    projectResults(*thunk->getIndirectResults().begin(), toResults,
-                   toIndirectResults);
-  } else {
-    for (auto result : thunk->getIndirectResults())
-      toIndirectResults.push_back(result);
-  }
-
   // Forward thunk arguments, handling ownership convention mismatches.
-  SmallVector<SILValue, 4> forwardedArgs(toIndirectResults.begin(),
-                                        toIndirectResults.end());
+  SmallVector<SILValue, 4> forwardedArgs;
+  for (auto indRes : thunk->getIndirectResults())
+    forwardedArgs.push_back(indRes);
+  SmallVector<AllocStackInst *, 4> localAllocations;
   SmallVector<SILValue, 4> valuesToCleanup;
   forwardFunctionArgumentsConvertingOwnership(
       builder, loc, fromType, toType,
@@ -294,8 +190,6 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
       localAllocations, valuesToCleanup);
 
   SmallVector<SILValue, 4> arguments;
-  if (fromAggregate)
-    arguments.push_back(fromAggregateBuffer);
   auto toArgIter = forwardedArgs.begin();
   auto useNextArgument = [&]() { arguments.push_back(*toArgIter++); };
 
@@ -305,27 +199,30 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
     return alloc;
   };
 
-  // All result conversions use the same component loop, including an
-  // indirect tuple corresponding to expanded direct results, including ().
-  unsigned numResults = toResults.size();
-  assert(fromResults.size() == toResults.size());
-  for (unsigned resIdx : range(numResults)) {
-    auto fromRes = fromResults[resIdx];
-    auto toRes = toResults[resIdx];
-    SILValue destination;
-    if (toRes.isFormalIndirect())
-      destination = *toArgIter++;
-    if (!fromRes.isFormalIndirect() || fromAggregate)
+  // Handle indirect results.
+  assert(fromType->getNumResults() == toType->getNumResults());
+  for (unsigned resIdx : range(toType->getNumResults())) {
+    auto fromRes = fromConv.getResults()[resIdx];
+    auto toRes = toConv.getResults()[resIdx];
+    // No abstraction mismatch.
+    if (fromRes.isFormalIndirect() == toRes.isFormalIndirect()) {
+      // If result types are indirect, directly pass as next argument.
+      if (toRes.isFormalIndirect())
+        useNextArgument();
       continue;
-    auto sourceType =
-        fromConv.getSILType(fromRes, builder.getTypeExpansionContext());
-    // Forward an unchanged indirect result. Otherwise the source writes a
-    // temporary, which the result conversion below moves to its destination.
-    SILValue source = destination;
-    if (!source || source->getType() != sourceType)
-      source = createAllocStack(sourceType);
-    arguments.push_back(source);
-    fromIndirectResults.push_back(source);
+    }
+    // Convert indirect result to direct result.
+    if (fromRes.isFormalIndirect()) {
+      SILType resultTy =
+          fromConv.getSILType(fromRes, builder.getTypeExpansionContext());
+      assert(resultTy.isAddress());
+      auto *indRes = createAllocStack(resultTy);
+      arguments.push_back(indRes);
+      continue;
+    }
+    // Convert direct result to indirect result.
+    // Increment thunk argument iterator; reabstraction handled later.
+    ++toArgIter;
   }
 
   // Reabstract parameters.
@@ -363,57 +260,22 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
     arguments.push_back(load);
   }
 
-  auto emitCleanup = [&]() {
-    // Clean up local values.
-    // Guaranteed values need an `end_borrow`.
-    // Owned values need to be destroyed.
-    for (auto arg : valuesToCleanup) {
-      switch (arg->getOwnershipKind()) {
-      case OwnershipKind::Any:
-        llvm_unreachable("value with any ownership kind?!");
-      case OwnershipKind::Guaranteed:
-        builder.emitEndBorrowOperation(loc, arg);
-        break;
-      case OwnershipKind::Owned:
-      case OwnershipKind::Unowned:
-      case OwnershipKind::None:
-        builder.emitDestroyOperation(loc, arg);
-        break;
-      }
-    }
-
-    // Deallocate local allocations.
-    for (auto *alloc : llvm::reverse(localAllocations))
-      builder.createDeallocStack(loc, alloc);
-  };
   auto *fnArg = thunk->getArgumentsWithoutIndirectResults().back();
-  assert(fromType->getOptionalErrorResult() == toType->getOptionalErrorResult());
-  if (fromType->hasErrorResult())
-    for (auto result : fromType->getResults())
-      assert(result.isFormalIndirect() ||
-             result.getConvention() == ResultConvention::Owned ||
-             result.getSILStorageInterfaceType().isTrivial(*thunk));
-  auto applyResult = emitThunkApply(builder, loc, fnArg, SubstitutionMap(),
-                                    fromType, arguments, emitCleanup);
+  auto *apply = builder.createApply(loc, fnArg, SubstitutionMap(), arguments);
 
   // Get return elements.
   SmallVector<SILValue, 4> results;
   // Extract all direct results.
   SmallVector<SILValue, 4> directResults;
-  // A single formal tuple result is one value, not several formal results.
-  // Otherwise destructure once and consume each owned component exactly once.
-  if (fromType->getNumResults() - fromType->getNumIndirectFormalResults() == 1)
-    directResults.push_back(applyResult);
-  else
-    extractAllElements(applyResult, builder, directResults);
+  extractAllElements(apply, builder, directResults);
 
   auto fromDirResultsIter = directResults.begin();
-  auto fromIndResultsIter = fromIndirectResults.begin();
-  auto toIndResultsIter = toIndirectResults.begin();
-  // Reabstract the ordinary one-to-one results.
-  for (unsigned resIdx : range(numResults)) {
-    auto fromRes = fromResults[resIdx];
-    auto toRes = toResults[resIdx];
+  auto fromIndResultsIter = apply->getIndirectSILResults().begin();
+  auto toIndResultsIter = thunk->getIndirectResults().begin();
+  // Reabstract results.
+  for (unsigned resIdx : range(toType->getNumResults())) {
+    auto fromRes = fromConv.getResults()[resIdx];
+    auto toRes = toConv.getResults()[resIdx];
     // Check function-typed results.
     if (isa<SILFunctionType>(fromRes.getInterfaceType()) &&
         isa<SILFunctionType>(toRes.getInterfaceType())) {
@@ -421,23 +283,13 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
       auto toFnType = cast<SILFunctionType>(toRes.getInterfaceType());
       auto fromUnsubstFnType = fromFnType->getUnsubstitutedType(module);
       auto toUnsubstFnType = toFnType->getUnsubstitutedType(module);
-      if (fromFnType != toFnType) {
-        SILValue fromFn = fromRes.isFormalIndirect()
-            ? builder.emitLoadValueOperation(loc, *fromIndResultsIter++,
-                                              LoadOwnershipQualifier::Take)
-            : *fromDirResultsIter++;
-        if (fromUnsubstFnType != toUnsubstFnType)
-          fromFn = reabstractFunction(
-              builder, fb, loc, fromFn, toFnType,
-              [](SubstitutionMap substMap) { return substMap; });
-        else
-          fromFn = builder.createConvertFunction(
-              loc, fromFn, SILType::getPrimitiveObjectType(toFnType));
-        if (toRes.isFormalIndirect())
-          builder.emitStoreValueOperation(loc, fromFn, *toIndResultsIter++,
-                                          StoreOwnershipQualifier::Init);
-        else
-          results.push_back(fromFn);
+      // If unsubstituted function types are not equal, perform reabstraction.
+      if (fromUnsubstFnType != toUnsubstFnType) {
+        auto fromFn = *fromDirResultsIter++;
+        auto newFromFn = reabstractFunction(
+            builder, fb, loc, fromFn, toFnType,
+            [](SubstitutionMap substMap) { return substMap; });
+        results.push_back(newFromFn);
         continue;
       }
     }
@@ -446,14 +298,10 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
       // If result types are direct, add call result as direct thunk result.
       if (toRes.isFormalDirect())
         results.push_back(*fromDirResultsIter++);
-      // Move a source aggregate's field, unless the destination was already
-      // forwarded to the call and therefore needs no copy.
+      // If result types are indirect, increment indirect result iterators.
       else {
-        auto source = *fromIndResultsIter++;
-        auto destination = *toIndResultsIter++;
-        if (source != destination)
-          builder.createCopyAddr(loc, source, destination, IsTake,
-                                 IsInitialization);
+        ++fromIndResultsIter;
+        ++toIndResultsIter;
       }
       continue;
     }
@@ -479,7 +327,29 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
   }
   auto retVal = joinElements(results, builder, loc);
 
-  emitCleanup();
+  // Clean up local values.
+  // Guaranteed values need an `end_borrow`.
+  // Owned values need to be destroyed.
+  for (auto arg : valuesToCleanup) {
+    switch (arg->getOwnershipKind()) {
+    case OwnershipKind::Any:
+      llvm_unreachable("value with any ownership kind?!");
+    case OwnershipKind::Guaranteed:
+      builder.emitEndBorrowOperation(loc, arg);
+      break;
+    case OwnershipKind::Owned:
+    case OwnershipKind::Unowned:
+    case OwnershipKind::None:
+      builder.emitDestroyOperation(loc, arg);
+      break;
+    }
+  }
+
+  // Deallocate local allocations.
+  for (auto *alloc : llvm::reverse(localAllocations))
+    builder.createDeallocStack(loc, alloc);
+
+  // Create return.
   builder.createReturn(loc, retVal);
 
   LLVM_DEBUG(auto &s = getADDebugStream() << "Created reabstraction thunk.\n";
@@ -991,50 +861,22 @@ getOrCreateSubsetParametersThunkForDerivativeFunction(
 
   SmallVector<SILValue, 4> arguments;
   arguments.append(thunk->getArguments().begin(), thunk->getArguments().end());
+  assert(arguments.size() ==
+         derivativeFnType->getNumParameters() +
+             derivativeFnType->getNumIndirectFormalResults());
+  auto *apply = builder.createApply(loc, assocRef, assocSubstMap, arguments);
 
-  auto callType = assocRef->getType().substGenericArgs(
-                                         module, assocSubstMap, thunk->getTypeExpansionContext())
-                      .castTo<SILFunctionType>();
-  assert(arguments.size() == callType->getNumParameters() +
-                                 callType->getNumIndirectFormalResults());
-  bool aggregate = callType->hasIndirectAutoDiffResult();
-  assert(aggregate == targetType->hasIndirectAutoDiffResult());
-  SILValue resultBuffer;
-  if (aggregate) {
-    // The source and destination pullbacks have different parameter subsets,
-    // so their result aggregates cannot share a single output address.
-    resultBuffer = builder.createAllocStack(
-        loc, callType->getAllResultsSubstType(
-                 module, builder.getTypeExpansionContext()));
-    arguments.front() = resultBuffer;
-  }
-  auto applyResult = emitThunkApply(
-      builder, loc, assocRef, assocSubstMap, callType, arguments, [&]() {
-        if (resultBuffer)
-          builder.createDeallocStack(loc, resultBuffer);
-      });
-
+  // Extract all direct results.
   SmallVector<SILValue, 8> directResults;
-
-  SILValue linearMap;
-  if (aggregate) {
-    auto output = *thunk->getIndirectResults().begin();
-    builder.createCopyAddr(
-        loc, builder.createTupleElementAddr(loc, resultBuffer, 0),
-        builder.createTupleElementAddr(loc, output, 0), IsTake, IsInitialization);
-    linearMap = builder.emitLoadValueOperation(
-        loc, builder.createTupleElementAddr(loc, resultBuffer, 1),
-        LoadOwnershipQualifier::Take);
-    builder.createDeallocStack(loc, resultBuffer);
-  } else {
-    extractAllElements(applyResult, builder, directResults);
-    linearMap = directResults.pop_back_val();
-  }
+  extractAllElements(apply, builder, directResults);
+  auto linearMap = directResults.back();
+  directResults.pop_back();
 
   auto linearMapType = linearMap->getType().castTo<SILFunctionType>();
-  // buildThunkType has already placed targetType in the thunk's context.
-  auto linearMapTargetType = targetType->getAutoDiffLinearMapType(
-      module, builder.getTypeExpansionContext()).castTo<SILFunctionType>();
+  auto linearMapTargetType = targetType->getResults()
+                                 .back()
+                                 .getSILStorageInterfaceType()
+                                 .castTo<SILFunctionType>();
   auto unsubstLinearMapType = linearMapType->getUnsubstitutedType(module);
   auto unsubstLinearMapTargetType =
       linearMapTargetType->getUnsubstitutedType(module);
@@ -1063,14 +905,8 @@ getOrCreateSubsetParametersThunkForDerivativeFunction(
         SILType::getPrimitiveObjectType(linearMapTargetType));
   }
   assert(origFnType->getNumAutoDiffSemanticResults() > 0);
-  if (aggregate) {
-    auto output = *thunk->getIndirectResults().begin();
-    builder.emitStoreValueOperation(
-        loc, thunkedLinearMap, builder.createTupleElementAddr(loc, output, 1),
-        StoreOwnershipQualifier::Init);
-    builder.createReturn(loc, applyResult); // ()
-  } else if (origFnType->getNumResults() > 0 &&
-             origFnType->getResults().front().isFormalDirect()) {
+  if (origFnType->getNumResults() > 0 &&
+      origFnType->getResults().front().isFormalDirect()) {
     directResults.push_back(thunkedLinearMap);
     auto result = joinElements(directResults, builder, loc);
     builder.createReturn(loc, result);

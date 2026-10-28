@@ -288,8 +288,8 @@ Type LinearMapInfo::getLinearMapType(ADContext &context, FullApplySite fai) {
               LookUpConformanceInModule())
           ->getUnsubstitutedType(original->getModule());
 
-  auto linearMapSILType = derivativeFnType->getAutoDiffLinearMapType(
-      original->getModule(), derivative->getTypeExpansionContext());
+  auto linearMapSILType =
+      derivativeFnType->getResults().back().getSILStorageInterfaceType();
   auto linearMapFnType = linearMapSILType.castTo<SILFunctionType>()
                              ->getUnsubstitutedType(original->getModule());
   Type resultType =

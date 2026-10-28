@@ -947,26 +947,6 @@ static SILFunctionType *getConstrainedAutoDiffOriginalFunctionType(
       original->getWitnessMethodConformanceOrInvalid());
 }
 
-bool SILFunctionType::hasIndirectAutoDiffResult() const {
-  if (!isAsync() || isCoroutine() || getNumResults() != 1 ||
-      !getSingleResult().isFormalIndirect())
-    return false;
-  auto tuple = dyn_cast<TupleType>(getSingleResult().getInterfaceType());
-  return tuple && tuple->getNumElements() == 2 &&
-         tuple->getElementType(1)->is<SILFunctionType>();
-}
-
-SILType SILFunctionType::getAutoDiffLinearMapType(
-    SILModule &M, TypeExpansionContext context) {
-  auto result = getAllResultsSubstType(M, context);
-  if (auto tuple = result.getAs<TupleType>()) {
-    assert(tuple->getNumElements() && "derivative has no linear map");
-    result = result.getTupleElementType(tuple->getNumElements() - 1);
-  }
-  assert(result.is<SILFunctionType>() && "expected a derivative linear map");
-  return result;
-}
-
 CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
     IndexSubset *parameterIndices, IndexSubset *resultIndices,
     AutoDiffDerivativeFunctionKind kind, TypeConverter &TC,
@@ -1037,26 +1017,10 @@ CanSILFunctionType SILFunctionType::getAutoDiffDerivativeFunctionType(
 
   // Compute the derivative function results.
   SmallVector<SILResultInfo, 4> newResults;
-  if (kind == AutoDiffDerivativeFunctionKind::VJP &&
-      constrainedOriginalFnTy->isAsync() &&
-      !constrainedOriginalFnTy->isCoroutine() &&
-      constrainedOriginalFnTy->getNumResults() == 1 &&
-      constrainedOriginalFnTy->getSingleResult().isFormalIndirect() &&
-      constrainedOriginalFnTy->getNumAutoDiffSemanticResultsParameters() == 0) {
-    // Retain the already-lowered component types, including the pullback's
-    // convention and substitutions. Do not lower an independently rebuilt AST
-    // function type for the field: that would introduce another closure ABI.
-    SmallVector<TupleTypeElt, 2> fields{
-        constrainedOriginalFnTy->getSingleResult().getInterfaceType(),
-        closureType};
-    newResults.emplace_back(
-        CanType(TupleType::get(fields, ctx)), ResultConvention::Indirect);
-  } else {
-    newResults.reserve(getNumResults() + 1);
-    for (auto &result : constrainedOriginalFnTy->getResults())
-      newResults.push_back(result);
-    newResults.emplace_back(closureType, ResultConvention::Owned);
-  }
+  newResults.reserve(getNumResults() + 1);
+  for (auto &result : constrainedOriginalFnTy->getResults())
+    newResults.push_back(result);
+  newResults.emplace_back(closureType, ResultConvention::Owned);
 
   // Compute the derivative function ExtInfo.
   // If original function is `@convention(c)`, the derivative function should

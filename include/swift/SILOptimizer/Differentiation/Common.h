@@ -51,6 +51,11 @@ Type getLinearMapASTType(CanSILFunctionType type);
 
 bool isExperimentalAsyncAutoDiffEnabled();
 
+/// Bind an ordinary initializer VJP into the task's indirect result convention.
+/// The generated reabstraction body is emitted by SILGen's existing machinery.
+SILValue createAsyncLetVJPClosure(SILBuilder &builder, ADContext &context,
+                                 SILLocation loc, SILValue vjp);
+
 // A view of one selected child in the original SIL, not cached analysis state.
 // The original body is not rewritten while its derivative is generated.
 struct AsyncLetInfo {

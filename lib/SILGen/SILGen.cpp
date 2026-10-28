@@ -73,7 +73,13 @@ SILGenModule::SILGenModule(SILModule &M, ModuleDecl *SM)
   }
 }
 
+SILGenModule::SILGenModule(SILModule &M, ForFunctionEmission)
+    : M(M), Types(M.Types), SwiftModule(M.getSwiftModule()),
+      IsModuleEmission(false) {}
+
 SILGenModule::~SILGenModule() {
+  if (!IsModuleEmission)
+    return;
 
   // Update the linkage of external private functions to public_external,
   // because there is no private_external linkage. External private functions

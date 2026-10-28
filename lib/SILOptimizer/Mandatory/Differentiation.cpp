@@ -1434,7 +1434,7 @@ bool DifferentiationTransformer::canonicalizeDifferentiabilityWitness(
                 childWitness, invoker, IsNotSerialized))
           return true;
         assert(childWitness->getVJP()->getLoweredFunctionType()
-                   ->hasIndirectAutoDiffResult());
+                   ->getNumResults() == 2);
         (void)a.getPullbackType();
         LLVM_DEBUG(getADDebugStream() << "Prepared canonical async-let VJP:\n"
                                      << *childWitness->getVJP());

@@ -22,12 +22,14 @@
 #include "swift/AST/SimpleRequest.h"
 #include "swift/AST/SourceFile.h"
 #include "swift/AST/TBDGenRequests.h"
+#include "swift/AST/Types.h"
 #include "swift/SIL/SILDeclRef.h"
 
 namespace swift {
 
 class LangOptions;
 class ModuleDecl;
+class SILFunction;
 class SILModule;
 class SILOptions;
 class IRGenOptions;
@@ -142,6 +144,24 @@ private:
   // Evaluation.
   std::unique_ptr<SILModule> evaluate(Evaluator &evaluator,
                                       ASTLoweringDescriptor desc) const;
+};
+
+/// Emit a task-entry reabstraction body for an ordinary async initializer VJP.
+/// The optimizer owns the declaration and its generic environment; SILGen owns
+/// call/result adaptation, including ownership and throwing cleanup.
+class EmitAutoDiffAsyncLetThunkRequest
+    : public SimpleRequest<
+          EmitAutoDiffAsyncLetThunkRequest,
+          bool(SILFunction *, CanSILFunctionType, CanType, CanType),
+          RequestFlags::Uncached> {
+public:
+  using SimpleRequest::SimpleRequest;
+
+private:
+  friend SimpleRequest;
+  bool evaluate(Evaluator &evaluator, SILFunction *thunk,
+                CanSILFunctionType expectedType, CanType formalType,
+                CanType dynamicSelfType) const;
 };
 
 /// The zone number for SILGen.
