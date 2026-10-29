@@ -45,10 +45,6 @@ bool shouldDifferentiateAsyncLet(BuiltinInst *start,
                                 const DifferentiableActivityInfo &activity,
                                 const AutoDiffConfig &config);
 
-/// Convert a linear map's lowered function signature to the AST function type
-/// used by saved-value tuples. Shared with ordinary call differentiation.
-Type getLinearMapASTType(CanSILFunctionType type);
-
 /// Bind an ordinary initializer VJP into the task's indirect result convention.
 /// Uses the ordinary AD reabstraction helper; the VJP keeps its native ABI.
 SILValue createAsyncLetVJPClosure(SILBuilder &builder, ADContext &context,
@@ -65,19 +61,12 @@ struct AsyncLetInfo {
 
   AllocStackInst *getBuffer() const;
   IndexSubset *getParameterIndices() const;
-  SILFunction *getVJP() const;
-  // Instantiate the canonical derivative in the original parent's context.
-  // The forward cloner subsequently remaps these into the parent VJP.
-  SubstitutionMap getVJPSubstitutions() const;
+  // Compute the derivative type in the original parent's context, without
+  // looking up a witness or generating a derivative body.
   CanSILFunctionType getSubstVJPType() const;
   SILType getResultStorageType() const;
-  Type getPullbackType() const;
   bool isInitializerInstruction(SILInstruction *inst) const;
 };
-
-SmallVector<AsyncLetInfo, 2>
-findAsyncLets(SILFunction &function, const DifferentiableActivityInfo &activity,
-              const AutoDiffConfig &config);
 
 std::optional<AsyncLetInfo>
 getAsyncLet(SILInstruction *inst, const DifferentiableActivityInfo &activity,

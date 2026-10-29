@@ -31,9 +31,7 @@
 #include "swift/SIL/FormalLinkage.h"
 #include "swift/SIL/PrettyStackTrace.h"
 #include "swift/SIL/SILBuilder.h"
-#include "swift/SILOptimizer/Analysis/DifferentiableActivityAnalysis.h"
 #include "swift/SILOptimizer/Analysis/DominanceAnalysis.h"
-#include "swift/SILOptimizer/Analysis/DifferentiableActivityAnalysis.h"
 #include "swift/SILOptimizer/Differentiation/ADContext.h"
 #include "swift/SILOptimizer/Differentiation/JVPCloner.h"
 #include "swift/SILOptimizer/Differentiation/Thunk.h"
@@ -1355,90 +1353,6 @@ bool DifferentiationTransformer::canonicalizeDifferentiabilityWitness(
                                AutoDiffDerivativeFunctionKind::VJP);
 
     if (noDefault) {
-      // Use ordinary activity before preparing child derivatives. Inactive
-      // children are left alone, even if their numerical derivative is unavailable.
-      auto *analysis = context.getPassManager()
-                           .getAnalysis<DifferentiableActivityAnalysis>();
-      auto &activity = analysis->get(orig)->getActivityInfo(
-          vjp->getLoweredFunctionType()->getSubstGenericSignature(),
-          AutoDiffDerivativeFunctionKind::VJP);
-      auto &module = context.getModule();
-      auto &astCtx = context.getASTContext();
-      // Validate once during preparation. The cloners subsequently query the
-      // immutable original SIL; no descriptor graph is retained in ADContext.
-      for (auto a : findAsyncLets(*orig, activity, witness->getConfig())) {
-        auto *partialApply = a.getInitializer();
-        auto *child = cast<FunctionRefInst>(partialApply->getCallee())
-                          ->getReferencedFunction();
-        // Check the call-site types, not equality between archetypes from the
-        // child and parent generic environments.
-        ApplySite initializer(partialApply);
-        auto childType = initializer.getSubstCalleeType();
-        auto childConv = initializer.getSubstCalleeConv();
-        auto expansion = orig->getTypeExpansionContext();
-        auto captures = partialApply->getArguments();
-        assert(!child->empty() && !child->isSerialized());
-        assert(!child->getActorIsolation().isActorIsolated());
-        assert(childType->isAsync() && !childType->isCoroutine() &&
-               childType->hasErrorResult());
-        assert(childType->getNumParameters() == captures.size() &&
-               childType->getNumResults() == 1 &&
-               childType->getNumIndirectFormalResults() == 1);
-        assert(childConv.getNumIndirectSILResults() == 1 &&
-               childConv.getNumIndirectSILErrorResults() == 0);
-        assert(childConv.getSILArgumentType(0, expansion) ==
-               a.getBuffer()->getType());
-        for (unsigned i = 0; i != captures.size(); ++i)
-          assert(childConv.getSILArgumentType(
-                     childConv.getSILArgIndexOfFirstParam() + i, expansion) ==
-                 captures[i]->getType());
-
-        // Differentiate the original initializer with ordinary AD. Its body
-        // can contain conversions, calls, branches or loops; those do not need
-        // async-let-specific numerical rules. Ownership correctness does not
-        // imply that arbitrary saved derivative state is task-transferable.
-        for (auto &bb : *child) {
-          for (auto &inst : bb) {
-            assert(!isa<ThrowInst>(&inst) &&
-                   "throwing async-let results are not implemented");
-            assert(!isBuiltinInst(&inst,
-                                  BuiltinValueKind::StartAsyncLetWithLocalBuffer) &&
-                   "nested async-let initializers need recursive preparation");
-            if (auto *hop = dyn_cast<HopToExecutorInst>(&inst))
-              assert(isa<EnumInst>(hop->getTargetExecutor()) &&
-                     !cast<EnumInst>(hop->getTargetExecutor())->hasOperand());
-          }
-        }
-        auto *parameters = a.getParameterIndices();
-        assert(parameters->getNumIndices() != 0 &&
-               a.getBuffer()->getType().isDifferentiable(module) &&
-               "selected child needs a differentiable result and captures");
-        auto *results = IndexSubset::get(astCtx, 1, {0});
-        auto *childWitness = getExactDifferentiabilityWitness(
-            module, child, parameters, results);
-        if (!childWitness) {
-          // Constrain the declaration's generic signature, not the parent's
-          // substituted call type. Use the ordinary AD requirement builder.
-          auto declarationType = child->getLoweredFunctionType();
-          auto derivativeSignature =
-              autodiff::getConstrainedDerivativeGenericSignature(
-                  declarationType, parameters, results,
-                  declarationType->getInvocationGenericSignature(),
-                  LookUpConformanceInModule());
-          childWitness = SILDifferentiabilityWitness::createDefinition(
-              module, SILLinkage::Private, child, DifferentiabilityKind::Reverse,
-              parameters, results, derivativeSignature, nullptr, nullptr,
-              /*isSerialized*/ false, /*isDefault*/ false);
-        }
-        if (canonicalizeDifferentiabilityWitness(
-                childWitness, invoker, IsNotSerialized))
-          return true;
-        assert(childWitness->getVJP()->getLoweredFunctionType()
-                   ->getNumResults() == 2);
-        (void)a.getPullbackType();
-        LLVM_DEBUG(getADDebugStream() << "Prepared canonical async-let VJP:\n"
-                                     << *childWitness->getVJP());
-      }
       // Emit VJP function.
       VJPCloner cloner(context, witness, vjp, invoker);
       if (cloner.run())

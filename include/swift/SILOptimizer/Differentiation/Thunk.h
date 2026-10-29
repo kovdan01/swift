@@ -48,15 +48,12 @@ class ADContext;
 
 
 /// Get or create a reabstraction thunk from `fromType` to `toType`, to be
-/// called in `caller`. Optionally return the substitutions into the caller's
-/// context and the dynamic-Self metadata capture required to bind the thunk.
+/// called in `caller`.
 SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
                                            SILModule &module, SILLocation loc,
                                            SILFunction *caller,
                                            CanSILFunctionType fromType,
-                                           CanSILFunctionType toType);//,
-                                           //SubstitutionMap *substitutions = nullptr,
-                                           //CanType *dynamicSelf = nullptr);
+                                           CanSILFunctionType toType);
 
 SILValue reabstractCoroutine(
     SILBuilder &builder, SILOptFunctionBuilder &fb, SILLocation loc,

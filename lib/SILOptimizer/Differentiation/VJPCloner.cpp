@@ -225,8 +225,6 @@ public:
   void visit(SILInstruction *inst) {
     if (errorOccurred)
       return;
-    // if (original->isAsync())
-    //   Builder.setCurrentDebugScope(getOpScope(inst->getDebugScope()));
     TypeSubstCloner::visit(inst);
   }
 
@@ -252,7 +250,8 @@ public:
   Type getAsyncLetResultASTType(const AsyncLetInfo &a) {
     SmallVector<TupleTypeElt, 2> fields{
         getOpType(a.getBuffer()->getType()).getASTType(),
-        TupleTypeElt(vjp->mapTypeIntoEnvironment(a.getPullbackType()))};
+        TupleTypeElt(vjp->mapTypeIntoEnvironment(
+            pullbackInfo.getLinearMapType(context, a.getInitializer())))};
     return TupleType::get(fields, getASTContext());
   }
 
@@ -263,6 +262,20 @@ public:
       TypeSubstCloner::visitAllocStackInst(inst);
       return;
     }
+    if (original->isSerialized() ||
+        original->getActorIsolation().isActorIsolated() ||
+        original->getLoweredFunctionType()->hasErrorResult()) {
+      visitSILInstruction(inst);
+      return;
+    }
+    // A throwing wait needs a different success/error recording protocol.
+    for (auto *use : a->start->getUses()) {
+      if (isa<TryApplyInst>(use->getUser())) {
+        visitSILInstruction(inst);
+        return;
+      }
+    }
+    Builder.setCurrentDebugScope(getOpScope(inst->getDebugScope()));
     // Only the task result is a pair. The ordinary VJP keeps its original
     // result conventions; the reabstraction thunk initializes this storage.
     auto type = getOpType(a->getResultStorageType());
@@ -278,6 +291,7 @@ public:
       TypeSubstCloner::visitAddressToPointerInst(inst);
       return;
     }
+    Builder.setCurrentDebugScope(getOpScope(inst->getDebugScope()));
     mapValue(inst, Builder.createAddressToPointer(
                        inst->getLoc(), getAsyncLetResult(*a), inst->getType(),
                        inst->needsStackProtection()));
@@ -297,19 +311,44 @@ public:
       TypeSubstCloner::visitPartialApplyInst(inst);
       return;
     }
-    auto *childVJP = a->getVJP();
-    assert(!childVJP->empty());
-    assert(getOpType(a->getResultStorageType()) ==
-               getAsyncLetResult(*a)->getType().getObjectType() &&
-           "task result storage must agree with the entry adapter");
-    auto *ref = Builder.createFunctionRef(inst->getLoc(), childVJP);
-    context.recordGeneratedFunctionReference(ref);
+    // Keep unsupported capture semantics at the capture rewrite, rather than
+    // revalidating every task, result use, and instruction in the child body.
+    for (auto parameter : inst->getSubstCalleeType()->getParameters()) {
+      if (parameter.isIndirectInOut() || parameter.isAutoDiffSemanticResult()) {
+        visitSILInstruction(inst);
+        return;
+      }
+    }
+    if (auto *child = inst->getCalleeFunction();
+        child && (child->isSerialized() ||
+                  child->getActorIsolation().isActorIsolated())) {
+      visitSILInstruction(inst);
+      return;
+    }
+    Builder.setCurrentDebugScope(getOpScope(inst->getDebugScope()));
+    AutoDiffConfig childConfig(
+        a->getParameterIndices(),
+        IndexSubset::get(getASTContext(),
+                         inst->getSubstCalleeType()->getNumAutoDiffSemanticResults(),
+                         {0}));
+    // Request the unbound initializer's derivative, just like an ordinary call.
+    // The existing differentiation worklist will resolve/generate it later.
+    auto childVJP = emitVJPValue(ApplySite(inst), childConfig);
+    if (!childVJP)
+      return;
     auto captures = getOpValueArray<2>(inst->getArguments());
-    auto substitutions = getOpSubstitutionMap(a->getVJPSubstitutions());
+    auto childType = childVJP->getType().castTo<SILFunctionType>();
+    SubstitutionMap substitutions;
+    if (childType->isPolymorphic()) {
+      substitutions = getOpSubstitutionMap(SubstitutionMap::get(
+          childType->getInvocationGenericSignature(),
+          QuerySubstitutionMap{inst->getSubstitutionMap()},
+          LookUpConformanceInModule()));
+    }
     auto *closure = Builder.createPartialApply(
-        inst->getLoc(), ref, substitutions, captures,
-        inst->getCalleeConvention(),
-        inst->getResultIsolation(), inst->getExecutionSemantics(), inst->isOnStack(),
+        inst->getLoc(), childVJP, substitutions, captures,
+        inst->getCalleeConvention(), inst->getResultIsolation(),
+        inst->getExecutionSemantics(), inst->isOnStack(),
         inst->isStackAllocationNested());
     mapValue(inst, createAsyncLetVJPClosure(
                        Builder, context, inst->getLoc(), closure));
@@ -321,6 +360,7 @@ public:
       TypeSubstCloner::visitConvertFunctionInst(inst);
       return;
     }
+    Builder.setCurrentDebugScope(getOpScope(inst->getDebugScope()));
     auto operand = getOpValue(inst->getOperand());
     auto type = operand->getType().castTo<SILFunctionType>()->getWithExtInfo(
         inst->getType().castTo<SILFunctionType>()->getExtInfo());
@@ -336,6 +376,7 @@ public:
       TypeSubstCloner::visitConvertEscapeToNoEscapeInst(inst);
       return;
     }
+    Builder.setCurrentDebugScope(getOpScope(inst->getDebugScope()));
     auto operand = getOpValue(inst->getOperand());
     auto type = operand->getType().castTo<SILFunctionType>()->getWithExtInfo(
         inst->getType().castTo<SILFunctionType>()->getExtInfo());
@@ -351,6 +392,7 @@ public:
       TypeSubstCloner::visitBuiltinInst(inst);
       return;
     }
+    Builder.setCurrentDebugScope(getOpScope(inst->getDebugScope()));
     auto args = inst->getArguments();
     auto substitutions = SubstitutionMap::get(
         inst->getSubstitutions().getGenericSignature(),
@@ -365,10 +407,12 @@ public:
   void visitDeallocStackInst(DeallocStackInst *inst) {
     auto a =
         pullbackInfo.getAsyncLet(inst->getOperand()->getDefiningInstruction());
-    if (a && inst->getOperand() == a->getBuffer())
+    if (a && inst->getOperand() == a->getBuffer()) {
+      Builder.setCurrentDebugScope(getOpScope(inst->getDebugScope()));
       Builder.createDeallocStack(inst->getLoc(), getAsyncLetResult(*a));
-    else
+    } else {
       TypeSubstCloner::visitDeallocStackInst(inst);
+    }
   }
 
   void visitReturnInst(ReturnInst *ri) {
@@ -676,14 +720,15 @@ public:
 
   // Check and diagnose non-differentiable original function type.
   bool diagnoseNondifferentiableOriginalFunctionType(CanSILFunctionType originalFnTy,
-                                                     FullApplySite fai, SILValue origCallee,
+                                                     ApplySite fai, SILValue origCallee,
                                                      const AutoDiffConfig &config) const {
     // Check and diagnose non-differentiable arguments.
     for (auto paramIndex : config.parameterIndices->getIndices()) {
       if (!originalFnTy->getParameters()[paramIndex]
           .getSILStorageInterfaceType()
           .isDifferentiable(getModule())) {
-        auto arg = fai.getArgumentsWithoutIndirectResults()[paramIndex];
+        auto arg = fai.getArgumentAtCalleeArgIndex(
+            fai.getSubstCalleeConv().getSILArgIndexOfFirstParam() + paramIndex);
         // FIXME: This shouldn't be necessary and might indicate a bug in
         // the transformation.
         RegularLocation nonAutoGenLoc(arg.getLoc());
@@ -720,7 +765,8 @@ public:
       } else if (resultIndex >= firstSemanticParamResultIdx) {
         auto semanticResultArgIdx = resultIndex - firstSemanticParamResultIdx;
         auto semanticResultArg =
-          *std::next(fai.getAutoDiffSemanticResultArguments().begin(),
+          *std::next(fai.asFullApplySite()
+                         .getAutoDiffSemanticResultArguments().begin(),
                      semanticResultArgIdx);
         remappedResultType = semanticResultArg->getType();
       } else {
@@ -743,7 +789,7 @@ public:
     return false;
   }
 
-  SILValue emitVJPValue(FullApplySite fai, AutoDiffConfig &config) {
+  SILValue emitVJPValue(ApplySite fai, AutoDiffConfig &config) {
     auto loc = fai.getLoc();
     auto &builder = getBuilder();
 
@@ -811,12 +857,11 @@ public:
       invoker = indirect;
       */
 
-      // If the original `apply` instruction has a substitution map, then the
-      // applied function is specialized.
-      // In the VJP, specialization is also necessary for parity. The original
-      // function operand is specialized with a remapped version of same
-      // substitution map using an argument-less `partial_apply`.
-      if (fai.getSubstitutionMap().empty()) {
+      // Full applications specialize before requesting the derivative.
+      // A partial application keeps the callee generic: its replacement binds
+      // substitutions and captures together, after extracting the VJP.
+      if (fai.getSubstitutionMap().empty() ||
+          fai.getKind() == ApplySiteKind::PartialApplyInst) {
         origCallee = builder.emitCopyValueOperation(loc, origCallee);
       } else {
         auto substMap = getOpSubstitutionMap(fai.getSubstitutionMap());
@@ -961,6 +1006,7 @@ public:
     if (auto a = pullbackInfo.getAsyncLet(ai); a && a->isGet(ai)) {
       assert(pullbackInfo.shouldDifferentiateApplySite(ai));
       TypeSubstCloner::visitApplyInst(ai); // The real wait still executes.
+      Builder.setCurrentDebugScope(getOpScope(ai->getDebugScope()));
       auto loc = ai->getLoc();
       auto address = Builder.createTupleElementAddr(loc, getAsyncLetResult(*a), 1);
       auto pb = Builder.emitLoadValueOperation(
