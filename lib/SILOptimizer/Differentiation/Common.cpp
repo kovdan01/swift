@@ -233,10 +233,10 @@ SILValue createAsyncLetVJPClosure(SILBuilder &builder, ADContext &context,
       loc, name, thunkType, ActorIsolation::forUnspecified(), IsBare,
       IsTransparent, IsSerialized, ProfileCounter(), IsReabstractionThunk,
       IsNotDynamic, IsNotDistributed, IsNotRuntimeAccessible);
-  if (thunk->empty() && context.deferAsyncLetThunkBody(
-                            thunk, {entryType, inputType, dynamicSelfType})) {
+  if (thunk->empty()) {
     thunk->inheritDerivedFrom(&caller);
     thunk->setGenericEnvironment(genericEnv);
+    context.emitAsyncLetThunkBody(thunk, entryType, inputType, dynamicSelfType);
   }
 
   auto *ref = builder.createFunctionRef(loc, thunk);

@@ -19,6 +19,7 @@
 
 #include "swift/AST/AutoDiff.h"
 #include "swift/SIL/SILBuilder.h"
+#include "llvm/ADT/FunctionExtras.h"
 
 namespace swift {
 
@@ -38,6 +39,15 @@ class ArchetypeType;
 namespace autodiff {
 
 class ADContext;
+
+
+/// Owns a SILGen session while emitting task adapters immediately. Keep this
+/// callable alive until all derivative construction and error cleanup finishes;
+/// destroying it runs normal SILGen module finalization.
+using AsyncLetThunkEmitter = llvm::unique_function<void(
+    SILFunction *, CanSILFunctionType, CanType, CanType)>;
+
+AsyncLetThunkEmitter createAsyncLetThunkEmitter(SILModule &module);
 
 //===----------------------------------------------------------------------===//
 // Thunk helpers

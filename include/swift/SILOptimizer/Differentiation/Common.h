@@ -23,7 +23,6 @@
 #include "swift/SIL/SILFunction.h"
 #include "swift/SIL/SILModule.h"
 #include "swift/SIL/TypeSubstCloner.h"
-#include "swift/SILOptimizer/Differentiation/AsyncLetThunk.h"
 #include "swift/SILOptimizer/Differentiation/DifferentiationInvoker.h"
 #include "swift/AST/AutoDiff.h"
 #include <optional>

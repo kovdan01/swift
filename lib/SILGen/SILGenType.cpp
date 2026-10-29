@@ -723,6 +723,14 @@ SILGenModule::getWitnessTable(RootProtocolConformance *conformance) {
   if (found != emittedWitnessTables.end())
     return found->second;
 
+  // A previous SILGen session may have emitted the definition already.
+  // Reuse it before attempting to generate its protocol witness thunks.
+  if (auto *table = M.lookUpWitnessTable(conformance, /*isSpecialized=*/false);
+      table && table->isDefinition()) {
+    emittedWitnessTables.insert({conformance, table});
+    return table;
+  }
+
   SILWitnessTable *table;
 
   if (auto normal = dyn_cast<NormalProtocolConformance>(conformance)) {

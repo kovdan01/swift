@@ -20,6 +20,7 @@
 #include "swift/SIL/ApplySite.h"
 #include "swift/SILOptimizer/Differentiation/Common.h"
 #include "swift/SILOptimizer/Differentiation/DifferentiationInvoker.h"
+#include "swift/SILOptimizer/Differentiation/Thunk.h"
 
 #include "swift/AST/DiagnosticsSIL.h"
 #include "swift/AST/Expr.h"
@@ -125,9 +126,9 @@ private:
   /// `AdditiveArithmetic.zero` declaration.
   mutable AccessorDecl *cachedZeroGetter = nullptr;
 
-  // Declarations can be referenced while their callers are being built. Emit
-  // each adapter body once, after the derivative worklists have completed.
-  llvm::SmallMapVector<SILFunction *, AsyncLetThunkBody, 4> pendingAsyncLetThunks;
+  // Lazily owns one SILGen session for this transform. Adapter bodies are
+  // emitted immediately; only module finalization waits for ADContext teardown.
+  AsyncLetThunkEmitter asyncLetThunkEmitter;
 
 public:
   /// Construct an ADContext for the given module.
@@ -208,13 +209,15 @@ public:
     generatedFunctionReferences.push_back(functionRef);
   }
 
-  bool deferAsyncLetThunkBody(SILFunction *thunk, AsyncLetThunkBody body) {
-    return pendingAsyncLetThunks.insert({thunk, body}).second;
+  void emitAsyncLetThunkBody(SILFunction *thunk, CanSILFunctionType expectedType,
+                            CanType formalType, CanType dynamicSelfType) {
+    if (!asyncLetThunkEmitter)
+      asyncLetThunkEmitter = createAsyncLetThunkEmitter(module);
+    asyncLetThunkEmitter(thunk, expectedType, formalType, dynamicSelfType);
   }
 
-  ArrayRef<std::pair<SILFunction *, AsyncLetThunkBody>>
-  getPendingAsyncLetThunks() const {
-    return pendingAsyncLetThunks.getArrayRef();
+  bool hasEmittedAsyncLetThunks() const {
+    return bool(asyncLetThunkEmitter);
   }
 
   ProtocolDecl *getAdditiveArithmeticProtocol() const {

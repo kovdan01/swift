@@ -2315,6 +2315,26 @@ void SILGenModule::emitSymbolSource(SymbolSource Source) {
   }
 }
 
+void SILGenModule::emitPendingDefinitions() {
+  // Emission can force additional definitions, so drain both queues to a
+  // fixed point. An existing module can already contain a queued definition.
+  while (!pendingForcedFunctions.empty() || !pendingConformances.empty()) {
+    while (!pendingForcedFunctions.empty()) {
+      auto constant = pendingForcedFunctions.front();
+      auto *function = getEmittedFunction(constant, NotForDefinition);
+      assert(function && "expected a queued function declaration");
+      if (function->empty())
+        emitFunctionDefinition(
+            constant, getEmittedFunction(constant, ForDefinition));
+      pendingForcedFunctions.pop_front();
+    }
+    while (!pendingConformances.empty()) {
+      (void)getWitnessTable(pendingConformances.front());
+      pendingConformances.pop_front();
+    }
+  }
+}
+
 std::unique_ptr<SILModule>
 ASTLoweringRequest::evaluate(Evaluator &evaluator,
                              ASTLoweringDescriptor desc) const {
@@ -2383,19 +2403,7 @@ ASTLoweringRequest::evaluate(Evaluator &evaluator,
   // Emit any delayed definitions that were forced.
   // Emitting these may in turn force more definitions, so we have to take
   // care to keep pumping the queues.
-  while (!SGM.pendingForcedFunctions.empty()
-         || !SGM.pendingConformances.empty()) {
-    while (!SGM.pendingForcedFunctions.empty()) {
-      auto &front = SGM.pendingForcedFunctions.front();
-      SGM.emitFunctionDefinition(
-          front, SGM.getEmittedFunction(front, ForDefinition));
-      SGM.pendingForcedFunctions.pop_front();
-    }
-    while (!SGM.pendingConformances.empty()) {
-      (void)SGM.getWitnessTable(SGM.pendingConformances.front());
-      SGM.pendingConformances.pop_front();
-    }
-  }
+  SGM.emitPendingDefinitions();
 
   return silMod;
 }
