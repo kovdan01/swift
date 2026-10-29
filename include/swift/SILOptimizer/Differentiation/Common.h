@@ -23,6 +23,7 @@
 #include "swift/SIL/SILFunction.h"
 #include "swift/SIL/SILModule.h"
 #include "swift/SIL/TypeSubstCloner.h"
+#include "swift/SILOptimizer/Differentiation/AsyncLetThunk.h"
 #include "swift/SILOptimizer/Differentiation/DifferentiationInvoker.h"
 #include "swift/AST/AutoDiff.h"
 #include <optional>
@@ -55,21 +56,6 @@ bool isExperimentalAsyncAutoDiffEnabled();
 /// The generated reabstraction body is emitted by SILGen's existing machinery.
 SILValue createAsyncLetVJPClosure(SILBuilder &builder, ADContext &context,
                                  SILLocation loc, SILValue vjp);
-
-/// Inputs for emitting a previously declared task-entry adapter. These types
-/// are already in the thunk's generic environment.
-struct AsyncLetThunkBody {
-  CanSILFunctionType expectedType;
-  CanType formalType;
-  CanType dynamicSelfType;
-};
-
-/// Emit a completed AD pass's task-entry adapters using ordinary SILGen.
-/// All derivative bodies must be complete before this runs: the existing
-/// SILGenModule destructor finalizes and verifies the module.
-void emitAsyncLetThunkBodies(
-    SILModule &module,
-    ArrayRef<std::pair<SILFunction *, AsyncLetThunkBody>> thunks);
 
 // A view of one selected child in the original SIL, not cached analysis state.
 // The original body is not rewritten while its derivative is generated.

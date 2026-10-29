@@ -113,7 +113,7 @@
 #include "swift/SIL/SILArgument.h"
 #include "swift/SIL/SILWitnessTable.h"
 #include "swift/SIL/TypeLowering.h"
-#include "swift/SILOptimizer/Differentiation/Common.h"
+#include "swift/SILOptimizer/Differentiation/AsyncLetThunk.h"
 #include "llvm/Support/Compiler.h"
 
 using namespace swift;
