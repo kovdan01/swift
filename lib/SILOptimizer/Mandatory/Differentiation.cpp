@@ -1897,13 +1897,6 @@ void Differentiation::run() {
     errorOccurred |= transformer.processLinearFunctionInst(lfi);
   }
 
-  // SILGen emitted adapters (and any required dependencies) on demand.
-  // The session remains alive through the error cleanup below.
-  if (context.hasEmittedAsyncLetThunks()) {
-    invalidateAll();
-    errorOccurred |= astCtx.hadError();
-  }
-
   // If any error occurred while processing witnesses or
   // `differentiable_function` instructions, clean up.
   if (errorOccurred) {

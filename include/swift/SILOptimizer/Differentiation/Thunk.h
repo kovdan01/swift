@@ -19,7 +19,6 @@
 
 #include "swift/AST/AutoDiff.h"
 #include "swift/SIL/SILBuilder.h"
-#include "llvm/ADT/FunctionExtras.h"
 
 namespace swift {
 
@@ -40,15 +39,6 @@ namespace autodiff {
 
 class ADContext;
 
-
-/// Owns a SILGen session while emitting task adapters immediately. Keep this
-/// callable alive until all derivative construction and error cleanup finishes;
-/// destroying it runs normal SILGen module finalization.
-using AsyncLetThunkEmitter = llvm::unique_function<void(
-    SILFunction *, CanSILFunctionType, CanType, CanType)>;
-
-AsyncLetThunkEmitter createAsyncLetThunkEmitter(SILModule &module);
-
 //===----------------------------------------------------------------------===//
 // Thunk helpers
 //===----------------------------------------------------------------------===//
@@ -58,12 +48,15 @@ AsyncLetThunkEmitter createAsyncLetThunkEmitter(SILModule &module);
 
 
 /// Get or create a reabstraction thunk from `fromType` to `toType`, to be
-/// called in `caller`.
+/// called in `caller`. Optionally return the substitutions into the caller's
+/// context and the dynamic-Self metadata capture required to bind the thunk.
 SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
                                            SILModule &module, SILLocation loc,
                                            SILFunction *caller,
                                            CanSILFunctionType fromType,
-                                           CanSILFunctionType toType);
+                                           CanSILFunctionType toType,
+                                           SubstitutionMap *substitutions = nullptr,
+                                           CanType *dynamicSelf = nullptr);
 
 SILValue reabstractCoroutine(
     SILBuilder &builder, SILOptFunctionBuilder &fb, SILLocation loc,

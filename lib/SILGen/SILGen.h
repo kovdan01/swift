@@ -307,11 +307,6 @@ public:
 
   /// Emits the function definition for a given SILDeclRef.
   void emitFunctionDefinition(SILDeclRef constant, SILFunction *f);
-
-  /// Complete forced functions and conformances, including dependencies that
-  /// their emission discovers. Does not finalize or verify the entire module.
-  void emitPendingDefinitions();
-
   /// Emit a function now, if it's externally usable or has been referenced in
   /// the current TU, or remember how to emit it later if not.
   void emitOrDelayFunction(SILDeclRef constant);

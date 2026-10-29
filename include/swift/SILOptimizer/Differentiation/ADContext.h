@@ -20,7 +20,6 @@
 #include "swift/SIL/ApplySite.h"
 #include "swift/SILOptimizer/Differentiation/Common.h"
 #include "swift/SILOptimizer/Differentiation/DifferentiationInvoker.h"
-#include "swift/SILOptimizer/Differentiation/Thunk.h"
 
 #include "swift/AST/DiagnosticsSIL.h"
 #include "swift/AST/Expr.h"
@@ -126,10 +125,6 @@ private:
   /// `AdditiveArithmetic.zero` declaration.
   mutable AccessorDecl *cachedZeroGetter = nullptr;
 
-  // Lazily owns one SILGen session for this transform. Adapter bodies are
-  // emitted immediately; only module finalization waits for ADContext teardown.
-  AsyncLetThunkEmitter asyncLetThunkEmitter;
-
 public:
   /// Construct an ADContext for the given module.
   explicit ADContext(SILModuleTransform &transform);
@@ -207,17 +202,6 @@ public:
 
   void recordGeneratedFunctionReference(SILValue functionRef) {
     generatedFunctionReferences.push_back(functionRef);
-  }
-
-  void emitAsyncLetThunkBody(SILFunction *thunk, CanSILFunctionType expectedType,
-                            CanType formalType, CanType dynamicSelfType) {
-    if (!asyncLetThunkEmitter)
-      asyncLetThunkEmitter = createAsyncLetThunkEmitter(module);
-    asyncLetThunkEmitter(thunk, expectedType, formalType, dynamicSelfType);
-  }
-
-  bool hasEmittedAsyncLetThunks() const {
-    return bool(asyncLetThunkEmitter);
   }
 
   ProtocolDecl *getAdditiveArithmeticProtocol() const {

@@ -16,7 +16,6 @@
 
 #include "swift/SILOptimizer/Differentiation/Common.h"
 #include "swift/AST/AutoDiff.h"
-#include "swift/AST/ASTMangler.h"
 #include "swift/AST/Builtins.h"
 #include "swift/AST/SubstitutionMap.h"
 #include "swift/SILOptimizer/Analysis/DominanceAnalysis.h"
@@ -36,6 +35,7 @@
 #include "swift/SILOptimizer/Analysis/ArraySemantic.h"
 #include "swift/SILOptimizer/Analysis/DifferentiableActivityAnalysis.h"
 #include "swift/SILOptimizer/Differentiation/ADContext.h"
+#include "swift/SILOptimizer/Differentiation/Thunk.h"
 #include "swift/SILOptimizer/Utils/SILOptFunctionBuilder.h"
 
 namespace swift {
@@ -184,9 +184,6 @@ SILValue createAsyncLetVJPClosure(SILBuilder &builder, ADContext &context,
          sourceType->getResults().front().isFormalIndirect() &&
          sourceType->getResults().back().getConvention() ==
              ResultConvention::Owned);
-  if (vjp->getType() != SILType::getPrimitiveObjectType(sourceType))
-    vjp = builder.createConvertFunction(
-        loc, vjp, SILType::getPrimitiveObjectType(sourceType));
 
   // Preserve both already-lowered fields, including the native pullback ABI.
   // Only the task entry, not the derivative itself, returns one indirect pair.
@@ -199,55 +196,10 @@ SILValue createAsyncLetVJPClosure(SILBuilder &builder, ADContext &context,
       {}, {}, {result}, sourceType->getOptionalErrorResult(),
       SubstitutionMap(), SubstitutionMap(), astContext);
 
-  // Formal types describe the same values. The input pattern has separate
-  // primal/pullback results; the output pattern is the ordinary opaque task
-  // result. SILGen, not AD, performs their call/result/ownership adaptation.
-  auto primalType = sourceType->getResults().front().getInterfaceType();
-  auto pullbackType = sourceType->getResults().back().getInterfaceType()
-                          ->castTo<SILFunctionType>()
-                          ->getUnsubstitutedType(module);
-  auto formalPullback = caller.mapTypeIntoEnvironment(
-      getLinearMapASTType(pullbackType));
-  SmallVector<TupleTypeElt, 2> fields{primalType, formalPullback};
-  auto extInfo = FunctionType::ExtInfo().withAsync();
-  if (sourceType->hasErrorResult())
-    extInfo = extInfo.withThrows();
-  CanType inputType = FunctionType::get(
-      {}, /*yields*/ {}, TupleType::get(fields, astContext), extInfo)
-                          ->getCanonicalType();
-  CanType outputType = inputType;
-  CanType dynamicSelfType;
-  GenericEnvironment *genericEnv = nullptr;
-  SubstitutionMap substitutions;
-  auto thunkType = buildSILFunctionThunkType(
-      &caller, sourceType, entryType, inputType, outputType, genericEnv,
-      substitutions, dynamicSelfType, /*withoutActuallyEscaping*/ false);
-
-  Mangle::ASTMangler mangler(astContext);
-  auto name = mangler.mangleReabstractionThunkHelper(
-      thunkType, sourceType->mapTypeOutOfEnvironment()->getCanonicalType(),
-      entryType->mapTypeOutOfEnvironment()->getCanonicalType(), dynamicSelfType,
-      Type(), module.getSwiftModule());
   SILOptFunctionBuilder functions(context.getTransform());
-  auto *thunk = functions.getOrCreateSharedFunction(
-      loc, name, thunkType, ActorIsolation::forUnspecified(), IsBare,
-      IsTransparent, IsSerialized, ProfileCounter(), IsReabstractionThunk,
-      IsNotDynamic, IsNotDistributed, IsNotRuntimeAccessible);
-  if (thunk->empty()) {
-    thunk->inheritDerivedFrom(&caller);
-    thunk->setGenericEnvironment(genericEnv);
-    context.emitAsyncLetThunkBody(thunk, entryType, inputType, dynamicSelfType);
-  }
-
-  auto *ref = builder.createFunctionRef(loc, thunk);
-  context.recordGeneratedFunctionReference(ref);
-  SmallVector<SILValue, 2> captures{vjp};
-  if (dynamicSelfType)
-    captures.push_back(builder.createMetatype(
-        loc, caller.getLoweredType(dynamicSelfType)));
-  return builder.createPartialApply(
-      loc, ref, substitutions, captures, entryType->getCalleeConvention(),
-      entryType->getIsolation(), entryType->getExecutionSemantics());
+  return reabstractFunction(
+      builder, functions, loc, vjp, entryType,
+      [](SubstitutionMap substitutions) { return substitutions; });
 }
 
 bool AsyncLetInfo::isInitializerInstruction(SILInstruction *inst) const {
