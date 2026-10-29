@@ -49,8 +49,6 @@ bool shouldDifferentiateAsyncLet(BuiltinInst *start,
 /// used by saved-value tuples. Shared with ordinary call differentiation.
 Type getLinearMapASTType(CanSILFunctionType type);
 
-bool isExperimentalAsyncAutoDiffEnabled();
-
 /// Bind an ordinary initializer VJP into the task's indirect result convention.
 /// Uses the ordinary AD reabstraction helper; the VJP keeps its native ABI.
 SILValue createAsyncLetVJPClosure(SILBuilder &builder, ADContext &context,

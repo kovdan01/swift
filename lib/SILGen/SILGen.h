@@ -307,6 +307,7 @@ public:
 
   /// Emits the function definition for a given SILDeclRef.
   void emitFunctionDefinition(SILDeclRef constant, SILFunction *f);
+
   /// Emit a function now, if it's externally usable or has been referenced in
   /// the current TU, or remember how to emit it later if not.
   void emitOrDelayFunction(SILDeclRef constant);

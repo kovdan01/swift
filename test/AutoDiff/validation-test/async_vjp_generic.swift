@@ -1,5 +1,5 @@
-// RUN: %target-run-simple-swift(-Onone -swift-version 5 -parse-as-library -whole-module-optimization -Xfrontend -disable-availability-checking -Xfrontend -sil-verify-all -Xllvm -enable-experimental-async-autodiff %S/Inputs/async_vjp_values.swift %S/Inputs/async_vjp_expected.swift %S/Inputs/async_vjp_generic_cases.swift)
-// RUN: %target-run-simple-swift(-O -swift-version 5 -parse-as-library -whole-module-optimization -Xfrontend -disable-availability-checking -Xfrontend -sil-verify-all -Xllvm -enable-experimental-async-autodiff %S/Inputs/async_vjp_values.swift %S/Inputs/async_vjp_expected.swift %S/Inputs/async_vjp_generic_cases.swift)
+// RUN: %target-run-simple-swift(-Onone -swift-version 5 -parse-as-library -whole-module-optimization -Xfrontend -disable-availability-checking -Xfrontend -sil-verify-all %S/Inputs/async_vjp_values.swift %S/Inputs/async_vjp_expected.swift %S/Inputs/async_vjp_generic_cases.swift)
+// RUN: %target-run-simple-swift(-O -swift-version 5 -parse-as-library -whole-module-optimization -Xfrontend -disable-availability-checking -Xfrontend -sil-verify-all %S/Inputs/async_vjp_values.swift %S/Inputs/async_vjp_expected.swift %S/Inputs/async_vjp_generic_cases.swift)
 // REQUIRES: executable_test
 // REQUIRES: concurrency
 // REQUIRES: concurrency_runtime

@@ -51,14 +51,6 @@ bool shouldDifferentiateAsyncLet(
          activity.isActive(start->getArguments().back(), config);
 }
 
-static llvm::cl::opt<bool> EnableAsyncAutoDiff(
-    "enable-experimental-async-autodiff", llvm::cl::Hidden,
-    llvm::cl::init(false));
-
-bool isExperimentalAsyncAutoDiffEnabled() {
-  return EnableAsyncAutoDiff;
-}
-
 PartialApplyInst *AsyncLetInfo::getInitializer() const {
   auto source = findAsyncLetPartialApplyFromStart(start);
   assert(source && isa<PartialApplyInst *>(*source) &&
@@ -401,8 +393,6 @@ SmallVector<AsyncLetInfo, 2> findAsyncLets(
     SILFunction &function, const DifferentiableActivityInfo &activity,
     const AutoDiffConfig &config) {
   SmallVector<AsyncLetInfo, 2> result;
-  if (!EnableAsyncAutoDiff)
-    return result;
   SmallVector<BuiltinInst *, 4> starts;
   for (auto &bb : function)
     for (auto &inst : bb)
@@ -425,8 +415,6 @@ SmallVector<AsyncLetInfo, 2> findAsyncLets(
 std::optional<AsyncLetInfo> getAsyncLet(
     SILInstruction *inst, const DifferentiableActivityInfo &activity,
     const AutoDiffConfig &config) {
-  if (!EnableAsyncAutoDiff)
-    return std::nullopt;
   auto *start = swift::getAsyncLetStart(inst);
   if (!start || !shouldDifferentiateAsyncLet(start, activity, config))
     return std::nullopt;

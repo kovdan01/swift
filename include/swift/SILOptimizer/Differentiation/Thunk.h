@@ -54,9 +54,9 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
                                            SILModule &module, SILLocation loc,
                                            SILFunction *caller,
                                            CanSILFunctionType fromType,
-                                           CanSILFunctionType toType,
-                                           SubstitutionMap *substitutions = nullptr,
-                                           CanType *dynamicSelf = nullptr);
+                                           CanSILFunctionType toType);//,
+                                           //SubstitutionMap *substitutions = nullptr,
+                                           //CanType *dynamicSelf = nullptr);
 
 SILValue reabstractCoroutine(
     SILBuilder &builder, SILOptFunctionBuilder &fb, SILLocation loc,

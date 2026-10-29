@@ -133,9 +133,9 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
                                            SILModule &module, SILLocation loc,
                                            SILFunction *caller,
                                            CanSILFunctionType fromType,
-                                           CanSILFunctionType toType,
-                                           SubstitutionMap *substitutions,
-                                           CanType *dynamicSelf) {
+                                           CanSILFunctionType toType) {//,
+                                           //SubstitutionMap *substitutions) {//,
+                                           //CanType *dynamicSelf) {
   assert(!fromType->getCombinedSubstitutions());
   assert(!toType->getCombinedSubstitutions());
   assert(!fromType->hasErasedIsolation() && !toType->hasErasedIsolation() &&
@@ -143,15 +143,22 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
 
   SubstitutionMap interfaceSubs;
   GenericEnvironment *genericEnv = nullptr;
-  CanType inputType, outputType, dynamicSelfType;
-  auto thunkType = buildSILFunctionThunkType(
-      caller, fromType, toType, inputType, outputType, genericEnv, interfaceSubs,
-      dynamicSelfType, /*withoutActuallyEscaping*/ false,
-      DifferentiationThunkKind::Reabstraction);
-  if (substitutions)
-    *substitutions = interfaceSubs;
-  if (dynamicSelf)
-    *dynamicSelf = dynamicSelfType;
+  // CanType inputType, outputType, dynamicSelfType;
+  // auto thunkType = buildSILFunctionThunkType(
+  //     caller, fromType, toType, inputType, outputType, genericEnv, interfaceSubs,
+  //     dynamicSelfType, /*withoutActuallyEscaping*/ false,
+  //     DifferentiationThunkKind::Reabstraction);
+  // if (substitutions)
+  //   *substitutions = interfaceSubs;
+  // if (dynamicSelf)
+  //   *dynamicSelf = dynamicSelfType;
+
+
+  auto thunkType =
+      buildThunkType(caller, fromType, toType, genericEnv, interfaceSubs,
+                     /*withoutActuallyEscaping*/ false,
+                     DifferentiationThunkKind::Reabstraction);
+
   auto thunkDeclType =
       thunkType->getWithExtInfo(thunkType->getExtInfo().withNoEscape(false));
 
@@ -160,7 +167,7 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
 
   Mangle::ASTMangler mangler(module.getASTContext());
   std::string name = mangler.mangleReabstractionThunkHelper(
-      thunkType, fromInterfaceType, toInterfaceType, dynamicSelfType, Type(),
+      thunkType, fromInterfaceType, toInterfaceType, Type()/*dynamicSelfType*/, Type(),
       module.getSwiftModule());
 
   auto *thunk = fb.getOrCreateSharedFunction(
@@ -342,9 +349,9 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
   SmallVector<SILValue, 4> results;
   // Extract all direct results.
   SmallVector<SILValue, 4> directResults;
-  if (fromType->getNumResults() - fromType->getNumIndirectFormalResults() == 1)
-    directResults.push_back(applyResult); // A tuple can itself be one result.
-  else
+  // if (fromType->getNumResults() - fromType->getNumIndirectFormalResults() == 1)
+  //   directResults.push_back(applyResult); // A tuple can itself be one result.
+  // else
     extractAllElements(applyResult, builder, directResults);
 
   auto fromDirResultsIter = directResults.begin();
@@ -491,26 +498,35 @@ SILValue reabstractFunction(
   auto unsubstFromType = fromType->getUnsubstitutedType(module);
   auto unsubstToType = toType->getUnsubstitutedType(module);
 
-  SubstitutionMap substitutions;
-  CanType dynamicSelfType;
-  auto *thunk = getOrCreateReabstractionThunk(
-      fb, module, loc, fn->getFunction(), unsubstFromType, unsubstToType,
-      &substitutions, &dynamicSelfType);
+  //SubstitutionMap substitutions;
+  //CanType dynamicSelfType;
+  // auto *thunk = getOrCreateReabstractionThunk(
+  //     fb, module, loc, fn->getFunction(), unsubstFromType, unsubstToType,
+  //     &substitutions);//, &dynamicSelfType);
+
+  auto *thunk = getOrCreateReabstractionThunk(fb, module, loc,
+                                              /*caller*/ fn->getFunction(),
+                                              unsubstFromType, unsubstToType);
+
   auto *thunkRef = builder.createFunctionRef(loc, thunk);
 
   if (fromType != unsubstFromType)
     fn = builder.createConvertFunction(
         loc, fn, SILType::getPrimitiveObjectType(unsubstFromType));
 
-  SmallVector<SILValue, 2> captures{fn};
-  if (dynamicSelfType)
-    captures.push_back(builder.createMetatype(
-        loc, builder.getFunction().getLoweredType(dynamicSelfType)));
+  // SmallVector<SILValue, 2> captures{fn};
+  // if (dynamicSelfType)
+  //   captures.push_back(builder.createMetatype(
+  //       loc, builder.getFunction().getLoweredType(dynamicSelfType)));
+
+  // fn = builder.createPartialApply(
+  //     loc, thunkRef, remapSubstitutions(substitutions), {}, //captures,
+  //     toType->getCalleeConvention(), toType->getIsolation(),
+  //     toType->getExecutionSemantics());
 
   fn = builder.createPartialApply(
-      loc, thunkRef, remapSubstitutions(substitutions), captures,
-      toType->getCalleeConvention(), toType->getIsolation(),
-      toType->getExecutionSemantics());
+      loc, thunkRef, remapSubstitutions(thunk->getForwardingSubstitutionMap()),
+      {fn}, fromType->getCalleeConvention());
 
   if (toType != unsubstToType)
     fn = builder.createConvertFunction(loc, fn,

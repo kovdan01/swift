@@ -225,8 +225,8 @@ public:
   void visit(SILInstruction *inst) {
     if (errorOccurred)
       return;
-    if (isExperimentalAsyncAutoDiffEnabled() && original->isAsync())
-      Builder.setCurrentDebugScope(getOpScope(inst->getDebugScope()));
+    // if (original->isAsync())
+    //   Builder.setCurrentDebugScope(getOpScope(inst->getDebugScope()));
     TypeSubstCloner::visit(inst);
   }
 

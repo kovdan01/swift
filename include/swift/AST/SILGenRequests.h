@@ -143,6 +143,7 @@ private:
   std::unique_ptr<SILModule> evaluate(Evaluator &evaluator,
                                       ASTLoweringDescriptor desc) const;
 };
+
 /// The zone number for SILGen.
 #define SWIFT_TYPEID_ZONE SILGen
 #define SWIFT_TYPEID_HEADER "swift/AST/SILGenTypeIDZone.def"
