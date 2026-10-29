@@ -294,31 +294,42 @@ Type LinearMapInfo::getLinearMapType(ADContext &context, ApplySite site) {
               LookUpConformanceInModule())
           ->getUnsubstitutedType(original->getModule());
 
-  auto linearMapSILType =
-      derivativeFnType->getResults().back().getSILStorageInterfaceType();
-  auto linearMapFnType = linearMapSILType.castTo<SILFunctionType>()
-                             ->getUnsubstitutedType(original->getModule());
-  // Both ordinary calls and child initializers use this same conversion.
+  auto linearMapSILType = derivativeFnType->getAllResultsInterfaceType();
+  if (auto tupleType = linearMapSILType.getAs<TupleType>()) {
+    linearMapSILType = SILType::getPrimitiveObjectType(
+        tupleType.getElementType(tupleType->getElements().size() - 1));
+  }
+  if (auto fnTy = linearMapSILType.getAs<SILFunctionType>()) {
+    linearMapSILType = SILType::getPrimitiveObjectType(
+        fnTy->getUnsubstitutedType(original->getModule()));
+  }
+
+  // IRGen requires decls to have AST types (not `SILFunctionType`), so we
+  // convert the `SILFunctionType` of the linear map to a `FunctionType` with
+  // the same parameters and results.
+  auto silFnTy = linearMapSILType.castTo<SILFunctionType>();
   SmallVector<AnyFunctionType::Param, 8> params;
-  for (auto &param : linearMapFnType->getParameters()) {
+  for (auto &param : silFnTy->getParameters()) {
     ParameterTypeFlags flags;
     if (param.isAutoDiffSemanticResult())
       flags = flags.withInOut(true);
+
     params.push_back(
         AnyFunctionType::Param(param.getInterfaceType(), Identifier(), flags));
   }
+
   AnyFunctionType *astFnTy;
-  if (auto genSig = linearMapFnType->getSubstGenericSignature()) {
+  if (auto genSig = silFnTy->getSubstGenericSignature()) {
     // FIXME: Verify ExtInfo state is correct, not working by accident.
     GenericFunctionType::ExtInfo info;
     astFnTy = GenericFunctionType::get(
         genSig, params, /* yields */ {},
-        linearMapFnType->getAllResultsInterfaceType().getASTType(), info);
+        silFnTy->getAllResultsInterfaceType().getASTType(), info);
   } else {
     FunctionType::ExtInfo info;
     astFnTy = FunctionType::get(
         params, /* yields */ {},
-        linearMapFnType->getAllResultsInterfaceType().getASTType(), info);
+        silFnTy->getAllResultsInterfaceType().getASTType(), info);
   }
   Type resultType =
       astFnTy->hasArchetype() ? astFnTy->mapTypeOutOfEnvironment() : astFnTy;
