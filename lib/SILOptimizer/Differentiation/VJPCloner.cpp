@@ -1513,23 +1513,11 @@ const DifferentiableActivityInfo &VJPCloner::getActivityInfo() const {
 }
 
 SILFunction *VJPCloner::Implementation::createEmptyPullback() {
-  auto origTy = original->getLoweredFunctionType();
-  auto vjpTy = vjp->getLoweredFunctionType();
-  if (origTy->isAsync() && origTy->hasPatternSubstitutions() &&
-      !origTy->getInvocationGenericSignature()) {
-    // Resolve the bound pattern parameters, not a polymorphic function's
-    // invocation parameters. Keep both local type views consistent; neither
-    // the original function nor its VJP is changed.
-    origTy = origTy->getUnsubstitutedType(getModule());
-    vjpTy = vjpTy->getUnsubstitutedType(getModule());
-    assert(!origTy->getSubstGenericSignature() &&
-           !vjpTy->getSubstGenericSignature() &&
-           "expected concrete async function component types");
-    LLVM_DEBUG(getADDebugStream()
-               << "Materialized bound async function types for pullback:\n"
-               << "  original: " << origTy << '\n'
-               << "  VJP: " << vjpTy << '\n');
-  }
+  // Resolve bound substitutions before reading component interface types.
+  // This preserves any unbound invocation generic parameters, for sync and async.
+  auto origTy =
+      original->getLoweredFunctionType()->getUnsubstitutedType(getModule());
+  auto vjpTy = vjp->getLoweredFunctionType()->getUnsubstitutedType(getModule());
   // Get witness generic signature for remapping types.
   // Witness generic signature may have more requirements than VJP generic
   // signature: when witness generic signature has same-type requirements

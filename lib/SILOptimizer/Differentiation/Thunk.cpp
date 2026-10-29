@@ -178,54 +178,38 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
   SILFunctionConventions toConv(toType, silConv);
   assert(toConv.useLoweredAddresses());
 
-  // This recognizes result packing, not async lets. Match the complete
-  // immediate field layout; a tuple-valued source result remains one result.
-  auto canPackResultsIntoIndirectTuple = [&]() {
-    if (toType->getNumResults() != 1 ||
-        !toType->getSingleResult().isFormalIndirect())
-      return false;
-    auto destination = toConv.getSILType(
-        toType->getSingleResult(), builder.getTypeExpansionContext());
-    auto tuple = destination.getAs<TupleType>();
-    if (!tuple || tuple->getNumElements() != fromType->getNumResults())
-      return false;
-    for (unsigned i : range(tuple->getNumElements())) {
-      auto source = fromType->getResults()[i];
-      auto sourceType = fromConv.getSILType(
-          source, builder.getTypeExpansionContext());
-      if (sourceType.getASTType() !=
-          tuple->getElementType(i)->getCanonicalType())
-        return false;
-      if (source.isFormalDirect() &&
-          source.getConvention() != ResultConvention::Owned &&
-          !sourceType.isTrivial(*thunk))
-        return false;
-    }
-    return true;
-  };
-
-  SmallVector<SILResultInfo, 4> toResults(toType->getResults().begin(),
-                                        toType->getResults().end());
-  SmallVector<SILValue, 4> toIndirectResults;
-  if (canPackResultsIntoIndirectTuple()) {
+  SmallVector<SILResultInfo, 4> toResults(toConv.getResults().begin(),
+                                        toConv.getResults().end());
+  SmallVector<SILValue, 4> forwardedArgs;
+  if (fromType->getNumResults() != toResults.size()) {
+    // The only regrouping supported here packs the complete source result
+    // into one indirect tuple. Use the existing component conversion below.
+    if (toResults.size() != 1 || !toResults.front().isFormalIndirect() ||
+        toConv.getSILType(toResults.front(), builder.getTypeExpansionContext())
+                .getObjectType() !=
+            fromType->getAllResultsSubstType(
+                module, builder.getTypeExpansionContext()))
+      llvm::report_fatal_error("unsupported reabstraction result grouping");
     auto output = *thunk->getIndirectResults().begin();
     toResults.clear();
-    for (unsigned i : range(fromType->getNumResults())) {
-      auto field = builder.createTupleElementAddr(loc, output, i);
+    for (auto result : fromConv.getResults()) {
+      // A nontrivial borrowed result cannot initialize an owned tuple field.
+      if (result.isFormalDirect() &&
+          result.getConvention() != ResultConvention::Owned &&
+          !fromConv.getSILType(result, builder.getTypeExpansionContext())
+               .isTrivial(*thunk))
+        llvm::report_fatal_error("result packing requires owned values");
+      auto field = builder.createTupleElementAddr(loc, output, toResults.size());
+      forwardedArgs.push_back(field);
       toResults.emplace_back(field->getType().getASTType(),
                              ResultConvention::Indirect);
-      toIndirectResults.push_back(field);
     }
   } else {
-    if (fromType->getNumResults() != toType->getNumResults())
-      llvm::report_fatal_error("unsupported reabstraction result grouping");
     for (auto result : thunk->getIndirectResults())
-      toIndirectResults.push_back(result);
+      forwardedArgs.push_back(result);
   }
 
   // Forward thunk arguments, handling ownership convention mismatches.
-  SmallVector<SILValue, 4> forwardedArgs(toIndirectResults.begin(),
-                                        toIndirectResults.end());
   SmallVector<AllocStackInst *, 4> localAllocations;
   SmallVector<SILValue, 4> valuesToCleanup;
   forwardFunctionArgumentsConvertingOwnership(
@@ -354,7 +338,7 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
   auto fromIndirectResults = ArrayRef<SILValue>(arguments).take_front(
       fromConv.getNumIndirectSILResults());
   auto fromIndResultsIter = fromIndirectResults.begin();
-  auto toIndResultsIter = toIndirectResults.begin();
+  auto toIndResultsIter = forwardedArgs.begin();
   // Reabstract results.
   for (unsigned resIdx : range(toResults.size())) {
     auto fromRes = fromConv.getResults()[resIdx];
