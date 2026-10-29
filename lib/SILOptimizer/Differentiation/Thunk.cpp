@@ -196,7 +196,8 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
       auto source = fromType->getResults()[i];
       auto sourceType = fromConv.getSILType(
           source, builder.getTypeExpansionContext());
-      if (sourceType.getASTType() != tuple->getElementType(i))
+      if (sourceType.getASTType() !=
+          tuple->getElementType(i)->getCanonicalType())
         return false;
       if (source.isFormalDirect() &&
           source.getConvention() != ResultConvention::Owned &&
