@@ -22,14 +22,12 @@
 #include "swift/AST/SimpleRequest.h"
 #include "swift/AST/SourceFile.h"
 #include "swift/AST/TBDGenRequests.h"
-#include "swift/AST/Types.h"
 #include "swift/SIL/SILDeclRef.h"
 
 namespace swift {
 
 class LangOptions;
 class ModuleDecl;
-class SILFunction;
 class SILModule;
 class SILOptions;
 class IRGenOptions;
@@ -145,37 +143,6 @@ private:
   std::unique_ptr<SILModule> evaluate(Evaluator &evaluator,
                                       ASTLoweringDescriptor desc) const;
 };
-
-/// Emit a task-entry reabstraction body for an ordinary async initializer VJP.
-/// The optimizer owns the declaration and its generic environment; SILGen owns
-/// call/result adaptation, including ownership and throwing cleanup.
-// SimpleRequest prints its arguments for request diagnostics. This request's
-// pointer and canonical-type arguments have no generic simple_display overload;
-// keep the display customization local to this particular request signature.
-inline void simple_display(
-    llvm::raw_ostream &out,
-    const std::tuple<SILFunction *, CanSILFunctionType, CanType, CanType> &args) {
-  out << "(thunk=" << static_cast<const void *>(std::get<0>(args))
-      << ", expected=" << static_cast<const void *>(std::get<1>(args).getPointer())
-      << ", formal=" << static_cast<const void *>(std::get<2>(args).getPointer())
-      << ", dynamicSelf="
-      << static_cast<const void *>(std::get<3>(args).getPointer()) << ")";
-}
-class EmitAutoDiffAsyncLetThunkRequest
-    : public SimpleRequest<
-          EmitAutoDiffAsyncLetThunkRequest,
-          bool(SILFunction *, CanSILFunctionType, CanType, CanType),
-          RequestFlags::Uncached> {
-public:
-  using SimpleRequest::SimpleRequest;
-
-private:
-  friend SimpleRequest;
-  bool evaluate(Evaluator &evaluator, SILFunction *thunk,
-                CanSILFunctionType expectedType, CanType formalType,
-                CanType dynamicSelfType) const;
-};
-
 /// The zone number for SILGen.
 #define SWIFT_TYPEID_ZONE SILGen
 #define SWIFT_TYPEID_HEADER "swift/AST/SILGenTypeIDZone.def"

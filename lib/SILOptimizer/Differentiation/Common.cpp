@@ -17,8 +17,6 @@
 #include "swift/SILOptimizer/Differentiation/Common.h"
 #include "swift/AST/AutoDiff.h"
 #include "swift/AST/ASTMangler.h"
-#include "swift/AST/Evaluator.h"
-#include "swift/AST/SILGenRequests.h"
 #include "swift/AST/Builtins.h"
 #include "swift/AST/SubstitutionMap.h"
 #include "swift/SILOptimizer/Analysis/DominanceAnalysis.h"
@@ -235,12 +233,10 @@ SILValue createAsyncLetVJPClosure(SILBuilder &builder, ADContext &context,
       loc, name, thunkType, ActorIsolation::forUnspecified(), IsBare,
       IsTransparent, IsSerialized, ProfileCounter(), IsReabstractionThunk,
       IsNotDynamic, IsNotDistributed, IsNotRuntimeAccessible);
-  if (thunk->empty()) {
+  if (thunk->empty() && context.deferAsyncLetThunkBody(
+                            thunk, {entryType, inputType, dynamicSelfType})) {
     thunk->inheritDerivedFrom(&caller);
     thunk->setGenericEnvironment(genericEnv);
-    (void)evaluateOrFatal(astContext.evaluator,
-                         EmitAutoDiffAsyncLetThunkRequest{
-                             thunk, entryType, inputType, dynamicSelfType});
   }
 
   auto *ref = builder.createFunctionRef(loc, thunk);

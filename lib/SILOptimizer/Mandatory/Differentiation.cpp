@@ -1897,6 +1897,15 @@ void Differentiation::run() {
     errorOccurred |= transformer.processLinearFunctionInst(lfi);
   }
 
+  // The adapter declarations were sufficient while generating derivatives.
+  // Emit their bodies only once all derivative bodies are complete, so normal
+  // SILGen finalization cannot observe an unfinished VJP or pullback.
+  if (!errorOccurred && !context.getPendingAsyncLetThunks().empty()) {
+    emitAsyncLetThunkBodies(module, context.getPendingAsyncLetThunks());
+    invalidateAll();
+    errorOccurred |= astCtx.hadError();
+  }
+
   // If any error occurred while processing witnesses or
   // `differentiable_function` instructions, clean up.
   if (errorOccurred) {

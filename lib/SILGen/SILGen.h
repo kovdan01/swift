@@ -120,15 +120,6 @@ public:
 public:
   SILGenModule(SILModule &M, ModuleDecl *SM);
 
-  /// Reuse SILGen for a synthesized function in an existing module, without
-  /// repeating module initialization or finalizing other incomplete functions.
-  struct ForFunctionEmission {};
-  SILGenModule(SILModule &M, ForFunctionEmission);
-
-private:
-  bool IsModuleEmission = true;
-
-public:
   ~SILGenModule();
   
   SILGenModule(SILGenModule const &) = delete;

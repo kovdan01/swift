@@ -125,6 +125,10 @@ private:
   /// `AdditiveArithmetic.zero` declaration.
   mutable AccessorDecl *cachedZeroGetter = nullptr;
 
+  // Declarations can be referenced while their callers are being built. Emit
+  // each adapter body once, after the derivative worklists have completed.
+  llvm::SmallMapVector<SILFunction *, AsyncLetThunkBody, 4> pendingAsyncLetThunks;
+
 public:
   /// Construct an ADContext for the given module.
   explicit ADContext(SILModuleTransform &transform);
@@ -202,6 +206,15 @@ public:
 
   void recordGeneratedFunctionReference(SILValue functionRef) {
     generatedFunctionReferences.push_back(functionRef);
+  }
+
+  bool deferAsyncLetThunkBody(SILFunction *thunk, AsyncLetThunkBody body) {
+    return pendingAsyncLetThunks.insert({thunk, body}).second;
+  }
+
+  ArrayRef<std::pair<SILFunction *, AsyncLetThunkBody>>
+  getPendingAsyncLetThunks() const {
+    return pendingAsyncLetThunks.getArrayRef();
   }
 
   ProtocolDecl *getAdditiveArithmeticProtocol() const {
