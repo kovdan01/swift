@@ -136,8 +136,6 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
                                            CanSILFunctionType toType) {
   assert(!fromType->getCombinedSubstitutions());
   assert(!toType->getCombinedSubstitutions());
-  assert(!fromType->hasErasedIsolation() && !toType->hasErasedIsolation() &&
-         "erased-isolation reabstraction is not supported");
 
   SubstitutionMap interfaceSubs;
   GenericEnvironment *genericEnv = nullptr;
@@ -145,7 +143,6 @@ SILFunction *getOrCreateReabstractionThunk(SILOptFunctionBuilder &fb,
       buildThunkType(caller, fromType, toType, genericEnv, interfaceSubs,
                      /*withoutActuallyEscaping*/ false,
                      DifferentiationThunkKind::Reabstraction);
-
   auto thunkDeclType =
       thunkType->getWithExtInfo(thunkType->getExtInfo().withNoEscape(false));
 
@@ -500,7 +497,6 @@ SILValue reabstractFunction(
   auto *thunk = getOrCreateReabstractionThunk(fb, module, loc,
                                               /*caller*/ fn->getFunction(),
                                               unsubstFromType, unsubstToType);
-
   auto *thunkRef = builder.createFunctionRef(loc, thunk);
 
   if (fromType != unsubstFromType)
