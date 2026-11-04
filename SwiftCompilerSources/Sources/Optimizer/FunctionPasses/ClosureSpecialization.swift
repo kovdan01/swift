@@ -937,7 +937,8 @@ private func replacePullbackPartialApply(
   let newPai: PartialApplyInst = builderSucc.createPartialApply(
     function: newFunctionRefInst, substitutionMap: pai.substitutionMap,
     capturedArguments: Array(pai.arguments), calleeConvention: pai.calleeConvention,
-    hasUnknownResultIsolation: pai.hasUnknownResultIsolation, isOnStack: pai.isOnStack, isNested: pai.isNested)
+    hasUnknownResultIsolation: pai.hasUnknownResultIsolation, isOnStack: pai.isOnStack, isNested: pai.isNested,
+    executionSemantics: pai.executionSemantics)
 
   pai.replace(with: newPai, context)
   return newPai
@@ -1270,7 +1271,8 @@ private func rewriteApplyDirectClosure(
       calleeConvention: pai.calleeConvention, 
       hasUnknownResultIsolation: pai.hasUnknownResultIsolation,
       isOnStack: pai.isOnStack,
-      isNested: pai.isNested)
+      isNested: pai.isNested,
+      executionSemantics: pai.executionSemantics)
 
     for (idx, allocStack, store) in indirectArgs.reversed() {
       extractedElements[idx] = store.source
@@ -1294,7 +1296,8 @@ private func rewriteApplyDirectClosure(
       calleeConvention: reabstraction.calleeConvention,
       hasUnknownResultIsolation: reabstraction.hasUnknownResultIsolation,
       isOnStack: reabstraction.isOnStack,
-      isNested: reabstraction.isNested)
+      isNested: reabstraction.isNested,
+      executionSemantics: reabstraction.executionSemantics)
     currentClosure = newReabstraction
     allNewClosures.append(newReabstraction)
   }
