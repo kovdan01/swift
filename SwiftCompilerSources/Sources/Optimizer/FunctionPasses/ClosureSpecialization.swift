@@ -243,8 +243,9 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
       closureInfos: closureAnalysis.closuresInBTE)
     else { return }
 
-    let specializedBTEDict = synthesizeSpecializedEnums(
+    guard let specializedBTEDict = synthesizeSpecializedEnums(
       from: closureAnalysis, context: context)
+    else { return }
 
     specializeAgainstBTE(
       closureAnalysis: closureAnalysis,
@@ -884,7 +885,7 @@ private func logSpecializationStats(
 private func synthesizeSpecializedEnums(
   from closureAnalysis: PullbackClosureAnalysis,
   context: FunctionPassContext
-) -> SpecializedBTEMap {
+) -> SpecializedBTEMap? {
   getSpecializedBTEDict(
     closuresInBTE: closureAnalysis.closuresInBTE,
     paiOfPullback: closureAnalysis.paiOfPullback,
@@ -2888,7 +2889,7 @@ private func findClosuresInBTE(paiOfPullback: PartialApplyInst) -> [ClosureInBTE
   return closuresInBTE
 }
 
-private func getSpecializedBTEDict(closuresInBTE: [ClosureInBTE], paiOfPullback: PartialApplyInst, _ context: FunctionPassContext) -> [Type: Type] {
+private func getSpecializedBTEDict(closuresInBTE: [ClosureInBTE], paiOfPullback: PartialApplyInst, _ context: FunctionPassContext) -> [Type: Type]? {
   guard !closuresInBTE.isEmpty else {
     return [:]
   }
@@ -2948,13 +2949,12 @@ private struct AutoDiffSpecializationInfo {
     self.specializedBTEDict = specializedBTEDict
   }
 
-  init(vjp: Function, _ context: FunctionPassContext) {
-    let closureAnalysis = PullbackClosureAnalysis(vjp: vjp)!
-    self.init(
-      closureAnalysis: closureAnalysis,
-      specializedBTEDict: synthesizeSpecializedEnums(
-        from: closureAnalysis,
-        context: context))
+  init?(vjp: Function, _ context: FunctionPassContext) {
+    guard let closureAnalysis = PullbackClosureAnalysis(vjp: vjp),
+          let specializedBTEDict = synthesizeSpecializedEnums(
+            from: closureAnalysis, context: context)
+    else { return nil }
+    self.init(closureAnalysis: closureAnalysis, specializedBTEDict: specializedBTEDict)
   }
 
   func pullbackNameSpecializedAgainstBTE(_ context: FunctionPassContext) -> String {
@@ -3301,7 +3301,10 @@ private struct PullbackSpecializationAgainstBTE {
 
 let getAutoDiffSpecializationInfoTest = FunctionTest("autodiff_get_specialization_info") {
   function, arguments, context in
-  let autodiffSpecializationInfo = AutoDiffSpecializationInfo(vjp: function, context)
+  guard let autodiffSpecializationInfo = AutoDiffSpecializationInfo(vjp: function, context) else {
+    print("Unsupported branch tracing enum specialization")
+    return
+  }
   print("Run getAutoDiffSpecializationInfo for VJP \(function.name): autodiffSpecializationInfo = (")
   print("  pullback = \(autodiffSpecializationInfo.pullback.name)")
   print("  closuresInBTE = [")
@@ -3336,7 +3339,10 @@ private func specializeBranchTracingEnumBBArgInVJP(
 
 let specializeBranchTracingEnums = FunctionTest("autodiff_specialize_branch_tracing_enums") {
   function, arguments, context in
-  let autodiffSpecializationInfo = AutoDiffSpecializationInfo(vjp: function, context)
+  guard let autodiffSpecializationInfo = AutoDiffSpecializationInfo(vjp: function, context) else {
+    print("Unsupported branch tracing enum specialization")
+    return
+  }
   let specializedBTEDict = autodiffSpecializationInfo.specializedBTEDict
   print("Specialized branch tracing enum dict for VJP \(function.name) contains \(specializedBTEDict.count) elements:")
 
@@ -3354,7 +3360,10 @@ let specializeBranchTracingEnums = FunctionTest("autodiff_specialize_branch_trac
 
 let specializeBTEArgInVjpBB = FunctionTest("autodiff_specialize_bte_arg_in_vjp_bb") {
   function, arguments, context in
-  let autodiffSpecializationInfo = AutoDiffSpecializationInfo(vjp: function, context)
+  guard let autodiffSpecializationInfo = AutoDiffSpecializationInfo(vjp: function, context) else {
+    print("Unsupported branch tracing enum specialization")
+    return
+  }
   let specializedBTEDict = autodiffSpecializationInfo.specializedBTEDict
 
   print("Specialized BTE arguments of basic blocks in VJP \(function.name):")
@@ -3384,7 +3393,10 @@ private func specializePayloadTupleBBArgInPullback(
 
 let specializePayloadArgInPullbackBB = FunctionTest("autodiff_specialize_payload_arg_in_pb_bb") {
   function, arguments, context in
-  let autodiffSpecializationInfo = AutoDiffSpecializationInfo(vjp: function, context)
+  guard let autodiffSpecializationInfo = AutoDiffSpecializationInfo(vjp: function, context) else {
+    print("Unsupported branch tracing enum specialization")
+    return
+  }
   let specializedBTEDict = autodiffSpecializationInfo.specializedBTEDict
 
   let pullback = autodiffSpecializationInfo.pullback
