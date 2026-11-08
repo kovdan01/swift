@@ -372,11 +372,12 @@ private func validatePullbackPayloadBlocks(pb: Function, vjp: Function, prefixFa
     }
     // A throwing source apply tapes Optional<Pullback>. Its function value is
     // projected as the some successor argument rather than a tuple field here.
-    if let successor = throwingSuccessor,
-       !checkIfCanRunForPayloadValues(
-         results: successor.arguments.filter { $0.type.isLoweredFunction },
-         prefixFail: prefixFail, pb: pb, pbBB: successor) {
-      return false
+    if let successor = throwingSuccessor {
+      guard let callback = successor.arguments.singleElement,
+            callback.type.isLoweredFunction,
+            checkIfCanRunForPayloadValues(
+              results: [callback], prefixFail: prefixFail, pb: pb, pbBB: successor)
+      else { return false }
     }
     let payloadValues = getPayloadValues(payload: argOfPbBB, vjp: vjp)
     switch payloadValues {

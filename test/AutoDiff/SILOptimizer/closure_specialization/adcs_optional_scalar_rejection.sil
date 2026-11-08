@@ -1,0 +1,77 @@
+// RUN: %target-sil-opt -sil-print-types -enable-sil-verify-all -autodiff-closure-specialization %s -o - | %FileCheck %s --implicit-check-not='_AD__{{.*}}_spec'
+//
+// Adapt a throwing-call tape to store a known callback followed by Optional<Float>.
+// Generated throwing-call tapes wrap a callback in their final Optional field;
+// they do not use its some successor for ordinary scalar computation. Reject
+// this valid SIL shape before enum synthesis or recursive callback rewriting.
+// CHECK-LABEL: sil [ossa] @$s3outyycfU6_7myfoo08L_yS2f_SftFTJrSUpSr
+// CHECK: partial_apply [callee_guaranteed] {{.*}} : $@convention(thin) (Float, @guaranteed String) -> Float
+// CHECK: enum $Optional<Float>, #Optional.some!enumelt
+// CHECK: tuple $(predecessor: {{[^,]+}}, @callee_guaranteed (Float) -> Float, Optional<Float>)
+// CHECK-LABEL: sil [ossa] @$s3outyycfU6_7myfoo08L_yS2f_SftFTJpSUpSr
+// CHECK: (%{{[0-9]+}}, %[[CALLBACK:[0-9]+]], %[[OPTIONAL:[0-9]+]]) = destructure_tuple
+// CHECK: apply %[[CALLBACK]]({{.*}}) : $@callee_guaranteed (Float) -> Float
+// CHECK: switch_enum %[[OPTIONAL]] : $Optional<Float>
+// CHECK: struct_extract {{.*}} : $Float, #Float._value
+// CHECK: } // end sil function
+
+sil_stage canonical
+import Builtin
+import Swift
+import SwiftShims
+import _Differentiation
+
+sil @capturing : $@convention(thin) (Float, @guaranteed String) -> Float
+
+enum _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb0__Pred__src_0_wrt_1 {
+ case bb2(())
+}
+enum _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_1 {
+  case bb0((predecessor: _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb0__Pred__src_0_wrt_1, (Float) -> Float, Optional<Float>))
+  case bb2(())
+}
+
+sil [ossa] @$s3outyycfU6_7myfoo08L_yS2f_SftFTJrSUpSr : $@convention(thin) (@owned String, Float, Bool) -> (Float, @owned @callee_guaranteed (Float) -> Float) {
+bb0(%s : @owned $String, %x : $Float, %b : $Bool):
+  %cond = struct_extract %b : $Bool, #Bool._value
+  cond_br %cond, bb1, bb2
+bb1:
+  %fn = function_ref @capturing : $@convention(thin) (Float, @guaranteed String) -> Float
+  %c = partial_apply [callee_guaranteed] %fn(%s) : $@convention(thin) (Float, @guaranteed String) -> Float
+  %some = enum $Optional<Float>, #Optional.some!enumelt, %x : $Float
+  %unit = tuple ()
+  %prev = enum $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb0__Pred__src_0_wrt_1, #_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb0__Pred__src_0_wrt_1.bb2!enumelt, %unit
+  %t = tuple $(predecessor: _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb0__Pred__src_0_wrt_1, @callee_guaranteed (Float) -> Float, Optional<Float>) (%prev, %c, %some)
+  %e = enum $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_1, #_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_1.bb0!enumelt, %t
+  br bb3(%e : $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_1)
+bb2:
+  destroy_value %s : $String
+  %u = tuple ()
+  %e2 = enum $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_1, #_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_1.bb2!enumelt, %u
+  br bb3(%e2 : $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_1)
+bb3(%be : @owned $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_1):
+  %pb = function_ref @$s3outyycfU6_7myfoo08L_yS2f_SftFTJpSUpSr : $@convention(thin) (Float, @owned _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_1) -> Float
+  %p = partial_apply [callee_guaranteed] %pb(%be) : $@convention(thin) (Float, @owned _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_1) -> Float
+  %r = tuple (%x, %p)
+  return %r : $(Float, @callee_guaranteed (Float) -> Float)
+}
+
+sil [ossa] @$s3outyycfU6_7myfoo08L_yS2f_SftFTJpSUpSr : $@convention(thin) (Float, @owned _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_1) -> Float {
+bb0(%x : $Float, %e : @owned $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_1):
+  switch_enum %e : $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_1, case #_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_1.bb0!enumelt: bb1, case #_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_1.bb2!enumelt: bb2
+bb1(%t : @owned $(predecessor: _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb0__Pred__src_0_wrt_1, @callee_guaranteed (Float) -> Float, Optional<Float>)):
+  (%prev, %c, %optional) = destructure_tuple %t : $(predecessor: _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb0__Pred__src_0_wrt_1, @callee_guaranteed (Float) -> Float, Optional<Float>)
+  %call = apply %c(%x) : $@callee_guaranteed (Float) -> Float
+  destroy_value %c : $@callee_guaranteed (Float) -> Float
+  switch_enum %optional : $Optional<Float>, case #Optional.some!enumelt: bbSome, case #Optional.none!enumelt: bbNone
+bbSome(%value : $Float):
+  %bits = struct_extract %value : $Float, #Float._value
+  %resultSome = struct $Float (%bits : $Builtin.FPIEEE32)
+  br bb3(%resultSome : $Float)
+bbNone:
+  br bb3(%x : $Float)
+bb2(%u : $()):
+  br bb3(%x : $Float)
+bb3(%result : $Float):
+  return %result : $Float
+}
