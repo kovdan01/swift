@@ -450,6 +450,7 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> BTESp
     )
     return .ineligible
   }
+  guard computeTopologicalBlockOrder(of: pb) != nil else { return .ineligible }
   guard let bteArgOfPb = pb.entryBlock.getBranchTracingEnumArg(vjp: vjp) else {
     log(
       "\(prefixFail)cannot get branch tracing enum argument of the pullback function \(pb.name.string)"
@@ -2969,30 +2970,22 @@ private struct AutoDiffSpecializationInfo {
   }
 }
 
-private func computeTopologicalBlockOrder(of function: Function) -> [BasicBlock] {
-  var bbVisited = [BasicBlock: Bool]()
-  bbVisited[function.entryBlock] = true
-  var bbQueue = [BasicBlock]()
-  bbQueue.append(function.entryBlock)
-  while bbVisited.count != function.blocks.count {
-    for bb in function.blocks {
-      if bbVisited[bb] == true {
-        continue
-      }
-      var allPredsVisited = true
-      for predBB in bb.predecessors {
-        if bbVisited[predBB] != true {
-          allPredsVisited = false
-          break
-        }
-      }
-      if allPredsVisited {
-        bbQueue.append(bb)
-        bbVisited[bb] = true
+private func computeTopologicalBlockOrder(of function: Function) -> [BasicBlock]? {
+  var visited: Set<BasicBlock> = [function.entryBlock]
+  var order = [function.entryBlock]
+  while order.count < function.blocks.count {
+    let previousCount = order.count
+    for bb in function.blocks where !visited.contains(bb) {
+      if bb.predecessors.allSatisfy({ visited.contains($0) }) {
+        visited.insert(bb)
+        order.append(bb)
       }
     }
+    // Source loop tapes are rejected separately. Still decline an unexpected
+    // cyclic pullback instead of spinning forever on its unvisited blocks.
+    guard order.count > previousCount else { return nil }
   }
-  return bbQueue
+  return order
 }
 
 // Generated tape tuples use a fixed callable order for each original block.
@@ -3157,7 +3150,7 @@ private struct PullbackSpecializationAgainstBTE {
 
     let vjp = autodiffSpecializationInfo.paiOfPullback.parentFunction
     restoreUnwrappedPayloadPhis(in: cloner.targetFunction, vjp: vjp, cloner.context)
-    let bbQueue = computeTopologicalBlockOrder(of: cloner.targetFunction)
+    let bbQueue = computeTopologicalBlockOrder(of: cloner.targetFunction)!
     let enumToPayload = findEnumsAndPayloadsInVjp(vjp: vjp)
 
     for bb in bbQueue {
