@@ -15,6 +15,14 @@ extension EnumCase {
   }
 }
 
+extension TupleInst {
+  // CFG simplification can duplicate a constructor without changing its saved
+  // values. Accept that source shape, without equating different callable plans.
+  func hasSamePayloadValues(as other: TupleInst) -> Bool {
+    type == other.type && operands.elementsEqual(other.operands, by: { $0.value == $1.value })
+  }
+}
+
 // Information required to specialize one closure stored in a payload tuple of a branch tracing enum case.
 struct ClosureInBTE : Equatable {
   let closure: SingleValueInstruction
@@ -202,11 +210,11 @@ private func getSpecializedParamDeclForEnumCase(
     let closuresInBTEForCaseAndPayloadIndex = closuresInBTEForCase.filter({ $0.indexInPayload == elementIndex })
 
     if let first = closuresInBTEForCaseAndPayloadIndex.first {
-      // Analysis checked semantic plan equality across all constructors before
-      // synthesis. Equivalent cloned closures can have different SSA roots and
-      // capture data; only their payload layout must agree here.
+      // Duplicated constructors must save the same ordered SSA values.
+      // Analysis rejects differing plans for the same bound case.
       let captureTypes = first.capturedArgs.map { $0.type }
       for info in closuresInBTEForCaseAndPayloadIndex.dropFirst() {
+        assert(first.payloadTuple.hasSamePayloadValues(as: info.payloadTuple))
         assert(captureTypes == info.capturedArgs.map { $0.type })
       }
     }
