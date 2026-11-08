@@ -367,8 +367,16 @@ private func validatePullbackPayloadBlocks(pb: Function, vjp: Function, prefixFa
     if unwrappedPayloadCount > 1 || (unwrappedPayloadCount == 1 && payloadInfo != nil) {
       return false
     }
-    guard let (argOfPbBB, _, _) = payloadInfo else {
+    guard let (argOfPbBB, _, throwingSuccessor) = payloadInfo else {
       continue
+    }
+    // A throwing source apply tapes Optional<Pullback>. Its function value is
+    // projected as the some successor argument rather than a tuple field here.
+    if let successor = throwingSuccessor,
+       !checkIfCanRunForPayloadValues(
+         results: successor.arguments.filter { $0.type.isLoweredFunction },
+         prefixFail: prefixFail, pb: pb, pbBB: successor) {
+      return false
     }
     let payloadValues = getPayloadValues(payload: argOfPbBB, vjp: vjp)
     switch payloadValues {
@@ -809,10 +817,26 @@ private func validateBeginBorrowPayloadUse(bbi: BeginBorrowInst, prefixFail: Str
   return false
 }
 
+// PullbackCloner emits one invocation per active source apply. Multiple uses
+// exposed by inlining custom derivatives belong to nested capture tuples, not
+// to these directly taped function fields.
+private func hasTapedInvocation(_ value: Value) -> Bool {
+  var invocationCount = 0
+  for use in value.uses {
+    if use.instruction is DestroyValueInst { continue }
+    guard classifyClosurePayloadUse(use) != nil else { return false }
+    invocationCount += 1
+  }
+  return invocationCount > 0
+}
+
 func checkIfCanRunForPayloadValues(
   results: [Value], prefixFail: String, pb: Function, pbBB: BasicBlock
 ) -> Bool {
   for result in results {
+    if result.type.isLoweredFunction && !hasTapedInvocation(result) {
+      return false
+    }
     for use in result.uses {
       guard let payloadUseShape = classifyPayloadUse(use) else {
         log(
