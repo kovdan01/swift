@@ -1312,20 +1312,106 @@ private func extractTupleElements(
   return elements
 }
 
+// Rebuild the closure-building graph from the capture values stored in the
+// specialized payload. Each caller transfers an owned capture tuple, so an
+// escaping partial_apply can consume its captures as in the original graph.
+private func rebuildCapturedClosure(
+  closureInfo: ClosureInBTE, capturedValues: [Value],
+  before insertionPoint: Instruction, _ context: FunctionPassContext
+) -> Value {
+  let builder = Builder(before: insertionPoint, context)
+  let root: Value
+  let rootCaptureCount = closureInfo.numRootCapturesInPayload
+  if !closureInfo.runtimeWrapperCallees.isEmpty {
+    // An unknown adapter may retain or repeatedly invoke the inner closure.
+    // Keep the existing inner context instead of allocating another one.
+    root = capturedValues[0]
+  } else if let partialApply = closureInfo.closure as? PartialApplyInst {
+    var arguments = Array(capturedValues.prefix(rootCaptureCount))
+    var allocations = [AllocStackInst]()
+    for (index, operand) in partialApply.argumentOperands.enumerated() {
+      if operand.value.type.isAddress && !partialApply.convention(of: operand)!.isInout {
+        let allocation = builder.createAllocStack(arguments[index].type)
+        builder.createStore(source: arguments[index], destination: allocation, ownership: .initialize)
+        arguments[index] = allocation
+        allocations.append(allocation)
+      }
+    }
+    var cloner = SIL.Cloner(cloneBefore: insertionPoint, context)
+    defer { cloner.deinitialize() }
+    let callee = cloner.cloneRecursively(value: partialApply.callee)
+    // Capture operands must be mapped by position: the same source SSA value
+    // can occupy multiple fields, while a value-map alone would merge them.
+    root = builder.createPartialApply(
+      function: callee, substitutionMap: partialApply.substitutionMap.substitute(
+        with: insertionPoint.parentFunction.forwardingSubstitutionMap),
+      capturedArguments: arguments, calleeConvention: partialApply.calleeConvention,
+      hasUnknownResultIsolation: partialApply.hasUnknownResultIsolation,
+      isOnStack: partialApply.isOnStack, isNested: partialApply.isNested,
+      executionSemantics: partialApply.executionSemantics)
+    for allocation in allocations.reversed() {
+      builder.createDeallocStack(allocation)
+    }
+  } else {
+    assert(closureInfo.closure is ThinToThickFunctionInst)
+    let thinToThick = closureInfo.closure as! ThinToThickFunctionInst
+    let reference = thinToThick.callee as! FunctionRefInst
+    let callee = builder.createFunctionRef(reference.referencedFunction)
+    let type = insertionPoint.parentFunction.mapTypeIntoEnvironment(
+      thinToThick.type.rawType.mapOutOfEnvironment()).canonical
+      .loweredType(in: insertionPoint.parentFunction)
+    root = builder.createThinToThickFunction(thinFunction: callee, resultType: type)
+  }
+
+  var current = root
+  var runtimeCalleeIndex = rootCaptureCount
+  for wrapper in closureInfo.reabstractions {
+    let callee: Value
+    if let reference = wrapper.callee as? FunctionRefInst {
+      callee = builder.createFunctionRef(reference.referencedFunction)
+    } else {
+      callee = capturedValues[runtimeCalleeIndex]
+      runtimeCalleeIndex += 1
+    }
+    // The adapter comes from the VJP, whereas its replacement lives in the
+    // cloned pullback. Compose substitutions to remap both replacement types
+    // and conformances into that function's generic environment.
+    current = builder.createPartialApply(
+      function: callee, substitutionMap: wrapper.substitutionMap.substitute(
+        with: insertionPoint.parentFunction.forwardingSubstitutionMap),
+      capturedArguments: [current], calleeConvention: wrapper.calleeConvention,
+      hasUnknownResultIsolation: wrapper.hasUnknownResultIsolation,
+      isOnStack: wrapper.isOnStack, isNested: wrapper.isNested,
+      executionSemantics: wrapper.executionSemantics)
+  }
+  assert(runtimeCalleeIndex == capturedValues.count)
+  return current
+}
+
 private func rewriteConvertFunctionUse(
   cfi: ConvertFunctionInst, resultIdx: Int,
   result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
 ) {
-  if findMatchingClosureInfo(in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx) != nil {
-    guard let classified = classifyConvertFunctionPayloadUse(cfi) else {
-      assert(false)
-      return
-    }
-    context.erase(instruction: classified.destroyValueUse.instruction)
-    rewriteUsesOfPayloadItem(
-      use: classified.beginBorrowUse, resultIdx: resultIdx,
-      result: result, rewriteCtx: rewriteCtx, context)
-    context.erase(instruction: cfi)
+  if let closureInfo = findMatchingClosureInfo(in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx) {
+    let builder = Builder(before: cfi, context)
+    // convert_function forwards ownership into the converted closure, whose
+    // original destroy_value ends that ownership. Transfer the replacement
+    // context once at the same instruction, rather than copying its captures.
+    assert(result.type.isTrivial(in: cfi.parentFunction) || result.ownership == .owned)
+    let capturedValues = extractTupleElements(
+      from: result, useTupleExtract: rewriteCtx.useTei, builder: builder)
+    let closure = rebuildCapturedClosure(
+      closureInfo: closureInfo, capturedValues: capturedValues, before: cfi, context)
+
+    // A conversion can require argument/result casts, not just a representation
+    // change. Preserve it and its original borrow/apply/destroy graph; the
+    // shared SIL combiner folds the reconstructed closure through the
+    // conversion while retaining any necessary casts.
+    var cloner = SIL.Cloner(cloneBefore: cfi, context)
+    defer { cloner.deinitialize() }
+    cloner.recordFoldedValue(cfi.fromFunction, mappedTo: closure)
+    let converted = cloner.clone(instruction: cfi) as! ConvertFunctionInst
+    cfi.replace(with: converted, context)
   } else {
     let builder = Builder(before: cfi, context)
     let newCFI = builder.createConvertFunction(
