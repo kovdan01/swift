@@ -24,7 +24,6 @@
 #include "swift/SIL/Test.h"
 #include "swift/SILOptimizer/Analysis/Analysis.h"
 #include "swift/SILOptimizer/Analysis/SimplifyInstruction.h"
-#include "swift/SILOptimizer/Utils/BasicBlockOptUtils.h"
 #include "swift/SILOptimizer/Utils/CFGOptUtils.h"
 #include "swift/SILOptimizer/Utils/ConstExpr.h"
 #include "swift/SILOptimizer/Utils/ConstantFolding.h"
@@ -113,22 +112,6 @@ void BridgedConstExprFunctionState::deinitialize() {
 //===----------------------------------------------------------------------===//
 //                           BridgedPassContext
 //===----------------------------------------------------------------------===//
-
-bool BridgedPassContext::canCloneBranchTarget(BridgedInstruction branch) const {
-  auto *bi = branch.getAs<BranchInst>();
-  BasicBlockCloner cloner(bi->getDestBB(), invocation->getPassManager());
-  return cloner.canCloneBlock();
-}
-
-void BridgedPassContext::cloneBranchTarget(BridgedInstruction branch) const {
-  auto *bi = branch.getAs<BranchInst>();
-  BasicBlockCloner cloner(bi->getDestBB(), invocation->getPassManager());
-  bool canClone = cloner.canCloneBlock();
-  assert(canClone && "checked before mutating the function");
-  (void)canClone;
-  cloner.cloneBranchTarget(bi);
-  cloner.updateSSAAfterCloning();
-}
 
 bool BridgedPassContext::tryOptimizeApplyOfPartialApply(BridgedInstruction closure) const {
   auto *pa = closure.getAs<PartialApplyInst>();

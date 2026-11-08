@@ -238,9 +238,9 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
       return
     }
 
-    guard canSplitIncompatiblePayloadMerges(
+    guard validatePayloadMerges(
       in: closureAnalysis.pullback, vjp: function,
-      closureInfos: closureAnalysis.closuresInBTE, context)
+      closureInfos: closureAnalysis.closuresInBTE)
     else { return }
 
     let specializedBTEDict = synthesizeSpecializedEnums(
@@ -3004,65 +3004,11 @@ private func computeTopologicalBlockOrder(of function: Function) -> [BasicBlock]
   return bbQueue
 }
 
-// A tuple phi preserves its payload type, but not the identity of the closures
-// represented by its fields. Keep incompatible closure plans on separate edges
-// so each block can be specialized against the corresponding VJP payload.
-private enum PayloadMergeDisposition {
-  case compatible
-  case split
-  case unsupported
-}
-
-private func payloadMergeDisposition(
-  _ bb: BasicBlock, argIndex: Int, enumToPayload: [EnumInst: TupleInst],
-  closureInfos: [ClosureInBTE], enumDict: SpecializedBTEMap, vjp: Function
-) -> PayloadMergeDisposition {
-  var firstPlan: [ClosureInBTE]? = nil
-  var needsSplitting = false
-  for pred in bb.predecessors {
-    guard let dispatch = predecessorEnumDispatch(from: pred, into: bb, argIndex: argIndex) else {
-      return .unsupported
-    }
-    let dispatchType = remapBranchTracingEnumType(dispatch.enumType, into: vjp)
-    let payload = enumToPayload.first(where: { enumInst, _ in
-      (enumInst.type == dispatchType || enumDict[enumInst.type] == dispatchType)
-        && enumInst.caseIndex == dispatch.caseIndex
-    })?.value
-    let plan: [ClosureInBTE]
-    if let payload {
-      plan = collectMatchingClosureInfos(forPayload: payload, allClosureInfos: closureInfos)
-    } else {
-      // A case pruned from the VJP can survive in the pullback. Its closure
-      // fields are unchanged unless the analysis actually selected that case.
-      guard !closureInfos.contains(where: { info in
-        let originalType = info.enumCase.enumType(in: vjp)
-        return (originalType == dispatchType || enumDict[originalType] == dispatchType)
-          && info.enumCase.index == dispatch.caseIndex
-      }) else { return .unsupported }
-      plan = []
-    }
-    if let firstPlan {
-      if plan.count != firstPlan.count { needsSplitting = true }
-      for info in plan {
-        guard let first = firstPlan.first(where: { $0.indexInPayload == info.indexInPayload }),
-              first.closure == info.closure,
-              first.reabstractions == info.reabstractions,
-              first.optionalWrapper == info.optionalWrapper
-        else {
-          needsSplitting = true
-          break
-        }
-      }
-    } else {
-      firstPlan = plan
-    }
-  }
-  return needsSplitting ? .split : .compatible
-}
-
-private func canSplitIncompatiblePayloadMerges(
-  in pullback: Function, vjp: Function, closureInfos: [ClosureInBTE],
-  _ context: FunctionPassContext
+// Generated tape tuples use a fixed callable order for each original block.
+// A merge with different callable plans is unexpected; reject it before enum
+// synthesis instead of selecting one predecessor's plan for every incoming edge.
+private func validatePayloadMerges(
+  in pullback: Function, vjp: Function, closureInfos: [ClosureInBTE]
 ) -> Bool {
   let enumToPayload = findEnumsAndPayloadsInVjp(vjp: vjp)
   for bb in pullback.blocks {
@@ -3072,56 +3018,39 @@ private func canSplitIncompatiblePayloadMerges(
           .enumType.isBranchTracingEnum(in: vjp) == true
       }
       guard hasEnumIncoming else { continue }
-      switch payloadMergeDisposition(
-        bb, argIndex: arg.index, enumToPayload: enumToPayload,
-        closureInfos: closureInfos, enumDict: [:], vjp: vjp)
-      {
-      case .compatible:
-        continue
-      case .unsupported:
-        return false
-      case .split:
-        for pred in bb.predecessors {
-          guard let branch = pred.terminator as? BranchInst,
-                context.canCloneBranchTarget(branch)
+      var firstPlan: [ClosureInBTE]? = nil
+      for pred in bb.predecessors {
+        guard let dispatch = predecessorEnumDispatch(from: pred, into: bb, argIndex: arg.index)
+        else { return false }
+        let enumType = remapBranchTracingEnumType(dispatch.enumType, into: vjp)
+        let payload = enumToPayload.first { enumInst, _ in
+          enumInst.type == enumType && enumInst.caseIndex == dispatch.caseIndex
+        }?.value
+        let plan: [ClosureInBTE]
+        if let payload {
+          plan = collectMatchingClosureInfos(forPayload: payload, allClosureInfos: closureInfos)
+        } else {
+          // A case pruned from the VJP can remain in its pullback unchanged.
+          guard !closureInfos.contains(where: {
+            $0.enumCase.enumType(in: vjp) == enumType && $0.enumCase.index == dispatch.caseIndex
+          }) else { return false }
+          plan = []
+        }
+        if let firstPlan {
+          guard firstPlan.count == plan.count,
+                plan.allSatisfy({ info in firstPlan.contains(where: {
+                  $0.indexInPayload == info.indexInPayload && $0.closure == info.closure
+                    && $0.reabstractions == info.reabstractions
+                    && $0.optionalWrapper == info.optionalWrapper
+                }) })
           else { return false }
+        } else {
+          firstPlan = plan
         }
       }
     }
   }
   return true
-}
-
-private func splitIncompatiblePayloadMerges(
-  in pullback: Function, vjp: Function, closureInfos: [ClosureInBTE],
-  enumDict: SpecializedBTEMap, _ context: FunctionPassContext
-) {
-  let enumToPayload = findEnumsAndPayloadsInVjp(vjp: vjp)
-  for bb in Array(pullback.blocks) {
-    guard let (arg, _, _) = getBTEPayloadArgOfPbBBInfo(bb, vjp: vjp) else { continue }
-    let disposition = payloadMergeDisposition(
-      bb, argIndex: arg.index, enumToPayload: enumToPayload,
-      closureInfos: closureInfos, enumDict: enumDict, vjp: vjp)
-    assert(disposition != .unsupported)
-    guard disposition == .split else { continue }
-    if let returnInst = bb.terminator as? ReturnInst {
-      // Keep the canonical single return when duplicating a terminal payload
-      // block. Each specialized path transfers its result to the shared exit.
-      let result = returnInst.returnedValue
-      let exit = context.splitBlock(before: returnInst)
-      let exitResult = exit.insertPhiArgument(
-        atPosition: 0, type: result.type, ownership: result.ownership, context)
-      returnInst.operands[0].set(to: exitResult, context)
-      Builder(atEndOf: bb, location: returnInst.location, context)
-        .createBranch(to: exit, arguments: [result])
-    }
-    // Eligibility has already established that this block is clonable. Use the
-    // shared block cloner so live-out values and successor phis are repaired.
-    let predecessors = Array(bb.predecessors)
-    for pred in predecessors.dropFirst() {
-      context.cloneBranchTarget(pred.terminator as! BranchInst)
-    }
-  }
 }
 
 private func findCorrespondingVJPPayloadTuple(
@@ -3237,9 +3166,6 @@ private struct PullbackSpecializationAgainstBTE {
 
     let vjp = autodiffSpecializationInfo.paiOfPullback.parentFunction
     restoreUnwrappedPayloadPhis(in: cloner.targetFunction, vjp: vjp, cloner.context)
-    splitIncompatiblePayloadMerges(
-      in: cloner.targetFunction, vjp: vjp, closureInfos: closureInfos,
-      enumDict: enumDict, cloner.context)
     let bbQueue = computeTopologicalBlockOrder(of: cloner.targetFunction)
     let enumToPayload = findEnumsAndPayloadsInVjp(vjp: vjp)
 
