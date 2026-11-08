@@ -932,7 +932,7 @@ private func eraseDeadSpecializedClosures(
   context: FunctionPassContext
 ) -> Set<SingleValueInstruction> {
   var closuresSet = Set<SingleValueInstruction>()
-  var allocStacks = [AllocStackInst]()
+  var allocStacks = Set<AllocStackInst>()
 
   for closureInfo in closuresInBTE {
     if let pai = closureInfo.closure as? PartialApplyInst {
@@ -946,7 +946,7 @@ private func eraseDeadSpecializedClosures(
         // These invariants hold due to prior checks in Instruction.asSupportedClosure
         let allocStack = op.value as! AllocStackInst
         assert(allocStack.uses.count == 3)
-        allocStacks.append(allocStack)
+        allocStacks.insert(allocStack)
       }
     }
 
