@@ -1,0 +1,102 @@
+// RUN: %target-sil-opt -enable-sil-verify-all -autodiff-closure-specialization -sil-combine %s -o %t
+// RUN: %FileCheck %s --check-prefix=A < %t
+// RUN: %FileCheck %s --check-prefix=B < %t
+//
+// Supplementary reduced-SIL robustness regression. Unlike the source-derived
+// adcs_merged_payload.sil, this deliberately puts different callable identities
+// in equal-typed tuple fields on the incoming edges. Ordinary differentiation
+// uses a fixed field order for one original source block, but an optimizer must
+// not infer callable identity from that layout alone when accepting this SIL.
+// Keep this construction explicit rather than presenting it as emitted Swift.
+//
+// Specialization must retain direct calls on both paths. In particular, it must
+// not use one predecessor's closure ordering for the entire merged block.
+// A-LABEL: // specialized pullback of myfoo08
+// A-COUNT-2: function_ref @$s4test8closureAyS2fF
+// A-NOT: function_ref @$s4test8closureAyS2fF
+// A: } // end sil function
+// B-LABEL: // specialized pullback of myfoo08
+// B-COUNT-2: function_ref @$s4test8closureByS2fF
+// B-NOT: function_ref @$s4test8closureByS2fF
+// B: } // end sil function
+
+sil_stage canonical
+import Builtin
+import Swift
+import SwiftShims
+
+enum _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_0_1 {
+  case bb0(((Float) -> (Float, Float), (Float) -> (Float, Float)))
+}
+enum _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb2__Pred__src_0_wrt_0_1 {
+  case bb0(((Float) -> (Float, Float), (Float) -> (Float, Float)))
+}
+enum _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb3__Pred__src_0_wrt_0_1 {
+  case bb1((predecessor: _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_0_1, ()))
+  case bb2((predecessor: _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb2__Pred__src_0_wrt_0_1, ()))
+}
+sil @$s4test8closureAyS2fF : $@convention(thin) (Float) -> (Float, Float) {
+bb0(%s : $Float):
+  %r = tuple (%s, %s)
+  return %r : $(Float, Float)
+}
+sil @$s4test8closureByS2fF : $@convention(thin) (Float) -> (Float, Float) {
+bb0(%s : $Float):
+  %v = struct_extract %s : $Float, #Float._value
+  %zero = float_literal $Builtin.FPIEEE32, 0x0
+  %neg = builtin "fsub_FPIEEE32"(%zero : $Builtin.FPIEEE32, %v : $Builtin.FPIEEE32) : $Builtin.FPIEEE32
+  %n = struct $Float (%neg : $Builtin.FPIEEE32)
+  %r = tuple (%n, %n)
+  return %r : $(Float, Float)
+}
+sil [ossa] @$s3outyycfU6_7myfoo08L_yS2f_SftFTJrSSpSr : $@convention(thin) (Float, Float) -> (Float, @owned @callee_guaranteed (Float) -> (Float, Float)) {
+bb0(%x : $Float, %y : $Float):
+  %fa = function_ref @$s4test8closureAyS2fF : $@convention(thin) (Float) -> (Float, Float)
+  %a = thin_to_thick_function %fa : $@convention(thin) (Float) -> (Float, Float) to $@callee_guaranteed (Float) -> (Float, Float)
+  %fb = function_ref @$s4test8closureByS2fF : $@convention(thin) (Float) -> (Float, Float)
+  %b = thin_to_thick_function %fb : $@convention(thin) (Float) -> (Float, Float) to $@callee_guaranteed (Float) -> (Float, Float)
+  %xv = struct_extract %x : $Float, #Float._value
+  %yv = struct_extract %y : $Float, #Float._value
+  %c = builtin "fcmp_olt_FPIEEE32"(%xv : $Builtin.FPIEEE32, %yv : $Builtin.FPIEEE32) : $Builtin.Int1
+  %empty = tuple ()
+  cond_br %c, bb1, bb2
+bb1:
+  %ab = tuple (%a, %b), forwarding: @owned
+  %e1 = enum $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_0_1, #_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_0_1.bb0!enumelt, %ab
+  %p1 = tuple $(predecessor: _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_0_1, ()) (%e1, %empty)
+  %t1 = enum $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb3__Pred__src_0_wrt_0_1, #_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb3__Pred__src_0_wrt_0_1.bb1!enumelt, %p1
+  br bb3(%t1)
+bb2:
+  %ba = tuple (%b, %a), forwarding: @owned
+  %e2 = enum $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb2__Pred__src_0_wrt_0_1, #_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb2__Pred__src_0_wrt_0_1.bb0!enumelt, %ba
+  %p2 = tuple $(predecessor: _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb2__Pred__src_0_wrt_0_1, ()) (%e2, %empty)
+  %t2 = enum $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb3__Pred__src_0_wrt_0_1, #_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb3__Pred__src_0_wrt_0_1.bb2!enumelt, %p2
+  br bb3(%t2)
+bb3(%t : @owned $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb3__Pred__src_0_wrt_0_1):
+  %pb = function_ref @$s3outyycfU6_7myfoo08L_yS2f_SftFTJpSSpSr : $@convention(thin) (Float, @owned _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb3__Pred__src_0_wrt_0_1) -> (Float, Float)
+  %closure = partial_apply [callee_guaranteed] %pb(%t) : $@convention(thin) (Float, @owned _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb3__Pred__src_0_wrt_0_1) -> (Float, Float)
+  %r = tuple (%x, %closure)
+  return %r : $(Float, @callee_guaranteed (Float) -> (Float, Float))
+}
+sil private [ossa] @$s3outyycfU6_7myfoo08L_yS2f_SftFTJpSSpSr : $@convention(thin) (Float, @owned _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb3__Pred__src_0_wrt_0_1) -> (Float, Float) {
+bb0(%s : $Float, %t : @owned $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb3__Pred__src_0_wrt_0_1):
+  switch_enum %t : $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb3__Pred__src_0_wrt_0_1, case #_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb3__Pred__src_0_wrt_0_1.bb1!enumelt: bb1, case #_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb3__Pred__src_0_wrt_0_1.bb2!enumelt: bb2
+bb1(%p1 : @owned $(predecessor: _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_0_1, ())):
+  (%e1, %empty1) = destructure_tuple %p1 : $(predecessor: _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_0_1, ())
+  %ab = unchecked_enum_data %e1 : $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_0_1, #_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__src_0_wrt_0_1.bb0!enumelt
+  br bb3(%ab)
+bb2(%p2 : @owned $(predecessor: _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb2__Pred__src_0_wrt_0_1, ())):
+  (%e2, %empty2) = destructure_tuple %p2 : $(predecessor: _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb2__Pred__src_0_wrt_0_1, ())
+  %ba = unchecked_enum_data %e2 : $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb2__Pred__src_0_wrt_0_1, #_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb2__Pred__src_0_wrt_0_1.bb0!enumelt
+  br bb3(%ba)
+bb3(%payload : @owned $(@callee_guaranteed (Float) -> (Float, Float), @callee_guaranteed (Float) -> (Float, Float))):
+  (%a, %b) = destructure_tuple %payload : $(@callee_guaranteed (Float) -> (Float, Float), @callee_guaranteed (Float) -> (Float, Float))
+  %ra = apply %a(%s) : $@callee_guaranteed (Float) -> (Float, Float)
+  destroy_value %a : $@callee_guaranteed (Float) -> (Float, Float)
+  %rb = apply %b(%s) : $@callee_guaranteed (Float) -> (Float, Float)
+  destroy_value %b : $@callee_guaranteed (Float) -> (Float, Float)
+  %av = tuple_extract %ra : $(Float, Float), 0
+  %bv = tuple_extract %rb : $(Float, Float), 0
+  %r = tuple (%av, %bv)
+  return %r : $(Float, Float)
+}

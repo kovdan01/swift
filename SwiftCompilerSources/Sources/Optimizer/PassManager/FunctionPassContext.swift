@@ -62,6 +62,16 @@ struct FunctionPassContext : MutatingContext {
     bridgedPassContext.updateAnalysis()
   }
 
+  func canCloneBranchTarget(_ branch: BranchInst) -> Bool {
+    bridgedPassContext.canCloneBranchTarget(branch.bridged)
+  }
+
+  func cloneBranchTarget(_ branch: BranchInst) {
+    notifyInstructionsChanged()
+    notifyBranchesChanged()
+    bridgedPassContext.cloneBranchTarget(branch.bridged)
+  }
+
   func notifyNewFunction(function: Function, derivedFrom: Function) {
     bridgedPassContext.addFunctionToPassManagerWorklist(function.bridged, derivedFrom.bridged)
   }
