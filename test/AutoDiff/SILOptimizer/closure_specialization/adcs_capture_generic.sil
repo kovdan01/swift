@@ -1,0 +1,192 @@
+// RUN: %target-sil-opt -enable-sil-verify-all -autodiff-closure-specialization %s -o - | %FileCheck %s
+
+// Generated from validation-test/closure_specialization/adcs_capture_generic.swift
+// immediately before AutoDiff closure specialization, then reduced to the generic
+// VJP, its pullback, and its custom derivative closure. In particular, the generic
+// substitution on the root partial_apply is compiler-generated.
+
+sil_stage canonical
+import Builtin
+import Swift
+import SwiftShims
+import _Differentiation
+
+// CHECK-LABEL: // reverse-mode derivative of genericBranch<A>
+// CHECK-NOT: } // end sil function
+// CHECK: // function_ref specialized pullback of genericBranch<A>
+// CHECK-NEXT: %[[PB:[0-9]+]] = function_ref
+// CHECK-NEXT: %[[PULLBACK:[0-9]+]] = partial_apply {{.*}} %[[PB]]{{[<(]}}
+// CHECK-NEXT: %[[RESULT:[0-9]+]] = tuple (%{{[0-9]+}}, %[[PULLBACK]])
+// CHECK-NOT: } // end sil function
+// CHECK: return %[[RESULT]]
+// CHECK-NEXT: } // end sil function
+
+// CHECK-LABEL: // specialized pullback of genericBranch<A>
+// CHECK: function_ref [[CLOSURE:@.*vjpTagged.*]] : $@convention(thin) <
+// CHECK: apply {{.*}}<{{.*}}>(
+// CHECK-NOT: apply {{.*}} : $@callee_guaranteed
+// CHECK: } // end sil function
+
+enum _AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb0__Pred__src_0_wrt_0_l<τ_0_0> {
+}
+
+enum _AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb1__Pred__src_0_wrt_0_l<τ_0_0> {
+  case bb0(())
+}
+
+enum _AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb2__Pred__src_0_wrt_0_l<τ_0_0> {
+  case bb0(())
+}
+
+enum _AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb3__Pred__src_0_wrt_0_l<τ_0_0> {
+  case bb2((predecessor: _AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb2__Pred__src_0_wrt_0_l<τ_0_0>, (Float) -> Float, (Float) -> (Float, Float)))
+  case bb1((predecessor: _AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb1__Pred__src_0_wrt_0_l<τ_0_0>, (Float) -> Float))
+}
+
+sil @$s20adcs_capture_generic6taggedyS2f_xmtlF : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> Float
+sil @$s20adcs_capture_generic6taggedyS2f_xmtlFlTJfSUpSr : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> (Float, @owned @callee_guaranteed (Float) -> Float)
+sil @$s20adcs_capture_generic6taggedyS2f_xmtlFlTJrSUpSr : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> (Float, @owned @callee_guaranteed (Float) -> Float)
+sil @$sSf16_DifferentiationE7_vjpAdd3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float) -> (Float, Float)
+
+sil private [heuristic_always_inline] [ossa] @$s20adcs_capture_generic9vjpTaggedySf5value_S2fc8pullbacktSf_xmtlFS2fcfU_ : $@convention(thin) <T> (Float, @thick T.Type) -> Float {
+[global: ]
+// %0 "seed"                                      // users: %10, %15, %2
+// %1 "tag"                                       // users: %4, %3
+bb0(%0 : $Float, %1 : @closureCapture $@thick T.Type):
+  %4 = init_existential_metatype %1, $@thick any (~Copyable & ~Escapable).Type // user: %7
+  %5 = metatype $@thick Int.Type                  // user: %6
+  %6 = init_existential_metatype %5, $@thick any (~Copyable & ~Escapable).Type // user: %7
+  %7 = builtin "is_same_metatype"(%4, %6) : $Builtin.Int1 // user: %8
+  cond_br %7, bb1, bb2                            // id: %8
+
+bb1:                                              // Preds: bb0
+  %9 = float_literal $Builtin.FPIEEE32, 0x40000000 // 2 // user: %11
+  %10 = struct_extract %0, #Float._value          // user: %11
+  %11 = builtin "fmul_FPIEEE32"(%9, %10) : $Builtin.FPIEEE32 // user: %12
+  %12 = struct $Float (%11)                       // user: %13
+  br bb3(%12)                                     // id: %13
+
+bb2:                                              // Preds: bb0
+  %14 = float_literal $Builtin.FPIEEE32, 0x40400000 // 3 // user: %16
+  %15 = struct_extract %0, #Float._value          // user: %16
+  %16 = builtin "fmul_FPIEEE32"(%14, %15) : $Builtin.FPIEEE32 // user: %17
+  %17 = struct $Float (%16)                       // user: %18
+  br bb3(%17)                                     // id: %18
+
+// %19                                            // user: %20
+bb3(%19 : $Float):                                // Preds: bb2 bb1
+  return %19                                      // id: %20
+} // end sil function '$s20adcs_capture_generic9vjpTaggedySf5value_S2fc8pullbacktSf_xmtlFS2fcfU_'
+
+sil [ossa] @$s20adcs_capture_generic0C6BranchyS2f_xmSbtlFlTJrSUUpSr : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type, Bool) -> (Float, @owned @callee_guaranteed (Float) -> Float) {
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0                                             // users: %20, %18, %37, %35, %41, %3
+// %1                                             // users: %22, %20, %19, %39, %37, %36, %4
+// %2                                             // users: %6, %5
+bb0(%0 : $Float, %1 : $@thick τ_0_0.Type, %2 : $Bool):
+  %6 = struct_extract %2, #Bool._value            // user: %8
+  %7 = tuple ()                                   // users: %26, %9
+  cond_br %6, bb1, bb2                            // id: %8
+
+bb1:                                              // Preds: bb0
+  %9 = enum $_AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb1__Pred__src_0_wrt_0_l<τ_0_0>, #_AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb1__Pred__src_0_wrt_0_l.bb0!enumelt, %7 // user: %23
+  // function_ref tagged<A>(_:_:)
+  %10 = function_ref @$s20adcs_capture_generic6taggedyS2f_xmtlF : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> Float // users: %20, %11
+  %11 = partial_apply [callee_guaranteed] %10<τ_0_0>() : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> Float // user: %16
+  // function_ref forward-mode derivative of tagged<A>(_:_:)
+  %12 = function_ref @$s20adcs_capture_generic6taggedyS2f_xmtlFlTJfSUpSr : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> (Float, @owned @callee_guaranteed (Float) -> Float) // user: %13
+  %13 = partial_apply [callee_guaranteed] %12<τ_0_0>() : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> (Float, @owned @callee_guaranteed (Float) -> Float) // user: %16
+  // function_ref reverse-mode derivative of tagged<A>(_:_:)
+  %14 = function_ref @$s20adcs_capture_generic6taggedyS2f_xmtlFlTJrSUpSr : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> (Float, @owned @callee_guaranteed (Float) -> Float) // user: %15
+  %15 = partial_apply [callee_guaranteed] %14<τ_0_0>() : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> (Float, @owned @callee_guaranteed (Float) -> Float) // user: %16
+  %16 = differentiable_function [parameters 0] [results 0] %11 with_derivative {%13, %15} // user: %17
+  destroy_value %16                               // id: %17
+  %20 = apply %10<τ_0_0>(%0, %1) : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> Float // user: %25
+  // function_ref closure #1 in vjpTagged<A>(_:_:)
+  %21 = function_ref @$s20adcs_capture_generic9vjpTaggedySf5value_S2fc8pullbacktSf_xmtlFS2fcfU_ : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> Float // user: %22
+  %22 = partial_apply [callee_guaranteed] %21<τ_0_0>(%1) : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> Float // user: %23
+  %23 = tuple $(predecessor: _AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb1__Pred__src_0_wrt_0_l<τ_0_0>, @callee_guaranteed (Float) -> Float) (%9, %22) // user: %24
+  %24 = enum $_AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb3__Pred__src_0_wrt_0_l<τ_0_0>, #_AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb3__Pred__src_0_wrt_0_l.bb1!enumelt, %23 // user: %25
+  br bb3(%20, %24)                                // id: %25
+
+bb2:                                              // Preds: bb0
+  %26 = enum $_AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb2__Pred__src_0_wrt_0_l<τ_0_0>, #_AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb2__Pred__src_0_wrt_0_l.bb0!enumelt, %7 // user: %46
+  // function_ref tagged<A>(_:_:)
+  %27 = function_ref @$s20adcs_capture_generic6taggedyS2f_xmtlF : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> Float // users: %37, %28
+  %28 = partial_apply [callee_guaranteed] %27<τ_0_0>() : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> Float // user: %33
+  // function_ref forward-mode derivative of tagged<A>(_:_:)
+  %29 = function_ref @$s20adcs_capture_generic6taggedyS2f_xmtlFlTJfSUpSr : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> (Float, @owned @callee_guaranteed (Float) -> Float) // user: %30
+  %30 = partial_apply [callee_guaranteed] %29<τ_0_0>() : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> (Float, @owned @callee_guaranteed (Float) -> Float) // user: %33
+  // function_ref reverse-mode derivative of tagged<A>(_:_:)
+  %31 = function_ref @$s20adcs_capture_generic6taggedyS2f_xmtlFlTJrSUpSr : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> (Float, @owned @callee_guaranteed (Float) -> Float) // user: %32
+  %32 = partial_apply [callee_guaranteed] %31<τ_0_0>() : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> (Float, @owned @callee_guaranteed (Float) -> Float) // user: %33
+  %33 = differentiable_function [parameters 0] [results 0] %28 with_derivative {%30, %32} // user: %34
+  destroy_value %33                               // id: %34
+  %37 = apply %27<τ_0_0>(%0, %1) : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> Float // user: %40
+  // function_ref closure #1 in vjpTagged<A>(_:_:)
+  %38 = function_ref @$s20adcs_capture_generic9vjpTaggedySf5value_S2fc8pullbacktSf_xmtlFS2fcfU_ : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> Float // user: %39
+  %39 = partial_apply [callee_guaranteed] %38<τ_0_0>(%1) : $@convention(thin) <τ_0_0> (Float, @thick τ_0_0.Type) -> Float // user: %46
+  %40 = struct_extract %37, #Float._value         // user: %42
+  %41 = struct_extract %0, #Float._value          // user: %42
+  %42 = builtin "fadd_FPIEEE32"(%40, %41) : $Builtin.FPIEEE32 // user: %43
+  %43 = struct $Float (%42)                       // user: %48
+  // function_ref closure #1 in static Float._vjpAdd(lhs:rhs:)
+  %44 = function_ref @$sSf16_DifferentiationE7_vjpAdd3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float) -> (Float, Float) // user: %45
+  %45 = thin_to_thick_function %44 to $@callee_guaranteed (Float) -> (Float, Float) // user: %46; ownership: none
+  %46 = tuple $(predecessor: _AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb2__Pred__src_0_wrt_0_l<τ_0_0>, @callee_guaranteed (Float) -> Float, @callee_guaranteed (Float) -> (Float, Float)) (%26, %39, %45) // user: %47
+  %47 = enum $_AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb3__Pred__src_0_wrt_0_l<τ_0_0>, #_AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb3__Pred__src_0_wrt_0_l.bb2!enumelt, %46 // user: %48
+  br bb3(%43, %47)                                // id: %48
+
+// %49                                            // user: %53
+// %50                                            // user: %52
+bb3(%49 : $Float, %50 : @owned $_AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb3__Pred__src_0_wrt_0_l<τ_0_0>): // Preds: bb2 bb1
+  // function_ref pullback of genericBranch<A>(_:_:_:)
+  %51 = function_ref @$s20adcs_capture_generic0C6BranchyS2f_xmSbtlFlTJpSUUpSr : $@convention(thin) <τ_0_0> (Float, @owned _AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb3__Pred__src_0_wrt_0_l<τ_0_0>) -> Float // user: %52
+  %52 = partial_apply [callee_guaranteed] %51<τ_0_0>(%50) : $@convention(thin) <τ_0_0> (Float, @owned _AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb3__Pred__src_0_wrt_0_l<τ_0_0>) -> Float // user: %53
+  %53 = tuple (%49, %52)                          // user: %54
+  return %53                                      // id: %54
+} // end sil function '$s20adcs_capture_generic0C6BranchyS2f_xmSbtlFlTJrSUUpSr'
+
+sil private [ossa] @$s20adcs_capture_generic0C6BranchyS2f_xmSbtlFlTJpSUUpSr : $@convention(thin) <τ_0_0> (Float, @owned _AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb3__Pred__src_0_wrt_0_l<τ_0_0>) -> Float {
+[%0: read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[%1: noescape v**, read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0                                             // users: %28, %9
+// %1                                             // user: %4
+bb0(%0 : $Float, %1 : @owned $_AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb3__Pred__src_0_wrt_0_l<τ_0_0>):
+  %2 = float_literal $Builtin.FPIEEE32, 0x0 // 0  // users: %14, %3, %17, %31
+  switch_enum %1, case #_AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb3__Pred__src_0_wrt_0_l.bb2!enumelt: bb1, case #_AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb3__Pred__src_0_wrt_0_l.bb1!enumelt: bb2 // id: %4
+
+// %5                                             // user: %6
+bb1(%5 : @owned $(predecessor: _AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb2__Pred__src_0_wrt_0_l<τ_0_0>, @callee_guaranteed (Float) -> Float, @callee_guaranteed (Float) -> (Float, Float))): // Preds: bb0
+  (%6, %7, %8) = destructure_tuple %5             // users: %19, %18, %10, %9
+  %9 = apply %8(%0) : $@callee_guaranteed (Float) -> (Float, Float) // users: %12, %11
+  destroy_value %8                                // id: %10
+  %11 = tuple_extract %9, 0                       // user: %13
+  %12 = tuple_extract %9, 1                       // user: %16
+  %13 = struct_extract %11, #Float._value         // user: %14
+  %14 = builtin "fadd_FPIEEE32"(%13, %2) : $Builtin.FPIEEE32 // user: %15
+  %15 = struct $Float (%14)                       // user: %18
+  %16 = struct_extract %12, #Float._value         // user: %17
+  %17 = builtin "fadd_FPIEEE32"(%16, %2) : $Builtin.FPIEEE32 // user: %21
+  %18 = apply %7(%15) : $@callee_guaranteed (Float) -> Float // user: %20
+  destroy_value %7                                // id: %19
+  %20 = struct_extract %18, #Float._value         // user: %21
+  %21 = builtin "fadd_FPIEEE32"(%20, %17) : $Builtin.FPIEEE32 // user: %22
+  %22 = struct $Float (%21)                       // users: %24, %23
+  br bb3(%22)                                     // id: %24
+
+// %25                                            // user: %26
+bb2(%25 : @owned $(predecessor: _AD__$s20adcs_capture_generic0C6BranchyS2f_xmSbtlF_bb1__Pred__src_0_wrt_0_l<τ_0_0>, @callee_guaranteed (Float) -> Float)): // Preds: bb0
+  (%26, %27) = destructure_tuple %25              // users: %29, %28
+  %28 = apply %27(%0) : $@callee_guaranteed (Float) -> Float // user: %30
+  destroy_value %27                               // id: %29
+  %30 = struct_extract %28, #Float._value         // user: %31
+  %31 = builtin "fadd_FPIEEE32"(%30, %2) : $Builtin.FPIEEE32 // user: %32
+  %32 = struct $Float (%31)                       // users: %34, %33
+  br bb3(%32)                                     // id: %34
+
+// %35                                            // users: %37, %36
+bb3(%35 : $Float):                                // Preds: bb1 bb2
+  return %35                                      // id: %37
+} // end sil function '$s20adcs_capture_generic0C6BranchyS2f_xmSbtlFlTJpSUUpSr'
