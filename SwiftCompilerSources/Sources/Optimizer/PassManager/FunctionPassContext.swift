@@ -189,6 +189,48 @@ struct FunctionPassContext : MutatingContext {
         arg.bridged, argIdx, pullback.bridged))
   }
 
+  func mangle(
+    withSpecializedBranchTracingEnum enumType: Type, argIdx: Int,
+    closuresInBTE: [ClosureInBTE], from pullback: Function
+  ) -> String {
+    var descriptors = [BridgedPassContext.AutoDiffClosureMangling]()
+    for info in closuresInBTE {
+      let chain: [SingleValueInstruction] = [info.closure] + info.reabstractions
+      for (chainIndex, closure) in chain.enumerated() {
+        descriptors.append(BridgedPassContext.AutoDiffClosureMangling(
+          enumType: info.enumCase.enumType.bridged,
+          caseIndex: info.enumCase.index, payloadIndex: info.indexInPayload,
+          chainIndex: chainIndex, closure: closure.bridged,
+          optionalCaseIndex: info.optionalWrapper?.caseIndex ?? -1))
+      }
+    }
+    return descriptors.withBridgedArrayRef {
+      String(taking: bridgedPassContext.mangleWithAutoDiffBranchTracingEnumSchema(
+        enumType.bridged, argIdx, $0, pullback.bridged))
+    }
+  }
+
+  func lookupAutoDiffSpecializedBranchTracingEnum(schema: AST.`Type`, in vjp: Function) -> EnumDecl? {
+    bridgedPassContext.lookupAutoDiffSpecializedBranchTracingEnum(
+      schema.bridged, vjp.bridged).getAs(EnumDecl.self)
+  }
+
+  func mangleAutoDiffSpecializedBranchTracingEnum(
+    prefix: String, schema: AST.`Type`, in vjp: Function
+  ) -> String {
+    prefix._withBridgedStringRef {
+      String(taking: bridgedPassContext.mangleAutoDiffSpecializedBranchTracingEnum(
+        $0, schema.bridged, vjp.bridged))
+    }
+  }
+
+  func registerAutoDiffSpecializedBranchTracingEnum(
+    _ decl: EnumDecl, schema: AST.`Type`, in vjp: Function
+  ) {
+    bridgedPassContext.registerAutoDiffSpecializedBranchTracingEnum(
+      decl.bridged, schema.bridged, vjp.bridged)
+  }
+
   func createSpecializedFunctionDeclaration(
     from original: Function, withName specializedFunctionName: String,
     withParams specializedParameters: [ParameterInfo],
