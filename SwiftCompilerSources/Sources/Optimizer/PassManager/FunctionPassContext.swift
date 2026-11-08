@@ -183,12 +183,6 @@ struct FunctionPassContext : MutatingContext {
     String(taking: bridgedPassContext.mangleWithChangedRepresentation(original.bridged))
   }
 
-  func mangle(withBranchTracingEnum arg: Value, argIdx: Int, from pullback: Function) -> String {
-    String(
-      taking: bridgedPassContext.mangleWithAutoDiffBranchTracingEnum(
-        arg.bridged, argIdx, pullback.bridged))
-  }
-
   func mangle(
     withSpecializedBranchTracingEnum enumType: Type, argIdx: Int,
     closuresInBTE: [ClosureInBTE], from pullback: Function
