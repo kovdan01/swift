@@ -13,6 +13,7 @@
 #include "swift/SILOptimizer/Utils/DifferentiationMangler.h"
 #include "swift/AST/AutoDiff.h"
 #include "swift/AST/GenericSignature.h"
+#include "swift/Demangling/ManglingMacros.h"
 
 using namespace swift;
 using namespace Mangle;
@@ -195,4 +196,31 @@ std::string DifferentiationMangler::mangleLinearMapSubsetParametersThunk(
   appendIndexSubset(toParamIndices);
   appendOperator("P");
   return finalize();
+}
+
+// See ASTMangler::mangleAutoDiffGeneratedDeclaration for the generated schema.
+bool swift::isAutoDiffBranchTracingEnum(SILType type, SILFunction *vjp) {
+  auto *decl = type.getEnumDecl();
+  if (!decl)
+    return false;
+
+  StringRef name = decl->getNameStr();
+  if (!name.consume_front("_AD__" MANGLING_PREFIX_STR))
+    return false;
+  auto predecessor = name.rfind("__Pred__");
+  if (predecessor == StringRef::npos)
+    return false;
+  StringRef prefix = name.take_front(predecessor);
+  auto block = prefix.rfind("_bb");
+  if (block == StringRef::npos)
+    return false;
+  StringRef number = prefix.drop_front(block + 3);
+  if (number.empty() || number.find_first_not_of("0123456789") != StringRef::npos)
+    return false;
+
+  Demangle::Context context;
+  if (auto *root = context.demangleSymbolAsNode(vjp->getName()))
+    if (auto *function = root->findByKind(Demangle::Node::Kind::Function, 3))
+      return mangleNode(function).result() == prefix.take_front(block);
+  return false;
 }
