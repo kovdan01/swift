@@ -1490,11 +1490,24 @@ private func rewriteApplyUse(
     in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx)
   {
     let consumesClosure = ai.operands[ApplyOperandConventions.calleeIndex].endsLifetime
+    var borrow: BeginBorrowInst? = nil
     let captures: Value
     let useTupleExtract: Bool
     if result.type.isTrivial(in: ai.parentFunction) {
       captures = result
       useTupleExtract = rewriteCtx.useTei
+    } else if closureInfo.reabstractions.isEmpty,
+              let partialApply = closureInfo.closure as? PartialApplyInst,
+              partialApply.argumentOperands.allSatisfy({ operand in
+                !operand.value.type.isAddress && !partialApply.convention(of: operand)!.isConsumed
+              }) {
+      // A borrowed closure call only borrows its context. Project guaranteed
+      // captures inside the same borrow instead of consuming that context once
+      // for every invocation, or introducing an unnecessary retain/release.
+      let borrowedCaptures = builder.createBeginBorrow(of: result)
+      borrow = borrowedCaptures
+      captures = borrowedCaptures
+      useTupleExtract = true
     } else {
       // Rebuilding a closure or forwarding a consumed/indirect capture requires
       // owned values. Consume a fresh copy, preserving the original context for
@@ -1508,6 +1521,9 @@ private func rewriteApplyUse(
       ai: ai, closureInfo: closureInfo, extractedElements: extractedElements,
       builder: builder, context)
     let afterApply = Builder(after: newApply, context)
+    if let borrow {
+      afterApply.createEndBorrow(of: borrow)
+    }
     if consumesClosure && !result.type.isTrivial(in: newApply.parentFunction) {
       afterApply.createDestroyValue(operand: result)
     }
