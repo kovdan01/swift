@@ -1,34 +1,17 @@
-// RUN: %target-sil-opt -sil-print-types -enable-sil-verify-all -autodiff-closure-specialization %s -o - | %FileCheck %s
-// RUN: %target-sil-opt -sil-print-types -enable-sil-verify-all -autodiff-closure-specialization -sil-combine %s -o - | %FileCheck %s --check-prefix=COMBINED
+// RUN: %target-sil-opt -sil-print-types -enable-sil-verify-all -autodiff-closure-specialization %s -o - | %FileCheck %s --implicit-check-not='_AD__{{.*}}_spec'
 
-// Supplemental reduced SIL robustness case. The corresponding source-derived
-// coverage is adcs_covariant_helper.{swift,sil}. Its helper closure conversion
-// is valid source, while the class-covariant pullback result below is not emitted
-// by the current differentiator: TangentVector requires AdditiveArithmetic, and
-// its inout Self requirements prevent a non-final tangent-class conformance.
-// Preserve the class result adaptation while specializing the outer tape field;
-// every rewritten apply must retain a result type compatible with its callee.
+// Reduced unsupported-SIL boundary. The representative source pair is
+// adcs_covariant_helper.{swift,sil}: covariance occurs in its helper function,
+// while its taped pullback is invoked with the stored type. A class-covariant
+// pullback result cannot be formed by a non-final AdditiveArithmetic tangent.
+// Reject this extra conversion before creating specialized enum declarations.
 
-// CHECK: enum {{.*}}_spec
-// CHECK-LABEL: // specialized pullback of
-// CHECK: function_ref @makeB
-// CHECK: %[[CONVERTED:[0-9]+]] = convert_function {{.*}} -> @owned B to $@callee_guaranteed (Float) -> @owned A
-// CHECK: %[[BORROW:[0-9]+]] = begin_borrow %[[CONVERTED]]
-// CHECK: apply %[[BORROW]]({{.*}}) : $@callee_guaranteed (Float) -> @owned A
-// CHECK: destroy_value %[[CONVERTED]]
+// CHECK-LABEL: sil [ossa] @$s3outyycfU6_7myfoo08L_yS2f_SftFTJpSUpSr
+// CHECK: convert_function {{.*}} to $@callee_guaranteed (Float) -> @owned A
+// CHECK: begin_borrow
+// CHECK: apply {{.*}} : $@callee_guaranteed (Float) -> @owned A
+// CHECK: destroy_value
 // CHECK: } // end sil function
-
-// COMBINED: enum {{.*}}_spec
-// COMBINED-LABEL: // specialized pullback of
-// COMBINED-NOT: = partial_apply
-// COMBINED-NOT: = convert_function
-// COMBINED: %[[MAKE:[0-9]+]] = function_ref @makeB
-// COMBINED: %[[RESULT:[0-9]+]] = apply %[[MAKE]]({{.*}}) : $@convention(thin) (Float) -> @owned B
-// COMBINED-NEXT: %[[UPCAST:[0-9]+]] = upcast %[[RESULT]] : $B to $A
-// COMBINED-NOT: = partial_apply
-// COMBINED-NOT: = convert_function
-// COMBINED: return %[[UPCAST]] : $A
-// COMBINED: } // end sil function
 
 sil_stage canonical
 import Builtin
