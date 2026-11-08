@@ -3119,8 +3119,44 @@ private struct PullbackSpecializationAgainstBTE {
     return (specializedPb, false)
   }
 
+  private typealias PayloadProjection = (
+    resultIdx: Int, oldResultUses: [Operand], replacementValue: Value
+  )
+
+  private func rebuildPayloadProjections(
+    of payload: Argument, context: FunctionPassContext
+  ) -> (values: [PayloadProjection], useTei: Bool, obsoleteDestructure: DestructureTupleInst?) {
+    if let singleUse = payload.uses.singleUse,
+       let oldDti = singleUse.instruction as? DestructureTupleInst {
+      let builder = Builder(before: oldDti, context)
+      let newDti = builder.createDestructureTuple(tuple: oldDti.tuple)
+      let projections = oldDti.results.enumerated().map { resultIdx, result in
+        (
+          resultIdx: resultIdx,
+          oldResultUses: Array(result.uses),
+          replacementValue: newDti.results[resultIdx] as Value
+        )
+      }
+      // Keep the old consuming projection until all its result uses are rewritten.
+      return (projections, false, oldDti)
+    }
+
+    var projections = [PayloadProjection]()
+    for use in Array(payload.uses) {
+      let oldTei = use.instruction as! TupleExtractInst
+      let builder = Builder(before: oldTei, context)
+      let newTei = builder.createTupleExtract(tuple: oldTei.tuple, elementIndex: oldTei.fieldIndex)
+      projections.append((
+        resultIdx: oldTei.fieldIndex,
+        oldResultUses: Array(oldTei.results[0].uses),
+        replacementValue: newTei.results[0]))
+      oldTei.replace(with: newTei, context)
+    }
+    return (projections, true, nil)
+  }
+
   private func rewriteProjectedPayloadValues(
-    projections: [(resultIdx: Int, oldResultUses: [Operand], replacementValue: Value)],
+    projections: [PayloadProjection],
     rewriteCtx: PayloadRewriteContext,
     context: FunctionPassContext
   ) {
@@ -3204,62 +3240,18 @@ private struct PullbackSpecializationAgainstBTE {
         successor.eraseArgument(at: oldArg.index, cloner.context)
       }
 
-      if let singleUse = newArg.uses.singleUse,
-        let oldDti = singleUse.instruction as? DestructureTupleInst
-      {
-        let builderBeforeOldDti = Builder(before: oldDti, cloner.context)
-        let newDti = builderBeforeOldDti.createDestructureTuple(tuple: oldDti.tuple)
-
-        let rewriteCtx = PayloadRewriteContext(
-          closureInfoArray: closureInfoArray,
-          useTei: false,
-          throwingSuccessor: throwingSuccessor)
-
-        let projections = oldDti.results.enumerated().map { resultIdx, result in
-          (
-            resultIdx: resultIdx,
-            oldResultUses: Array(result.uses),
-            replacementValue: newDti.results[resultIdx] as Value
-          )
-        }
-
-        rewriteProjectedPayloadValues(
-          projections: projections,
-          rewriteCtx: rewriteCtx,
-          context: cloner.context)
-
-        cloner.context.erase(instruction: oldDti)
-        continue
-      }
-
+      let projections = rebuildPayloadProjections(of: newArg, context: cloner.context)
       let rewriteCtx = PayloadRewriteContext(
         closureInfoArray: closureInfoArray,
-        useTei: true,
+        useTei: projections.useTei,
         throwingSuccessor: throwingSuccessor)
-
-      let newArgUses = Array(newArg.uses)
-      var projections = [(resultIdx: Int, oldResultUses: [Operand], replacementValue: Value)]()
-
-      for newArgUse in newArgUses {
-        let oldTei = newArgUse.instruction as! TupleExtractInst
-        let builderBeforeOldTei = Builder(before: oldTei, cloner.context)
-        let newTei = builderBeforeOldTei.createTupleExtract(
-          tuple: oldTei.tuple, elementIndex: oldTei.fieldIndex)
-
-        projections.append(
-          (
-            resultIdx: oldTei.fieldIndex,
-            oldResultUses: Array(oldTei.results[0].uses),
-            replacementValue: newTei.results[0]
-          ))
-
-        oldTei.replace(with: newTei, cloner.context)
-      }
-
       rewriteProjectedPayloadValues(
-        projections: projections,
+        projections: projections.values,
         rewriteCtx: rewriteCtx,
         context: cloner.context)
+      if let oldDti = projections.obsoleteDestructure {
+        cloner.context.erase(instruction: oldDti)
+      }
     }
   }
 
