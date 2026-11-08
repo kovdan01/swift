@@ -695,8 +695,9 @@ private func classifyBeginBorrowPayloadUse(_ bbi: BeginBorrowInst)
   var endBorrowUse: Operand? = nil
   for bbiUse in bbi.uses {
     switch bbiUse.instruction {
-    case _ as ApplyInst:
-      guard applyUse == nil else {
+    case let ai as ApplyInst:
+      guard bbiUse == ai.operands[ApplyOperandConventions.calleeIndex],
+            applyUse == nil else {
         return nil
       }
       applyUse = bbiUse
@@ -718,6 +719,7 @@ private func classifyBeginBorrowPayloadUse(_ bbi: BeginBorrowInst)
 private func classifyClosurePayloadUse(_ use: Operand) -> ClosurePayloadUseShape? {
   switch use.instruction {
   case let ai as ApplyInst:
+    guard use == ai.operands[ApplyOperandConventions.calleeIndex] else { return nil }
     return .apply(ai)
   case let bbi as BeginBorrowInst:
     guard let classified = classifyBeginBorrowPayloadUse(bbi) else {
@@ -734,6 +736,7 @@ private func classifyClosurePayloadUse(_ use: Operand) -> ClosurePayloadUseShape
 private func classifyPayloadUse(_ use: Operand) -> PayloadUseShape? {
   switch use.instruction {
   case let ai as ApplyInst:
+    guard use == ai.operands[ApplyOperandConventions.calleeIndex] else { return nil }
     return .apply(ai)
   case let dvi as DestroyValueInst:
     return .destroyValue(dvi)
