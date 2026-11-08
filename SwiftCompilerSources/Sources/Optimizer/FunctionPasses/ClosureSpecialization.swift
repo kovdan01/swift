@@ -1274,7 +1274,7 @@ private func findMatchingClosureInfo(
 private func insertLifetimeEndIfNeeded(
   for value: Value, before insertionPoint: Instruction, _ context: FunctionPassContext
 ) {
-  if value.type.isTrivial(in: value.parentFunction) {
+  if value.type.isTrivial(in: value.parentFunction) || value.ownership != .owned {
     return
   }
   for use in value.uses {
@@ -1359,7 +1359,7 @@ private func rewriteBeginBorrowUse(
 private func rewriteApplyDirectClosure(
   ai: ApplyInst, closureInfo: ClosureInBTE, extractedElements: [Value],
   builder: Builder, _ context: FunctionPassContext
-) {
+) -> ApplyInst {
   if closureInfo.reabstractions.isEmpty {
     var capturedArguments = extractedElements
     var indirectCaptures = [(allocation: AllocStackInst, convention: ArgumentConvention, isTrivial: Bool)]()
@@ -1401,7 +1401,7 @@ private func rewriteApplyDirectClosure(
       insertLifetimeEndIfNeeded(for: res, before: newAi.parentBlock.terminator, context)
     }
 
-    return
+    return newAi
   }
 
   var extractedElements = extractedElements
@@ -1478,6 +1478,7 @@ private func rewriteApplyDirectClosure(
   for res in extractedElements {
     insertLifetimeEndIfNeeded(for: res, before: newAi.parentBlock.terminator, context)
   }
+  return newAi
 }
 
 private func rewriteApplyUse(
@@ -1488,11 +1489,28 @@ private func rewriteApplyUse(
   if let closureInfo = findMatchingClosureInfo(
     in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx)
   {
+    let consumesClosure = ai.operands[ApplyOperandConventions.calleeIndex].endsLifetime
+    let captures: Value
+    let useTupleExtract: Bool
+    if result.type.isTrivial(in: ai.parentFunction) {
+      captures = result
+      useTupleExtract = rewriteCtx.useTei
+    } else {
+      // Rebuilding a closure or forwarding a consumed/indirect capture requires
+      // owned values. Consume a fresh copy, preserving the original context for
+      // subsequent calls and for the original closure's lifetime-ending use.
+      captures = builder.createCopyValue(operand: result)
+      useTupleExtract = false
+    }
     let extractedElements = extractTupleElements(
-      from: result, useTupleExtract: rewriteCtx.useTei, builder: builder)
-    rewriteApplyDirectClosure(
+      from: captures, useTupleExtract: useTupleExtract, builder: builder)
+    let newApply = rewriteApplyDirectClosure(
       ai: ai, closureInfo: closureInfo, extractedElements: extractedElements,
       builder: builder, context)
+    let afterApply = Builder(after: newApply, context)
+    if consumesClosure && !result.type.isTrivial(in: newApply.parentFunction) {
+      afterApply.createDestroyValue(operand: result)
+    }
   } else {
     let newAi = builder.createApply(
       function: result, ai.substitutionMap, arguments: Array(ai.arguments))
@@ -1504,8 +1522,10 @@ private func rewriteDestroyValueUse(
   dvi: DestroyValueInst, resultIdx: Int,
   result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
 ) {
-  let isClosurePayload = rewriteCtx.closureInfoArray.contains { $0.indexInPayload == resultIdx }
-  if !isClosurePayload {
+  // A specialized field owns the captured values in place of the old closure
+  // context. Its destruction is still required even if the closure is never
+  // invoked, and must occur at the original lifetime-ending instruction.
+  if !result.type.isTrivial(in: dvi.parentFunction) {
     let builder = Builder(before: dvi, context)
     if dvi.parentFunction.hasOwnership {
       builder.createDestroyValue(operand: result)
