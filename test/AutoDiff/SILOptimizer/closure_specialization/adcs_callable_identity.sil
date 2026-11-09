@@ -2,11 +2,13 @@
 // RUN: %FileCheck %s < %t.sil
 // RUN: %FileCheck %s --check-prefix=TWICE < %t.sil
 // RUN: %FileCheck %s --check-prefix=TRIPLE < %t.sil
+// RUN: %FileCheck %s --check-prefix=ALIAS < %t.sil
 //
 // Supplemental callable-identity coverage. The two generated VJPs below share
 // one original pullback and exactly the same specialized payload layout, but
 // their eliminated closures call twice and threeTimes respectively. The final
-// VJP is an alias with the same body as the first, exercising exact-plan reuse.
+// VJP is an alias with the same body as the first. Pullbacks are scoped to
+// their originating VJP; identical bodies do not require cross-VJP reuse.
 //
 // Derived from a Swift callableBranch(x, body, flag) which branches between
 // applyLinear(x, body) and applyLinear(x, body) + x. applyLinear has a custom
@@ -22,7 +24,9 @@
 // CHECK-NOT: @[[TWICE_PB]]
 // CHECK: return
 // CHECK-LABEL: sil shared {{.*}}@$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJrSUUpSr04$s16A19Identity5twiceyS2fFTf1ncn_nTf4nn_n :
-// CHECK: function_ref @[[TWICE_PB]] : $@convention(thin) (Float, @owned [[LAYOUT]]) -> Float
+// CHECK-NOT: @[[TWICE_PB]]
+// CHECK-NOT: @[[TRIPLE_PB]]
+// CHECK: function_ref @[[ALIAS_PB:[^ ]+]] : $@convention(thin) (Float, @owned [[LAYOUT]]) -> Float
 //
 // Each generated body must call its own eliminated callable.
 // TWICE-LABEL: sil shared {{.*}}@$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJrSUUpSr04$s16A19Identity5twiceyS2fFTf1ncn_n :
@@ -36,6 +40,12 @@
 // TRIPLE: sil {{.*}} @[[PB]] :
 // TRIPLE-NOT: } // end sil function
 // TRIPLE: function_ref @$s16CallableIdentity10threeTimesyS2fF
+//
+// ALIAS-LABEL: sil shared {{.*}}@$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJrSUUpSr04$s16A19Identity5twiceyS2fFTf1ncn_nTf4nn_n :
+// ALIAS: function_ref @[[PB:[^ ]+]] : $@convention(thin) (Float, @owned {{.*}}_spec_{{.*}}) -> Float
+// ALIAS: sil {{.*}} @[[PB]] :
+// ALIAS-NOT: } // end sil function
+// ALIAS: function_ref @$s16CallableIdentity5twiceyS2fF
 
 sil_stage canonical
 

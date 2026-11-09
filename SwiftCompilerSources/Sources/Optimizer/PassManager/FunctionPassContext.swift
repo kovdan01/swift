@@ -211,27 +211,6 @@ struct FunctionPassContext : MutatingContext {
     String(taking: bridgedPassContext.mangleWithChangedRepresentation(original.bridged))
   }
 
-  func mangle(
-    withSpecializedBranchTracingEnum enumType: Type, argIdx: Int,
-    closuresInBTE: [ClosureInBTE], from pullback: Function
-  ) -> String {
-    var descriptors = [BridgedPassContext.AutoDiffClosureMangling]()
-    for info in closuresInBTE {
-      let chain: [SingleValueInstruction] = [info.closure] + info.reabstractions
-      for (chainIndex, closure) in chain.enumerated() {
-        descriptors.append(BridgedPassContext.AutoDiffClosureMangling(
-          enumType: info.enumCase.enumType.bridged,
-          caseIndex: info.enumCase.index, payloadIndex: info.indexInPayload,
-          chainIndex: chainIndex, closure: closure.bridged,
-          optionalCaseIndex: info.optionalWrapper?.caseIndex ?? -1))
-      }
-    }
-    return descriptors.withBridgedArrayRef {
-      String(taking: bridgedPassContext.mangleWithAutoDiffBranchTracingEnumSchema(
-        enumType.bridged, argIdx, $0, pullback.bridged))
-    }
-  }
-
   /// Makes sure that the lifetime of `value` ends at all control flow paths, even in dead-end blocks.
   /// Inserts destroys in dead-end blocks if those are missing.
   func completeLifetime(of value: Value) {

@@ -1636,7 +1636,7 @@ private struct AutoDiffSpecializationInfo {
     return context.mangle(
       withSpecializedBranchTracingEnum: specializedBTEDict[originalType]!,
       argIdx: paiOfPullback.calleeArgumentIndex(of: operand)!,
-      closuresInBTE: closuresInBTE, from: pullback)
+      in: vjp, from: pullback)
   }
 }
 
