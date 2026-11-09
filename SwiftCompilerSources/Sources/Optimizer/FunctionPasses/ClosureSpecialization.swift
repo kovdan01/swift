@@ -230,7 +230,7 @@ let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-special
   } while remainingSpecializationRounds > 0
 
   if !isSingleBB && bteSpecEligibility == .eligible {
-    let closureAnalysis = PullbackClosureAnalysis(vjp: function, context)
+    guard let closureAnalysis = PullbackClosureAnalysis(vjp: function) else { return }
 
     guard !closureAnalysis.closuresInBTE.isEmpty else {
       log(
@@ -3061,91 +3061,6 @@ private func getSpecializedBTEDict(closuresInBTE: [ClosureInBTE], paiOfPullback:
 
 private typealias SpecializedBTEMap = [Type: Type]
 
-private struct BTEClosureSlot: Hashable {
-  let enumType: Type
-  let caseIndex: Int
-  let payloadIndex: Int
-
-  init(_ info: ClosureInBTE, in vjp: Function) {
-    self.enumType = info.enumCase.enumType(in: vjp)
-    self.caseIndex = info.enumCase.index
-    self.payloadIndex = info.indexInPayload
-  }
-}
-
-// A pullback dispatches on the enum case, so every constructor of that bound
-// case must agree on the code that will rebuild a replaced closure field.
-// Capture values may differ: they remain data in the corresponding payload.
-// Retain an original closure field when any constructor has an unknown or
-// different plan, while continuing to specialize the other fields.
-private func consistentClosurePlansForBTEConstructors(
-  _ closureInfos: [ClosureInBTE], paiOfPullback: PartialApplyInst,
-  _ context: FunctionPassContext
-) -> [ClosureInBTE] {
-  let vjp = paiOfPullback.parentFunction
-  guard let enumOperand = paiOfPullback.argumentOperands.filter({
-    $0.value.type.isBranchTracingEnum(in: vjp)
-  }).singleElement,
-    let formalIndex = paiOfPullback.calleeArgumentIndex(of: enumOperand)
-  else { return [] }
-
-  var plansBySlot = [BTEClosureSlot: [TupleInst: Set<String>]]()
-  for info in closureInfos {
-    let slot = BTEClosureSlot(info, in: vjp)
-    // Reuse the complete canonical descriptor with one payload closure. This
-    // does not synthesize an enum or inspect capture data/SSA identity.
-    let key = context.mangle(
-      withSpecializedBranchTracingEnum: slot.enumType, argIdx: formalIndex,
-      closuresInBTE: [info], from: paiOfPullback.referencedFunction!)
-    plansBySlot[slot, default: [:]][info.payloadTuple, default: []].insert(key)
-  }
-
-  let enumToPayload = findEnumsAndPayloadsInVjp(vjp: vjp)
-  var consistentSlots = Set<BTEClosureSlot>()
-  for (slot, plansByPayload) in plansBySlot {
-    var firstKey: String? = nil
-    var consistent = true
-    for (enumInst, payload) in enumToPayload
-      where enumInst.type == slot.enumType && enumInst.caseIndex == slot.caseIndex
-    {
-      guard let keys = plansByPayload[payload], let key = keys.singleElement else {
-        // This constructor has no supported plan for the selected field, or
-        // several incompatible plans were attributed to the same payload.
-        consistent = false
-        break
-      }
-      if let firstKey, firstKey != key {
-        consistent = false
-        break
-      }
-      firstKey = key
-    }
-    if consistent && firstKey != nil {
-      consistentSlots.insert(slot)
-    }
-  }
-
-  // Captures can replace an allocation only when all its payload uses are
-  // replaced. A retained field keeps its original closure context alive, so
-  // do not also transfer that context's captures into another field. Removing
-  // a slot can retain another constructor's equivalent root; propagate until
-  // every remaining root can be replaced completely.
-  var removedSlot = false
-  repeat {
-    let retainedRoots = Set(closureInfos.filter {
-      !consistentSlots.contains(BTEClosureSlot($0, in: vjp))
-    }.map { $0.closure })
-    let retainedSlots = Set(closureInfos.filter {
-      retainedRoots.contains($0.closure)
-    }.map { BTEClosureSlot($0, in: vjp) })
-    let oldCount = consistentSlots.count
-    consistentSlots.subtract(retainedSlots)
-    removedSlot = consistentSlots.count != oldCount
-  } while removedSlot
-
-  return closureInfos.filter { consistentSlots.contains(BTEClosureSlot($0, in: vjp)) }
-}
-
 private struct PullbackClosureAnalysis {
   let paiOfPullback: PartialApplyInst
   let closuresInBTE: [ClosureInBTE]
@@ -3153,12 +3068,25 @@ private struct PullbackClosureAnalysis {
   var vjp: Function { paiOfPullback.parentFunction }
   var pullback: Function { paiOfPullback.referencedFunction! }
 
-  init(vjp: Function, _ context: FunctionPassContext) {
-    let paiOfPullback = getPartialApplyOfPullbackInExitVJPBB(vjp: vjp)!
+  init?(vjp: Function) {
+    guard let paiOfPullback = getPartialApplyOfPullbackInExitVJPBB(vjp: vjp) else { return nil }
+
+    // A pullback case identifies one VJP payload tuple. Distinct constructors
+    // sharing that case are only supported when CFG simplification duplicated
+    // an identical ordered list of saved SSA values. Decline different plans
+    // before synthesizing any specialized enum declarations.
+    var payloadsByCase = [Type: [Int: TupleInst]]()
+    for (enumInst, payload) in findEnumsAndPayloadsInVjp(vjp: vjp) {
+      let enumType = remapBranchTracingEnumType(enumInst.type, into: vjp)
+      if let previous = payloadsByCase[enumType]?[enumInst.caseIndex],
+         !previous.hasSamePayloadValues(as: payload) {
+        return nil
+      }
+      payloadsByCase[enumType, default: [:]][enumInst.caseIndex] = payload
+    }
+
     self.paiOfPullback = paiOfPullback
-    self.closuresInBTE = consistentClosurePlansForBTEConstructors(
-      findClosuresInBTE(paiOfPullback: paiOfPullback),
-      paiOfPullback: paiOfPullback, context)
+    self.closuresInBTE = findClosuresInBTE(paiOfPullback: paiOfPullback)
   }
 }
 
@@ -3177,7 +3105,7 @@ private struct AutoDiffSpecializationInfo {
   }
 
   init(vjp: Function, _ context: FunctionPassContext) {
-    let closureAnalysis = PullbackClosureAnalysis(vjp: vjp, context)
+    let closureAnalysis = PullbackClosureAnalysis(vjp: vjp)!
     self.init(
       closureAnalysis: closureAnalysis,
       specializedBTEDict: synthesizeSpecializedEnums(
