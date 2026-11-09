@@ -12,9 +12,8 @@
 // CHECK: function_ref @$s25adcs_recursive_forwarding13forwardUnusedyS3fc_SiSftF :
 // CHECK: return
 //
-// The first parameter reaches an application through the second and third
-// parameters of the same recursive function. Function-only visitation would
-// stop at the second parameter. All three static closures should specialize.
+// All three statically known closures can specialize over ordinary rounds.
+// This positive control does not require value-sensitive recursive analysis.
 // CHECK-LABEL: sil private {{.*}}@$s25adcs_recursive_forwarding20vjpRotatedDerivativeySf5value_S2fc8pullbacktSf_SitFS2fcfU_ :
 // CHECK-NOT: partial_apply
 // CHECK: function_ref @{{[^ ]+}} : $@convention(thin) (Int, Float, Float) -> Float
