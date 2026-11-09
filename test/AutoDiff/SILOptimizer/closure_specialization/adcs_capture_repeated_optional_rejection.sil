@@ -57,12 +57,8 @@ bb1(%t : @owned $(predecessor: _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb0__Pred__
   (%prev, %optional) = destructure_tuple %t : $(predecessor: _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb0__Pred__src_0_wrt_1, Optional<@callee_guaranteed (Float) -> Float>)
   switch_enum %optional : $Optional<@callee_guaranteed (Float) -> Float>, case #Optional.some!enumelt: bbSome, case #Optional.none!enumelt: bbNone
 bbSome(%c : @owned $@callee_guaranteed (Float) -> Float):
-  %bc = begin_borrow %c : $@callee_guaranteed (Float) -> Float
-  %r = apply %bc(%x) : $@callee_guaranteed (Float) -> Float
-  end_borrow %bc : $@callee_guaranteed (Float) -> Float
-  %bc2 = begin_borrow %c : $@callee_guaranteed (Float) -> Float
-  %r2 = apply %bc2(%r) : $@callee_guaranteed (Float) -> Float
-  end_borrow %bc2 : $@callee_guaranteed (Float) -> Float
+  %r = apply %c(%x) : $@callee_guaranteed (Float) -> Float
+  %r2 = apply %c(%r) : $@callee_guaranteed (Float) -> Float
   destroy_value %c : $@callee_guaranteed (Float) -> Float
   br bb3(%r2 : $Float)
 bbNone:

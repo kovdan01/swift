@@ -348,13 +348,7 @@ private enum PayloadUseShape {
   case apply(ApplyInst)
   case destroyValue(DestroyValueInst)
   case uncheckedEnumData(UncheckedEnumDataInst)
-  case beginBorrow(BeginBorrowInst)
   case switchEnum(SwitchEnumInst)
-}
-
-private enum ClosurePayloadUseShape {
-  case apply(ApplyInst)
-  case beginBorrow(applyUse: Operand, endBorrowUse: Operand)
 }
 
 // A payload can reach a block as a whole tuple or as a projected field after
@@ -429,55 +423,6 @@ private struct PayloadFlow {
   }
 }
 
-private func classifyBeginBorrowPayloadUse(_ bbi: BeginBorrowInst)
-  -> (applyUse: Operand, endBorrowUse: Operand)?
-{
-  guard bbi.uses.isExactlyTwo else {
-    return nil
-  }
-
-  var applyUse: Operand? = nil
-  var endBorrowUse: Operand? = nil
-  for bbiUse in bbi.uses {
-    switch bbiUse.instruction {
-    case let ai as ApplyInst:
-      guard bbiUse == ai.operands[ApplyOperandConventions.calleeIndex],
-            applyUse == nil else {
-        return nil
-      }
-      applyUse = bbiUse
-    case _ as EndBorrowInst:
-      guard endBorrowUse == nil else {
-        return nil
-      }
-      endBorrowUse = bbiUse
-    default:
-      return nil
-    }
-  }
-
-  assert(applyUse != nil)
-  assert(endBorrowUse != nil)
-  return (applyUse!, endBorrowUse!)
-}
-
-private func classifyClosurePayloadUse(_ use: Operand) -> ClosurePayloadUseShape? {
-  switch use.instruction {
-  case let ai as ApplyInst:
-    guard use == ai.operands[ApplyOperandConventions.calleeIndex] else { return nil }
-    return .apply(ai)
-  case let bbi as BeginBorrowInst:
-    guard let classified = classifyBeginBorrowPayloadUse(bbi) else {
-      return nil
-    }
-    return .beginBorrow(
-      applyUse: classified.applyUse,
-      endBorrowUse: classified.endBorrowUse)
-  default:
-    return nil
-  }
-}
-
 private func classifyPayloadUse(_ use: Operand) -> PayloadUseShape? {
   switch use.instruction {
   case let ai as ApplyInst:
@@ -491,9 +436,6 @@ private func classifyPayloadUse(_ use: Operand) -> PayloadUseShape? {
     // Generated taped callbacks are invoked with their stored function type.
     // Do not synthesize conversions for an unexpected payload callable.
     return nil
-  case let bbi as BeginBorrowInst:
-    guard classifyBeginBorrowPayloadUse(bbi) != nil else { return nil }
-    return .beginBorrow(bbi)
   case let sei as SwitchEnumInst:
     return .switchEnum(sei)
   default:
@@ -549,7 +491,8 @@ private func hasSingleTapedInvocation(_ value: Value) -> Bool {
   var invocationCount = 0
   for use in value.uses {
     if use.instruction is DestroyValueInst { continue }
-    guard classifyClosurePayloadUse(use) != nil else { return false }
+    guard let apply = use.instruction as? ApplyInst,
+          use == apply.operands[ApplyOperandConventions.calleeIndex] else { return false }
     invocationCount += 1
   }
   return invocationCount == 1
@@ -991,31 +934,6 @@ private func extractTupleElements(
   return elements
 }
 
-private func rewriteBeginBorrowUse(
-  bbi: BeginBorrowInst, resultIdx: Int,
-  result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
-) {
-  if findMatchingClosureInfo(in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx) != nil {
-    guard let classified = classifyBeginBorrowPayloadUse(bbi) else {
-      assert(false)
-      return
-    }
-    context.erase(instruction: classified.endBorrowUse.instruction)
-    rewriteUsesOfPayloadItem(
-      use: classified.applyUse, resultIdx: resultIdx,
-      result: result, rewriteCtx: rewriteCtx, context)
-    context.erase(instruction: bbi)
-  } else {
-    let builder = Builder(before: bbi, context)
-    let newBBI = builder.createBeginBorrow(
-      of: result,
-      isLexical: bbi.isLexical,
-      hasPointerEscape: bbi.hasPointerEscape,
-      isFromVarDecl: bbi.isFromVarDecl)
-    bbi.replace(with: newBBI, context)
-  }
-}
-
 private func rewriteApplyDirectClosure(
   ai: ApplyInst, closureInfo: ClosureInBTE, extractedElements: [Value],
   builder: Builder, _ context: FunctionPassContext
@@ -1183,11 +1101,6 @@ private func rewriteUsesOfPayloadItem(
   }
 
   switch payloadUseShape {
-  case .beginBorrow(let bbi):
-    rewriteBeginBorrowUse(
-      bbi: bbi, resultIdx: resultIdx,
-      result: result, rewriteCtx: rewriteCtx, context)
-
   case .apply(let ai):
     rewriteApplyUse(
       ai: ai, resultIdx: resultIdx,
