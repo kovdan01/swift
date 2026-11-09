@@ -2612,11 +2612,6 @@ void SILCloner<ImplClass>::visitDestroyValueInst(DestroyValueInst *Inst) {
                   RefCountingInst::Atomicity::Atomic));
   }
 
-  if (getOpValue(Inst->getOperand())
-          ->getType()
-          .isTrivial(getBuilder().getFunction()))
-    return;
-
   recordClonedInstruction(Inst, getBuilder().createDestroyValue(
                                     getOpLocation(Inst->getLoc()),
                                     getOpValue(Inst->getOperand()),
