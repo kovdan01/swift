@@ -68,10 +68,10 @@ void FunctionSignatureSpecializationMangler::setArgumentClosurePropPreviousArg(
 }
 
 void FunctionSignatureSpecializationMangler::setArgumentAutoDiffBranchTracingEnum(
-    unsigned OrigArgIdx, StringRef key) {
+    unsigned OrigArgIdx, Identifier identity) {
   auto &Info = OrigArgs[OrigArgIdx];
   Info.kind = ArgumentModifier::AutoDiffBranchTracingEnum;
-  Info.specializationKey = getASTContext().getIdentifier(key).str().data();
+  new (&Info.autoDiffBranchTracingEnumIdentity) Identifier(identity);
 }
 
 void FunctionSignatureSpecializationMangler::setArgumentConstantProp(
@@ -274,12 +274,6 @@ FunctionSignatureSpecializationMangler::mangleClosureProp(SILInstruction *Inst) 
   }
 }
 
-void FunctionSignatureSpecializationMangler::mangleAutoDiffBranchTracingEnum(
-    StringRef key) {
-  ArgOpBuffer << 'b';
-  appendIdentifier(key);
-}
-
 void FunctionSignatureSpecializationMangler::mangleArgument(ArgInfo argInfo) {
   switch (argInfo.kind) {
   case ArgumentModifier::ConstantProp:
@@ -293,7 +287,8 @@ void FunctionSignatureSpecializationMangler::mangleArgument(ArgInfo argInfo) {
     return;
 
   case ArgumentModifier::AutoDiffBranchTracingEnum:
-    mangleAutoDiffBranchTracingEnum(argInfo.specializationKey);
+    ArgOpBuffer << 'b';
+    appendIdentifier(argInfo.autoDiffBranchTracingEnumIdentity.str());
     return;
 
   case ArgumentModifier::Unmodified:
