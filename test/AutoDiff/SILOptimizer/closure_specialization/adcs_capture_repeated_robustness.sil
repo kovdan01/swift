@@ -1,32 +1,15 @@
-// RUN: %target-sil-opt -enable-sil-verify-all -autodiff-closure-specialization %s -o %t
-// RUN: %FileCheck %s --check-prefix=CHECK < %t
-// RUN: %FileCheck %s --check-prefix=ARC < %t
-//
-// Supplementary reduced-SIL ownership regression. The genuine Swift/generated
-// SIL pair is adcs_repeated_pullback.swift/.sil. That source exercises the analogous
-// lifetime inside a custom pullback; the current pipeline does not expose this
-// exact field-use graph to BTE specialization. This explicit input ensures the
-// accepted ownership pattern is nevertheless transformed correctly.
-//
-// CHECK-LABEL: // specialized pullback of myfoo08
-// CHECK: (%{{[0-9]+}}, %[[CAPTURES:[0-9]+]]) = destructure_tuple
-// CHECK: %[[BORROW1:[0-9]+]] = begin_borrow %[[CAPTURES]]
-// CHECK: %[[ARG1:[0-9]+]] = tuple_extract %[[BORROW1]], 0
-// CHECK: apply {{%[0-9]+}}({{.*}}%[[ARG1]]) : $@convention(thin)
-// CHECK: end_borrow %[[BORROW1]]
-// CHECK: %[[BORROW2:[0-9]+]] = begin_borrow %[[CAPTURES]]
-// CHECK: %[[ARG2:[0-9]+]] = tuple_extract %[[BORROW2]], 0
-// CHECK: apply {{%[0-9]+}}({{.*}}%[[ARG2]]) : $@convention(thin)
-// CHECK: end_borrow %[[BORROW2]]
-// CHECK-NOT: copy_value
-// CHECK: destroy_value %[[CAPTURES]]
-// CHECK: br
-// CHECK: } // end sil function
+// RUN: %target-sil-opt -sil-print-types -enable-sil-verify-all -autodiff-closure-specialization %s -o - | %FileCheck %s --implicit-check-not='_AD__{{.*}}_spec'
 
-// ARC-LABEL: // specialized pullback of myfoo08
-// ARC-NOT: copy_value
-// ARC-NOT: = partial_apply
-// ARC: } // end sil function
+// Reduced unsupported-SIL boundary. The source-derived adcs_repeated_pullback
+// pair exposes repeated use only inside a nested capture tuple after initial
+// ADCS and inlining. PullbackCloner invokes each directly taped callback once;
+// reject this repeated direct use before creating specialized enum declarations.
+
+// CHECK-LABEL: sil [ossa] @$s3outyycfU6_7myfoo08L_yS2f_SftFTJpSUpSr
+// CHECK: apply {{.*}} : $@callee_guaranteed (Float) -> Float
+// CHECK: apply {{.*}} : $@callee_guaranteed (Float) -> Float
+// CHECK: destroy_value
+// CHECK: } // end sil function
 
 sil_stage canonical
 import Builtin
