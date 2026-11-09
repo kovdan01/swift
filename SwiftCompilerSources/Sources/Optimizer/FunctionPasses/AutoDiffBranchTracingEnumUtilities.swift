@@ -1,16 +1,5 @@
 import AST
 import SIL
-import OptimizerBridging
-
-extension FunctionPassContext {
-  func mangle(
-    withSpecializedBranchTracingEnum enumType: Type, argIdx: Int,
-    in vjp: Function, from pullback: Function
-  ) -> String {
-    String(taking: BridgedAutoDiff.manglePullback(
-      enumType.bridged, argIdx, vjp.bridged, pullback.bridged))
-  }
-}
 
 extension Type {
   func isBranchTracingEnum(in vjp: Function) -> Bool {
@@ -324,7 +313,7 @@ private func autodiffSpecializeBranchTracingEnum(
   let schema = context.getTupleType(elements:
     [bteType.rawType.mapOutOfEnvironment()] + newPayloadTypes)
   newEDName = newEDName._withBridgedStringRef {
-    String(taking: BridgedAutoDiff.mangleBranchTracingEnum($0, schema.bridged, topVJP.bridged))
+    String(taking: context.bridgedPassContext.mangleAutoDiffBranchTracingEnum($0, schema.bridged, topVJP.bridged))
   }
   // Synthesized declarations already belong to the AST module. Reuse its name
   // lookup instead of maintaining a second, AutoDiff-specific enum registry.
