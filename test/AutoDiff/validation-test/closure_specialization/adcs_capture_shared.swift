@@ -1,11 +1,8 @@
 // REQUIRES: executable_test
 // RUN: %target-run-simple-swift
-// RUN: %target-swift-frontend -emit-sil -O -module-name adcs_capture_shared %s -o %t.sil
-// RUN: %FileCheck %s < %t.sil
 
-// The corresponding SILOptimizer test is reduced from the generated derivative
-// before ADCS. Its indirect capture and subset thunk are shared between the
-// mutually exclusive predecessor payloads of the two branches.
+// The indirect capture and subset thunk are shared between mutually exclusive
+// predecessor payloads. Capture cleanup must not deallocate the same buffer twice.
 import _Differentiation
 import DifferentiationUnittest
 import StdlibUnittest

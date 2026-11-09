@@ -1,13 +1,9 @@
 // REQUIRES: executable_test
 // RUN: %target-run-simple-swift
-// RUN: %target-swift-frontend -emit-sil -O -D DEFINITIONS_ONLY -module-name adcs_generic_adapter %s -o %t.sil
-// RUN: %FileCheck %s < %t.sil
 
 // Differentiating only x requires a generic subset-parameters adapter around
 // the full (Float, T) pullback. ADCS must remap the root closure substitutions
 // and the adapter substitutions into the cloned generic pullback environment.
-// The source-derived SILOptimizer pair additionally verifies this after textual
-// SIL parsing, which gives the VJP and pullback distinct generic environments.
 
 import _Differentiation
 

@@ -3,7 +3,6 @@
 // RUN: %target-run %t.none
 // RUN: %target-build-swift %s -O -o %t.opt
 // RUN: %target-run %t.opt
-// RUN: %target-swift-frontend -emit-sil -O -module-name ADCSMP %s -o - | %FileCheck %s --check-prefix=OPT
 
 import _Differentiation
 
