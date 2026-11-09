@@ -8,7 +8,6 @@
 
 // CHECK-LABEL: sil [ossa] @$s3outyycfU6_7myfoo08L_yS2f_SftFTJpSUpSr
 // CHECK: convert_function {{.*}} to $@callee_guaranteed (Float) -> @owned A
-// CHECK: begin_borrow
 // CHECK: apply {{.*}} : $@callee_guaranteed (Float) -> @owned A
 // CHECK: destroy_value
 // CHECK: } // end sil function
@@ -54,9 +53,7 @@ bb0(%x : $Float, %e : @owned $_AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb1__Pred__s
 bb1(%t : @owned $(predecessor: _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb0__Pred__src_0_wrt_1, @callee_guaranteed (Float) -> @owned B)):
   (%prev, %c) = destructure_tuple %t : $(predecessor: _AD__$s3outyycfU6_7myfoo08L_yS2f_SftF_bb0__Pred__src_0_wrt_1, @callee_guaranteed (Float) -> @owned B)
   %cf = convert_function %c : $@callee_guaranteed (Float) -> @owned B to $@callee_guaranteed (Float) -> @owned A
-  %bc = begin_borrow %cf : $@callee_guaranteed (Float) -> @owned A
-  %r = apply %bc(%x) : $@callee_guaranteed (Float) -> @owned A
-  end_borrow %bc : $@callee_guaranteed (Float) -> @owned A
+  %r = apply %cf(%x) : $@callee_guaranteed (Float) -> @owned A
   destroy_value %cf : $@callee_guaranteed (Float) -> @owned A
   return %r : $A
 bb2(%u : $()):
