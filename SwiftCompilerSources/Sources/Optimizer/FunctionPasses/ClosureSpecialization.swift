@@ -1361,8 +1361,22 @@ private func rewriteApplyDirectClosure(
   builder: Builder, _ context: FunctionPassContext
 ) {
   if closureInfo.reabstractions.isEmpty {
+    var capturedArguments = extractedElements
+    var indirectCaptures = [(allocation: AllocStackInst, convention: ArgumentConvention, isTrivial: Bool)]()
+    if let partialApply = closureInfo.closure as? PartialApplyInst {
+      for (index, operand) in partialApply.argumentOperands.enumerated() {
+        let convention = partialApply.convention(of: operand)!
+        if operand.value.type.isAddress && !convention.isInout {
+          let capture = capturedArguments[index]
+          let allocation = builder.createAllocStack(capture.type)
+          builder.createStore(source: capture, destination: allocation, ownership: .initialize)
+          capturedArguments[index] = allocation
+          indirectCaptures.append((allocation, convention, capture.type.isTrivial(in: ai.parentFunction)))
+        }
+      }
+    }
     var newArgs = Array(ai.arguments)
-    newArgs.append(contentsOf: extractedElements)
+    newArgs.append(contentsOf: capturedArguments)
     let vjpFn = closureInfo.closure.asSupportedClosureFn!
     let newFri = builder.createFunctionRef(vjpFn)
     // A thick closure application has already applied the root function's
@@ -1371,6 +1385,15 @@ private func rewriteApplyDirectClosure(
     let newAi = builder.createApply(
       function: newFri, substitutions.substitute(with: ai.parentFunction.forwardingSubstitutionMap),
       arguments: newArgs)
+    // An indirect capture is part of the closure context, but a direct call
+    // needs address storage lasting through the call itself. Only consuming
+    // conventions transfer destruction of the stored capture to the callee.
+    for capture in indirectCaptures.reversed() {
+      if !capture.convention.isConsumed && !capture.isTrivial {
+        builder.createDestroyAddr(address: capture.allocation)
+      }
+      builder.createDeallocStack(capture.allocation)
+    }
     ai.replace(with: newAi, context)
 
     // TODO: maybe we can set insertion point earlier
