@@ -50,37 +50,17 @@ private func getCapturedArgTypesTupleForClosure(
 //     case bbB((predecessor: _AD__$xxx_bbB__Pred__xxx, /* closure types */))
 //     case bbC((predecessor: _AD__$xxx_bbC__Pred__xxx, /* closure types */))
 //   }
-private func getBranchTracingEnumPreds(bteType: Type, in vjp: Function) -> Set<Type> {
-  guard let enumCases = bteType.getEnumCases(in: vjp) else {
-    return []
-  }
+private func getBranchTracingEnumPreds(bteType: Type, in vjp: Function) -> [Type]? {
+  guard let enumCases = bteType.getEnumCases(in: vjp) else { return nil }
 
-  var btePreds = Set<Type>()
+  var predecessors = [Type]()
   for enumCase in enumCases {
-    guard let firstTupleElementType = enumCase.payload!.tupleElements.first else {
-      continue
-    }
-    if firstTupleElementType.isBranchTracingEnum(in: vjp) {
-      btePreds.insert(firstTupleElementType)
+    guard let payload = enumCase.payload, payload.isTuple else { return nil }
+    if let firstElement = payload.tupleElements.first, firstElement.isBranchTracingEnum(in: vjp) {
+      predecessors.append(firstElement)
     }
   }
-
-  return btePreds
-}
-
-private func iterateOverBranchTracingEnumPreds(
-  bteToPredsDict: inout [Type: Set<Type>],
-  currentBTEType: Type,
-  in vjp: Function
-) {
-  let currentBTEPreds = getBranchTracingEnumPreds(bteType: currentBTEType, in: vjp)
-  bteToPredsDict[currentBTEType] = currentBTEPreds
-  for currentBTEPred in currentBTEPreds {
-    if bteToPredsDict[currentBTEPred] == nil {
-      iterateOverBranchTracingEnumPreds(
-        bteToPredsDict: &bteToPredsDict, currentBTEType: currentBTEPred, in: vjp)
-    }
-  }
+  return predecessors
 }
 
 // Get branch tracing enum type queue for further specialization. The types in the queue
@@ -107,31 +87,30 @@ private func iterateOverBranchTracingEnumPreds(
 //   enum _AD__$xxx_bbD__Pred__xxx {
 //     case bbE((/* closure types */))
 //   }
-private func getBranchTracingEnumSpecializationQueue(topBTEType: Type, in vjp: Function) -> [Type] {
-  var bteToPredsDict = [Type: Set<Type>]()
-  iterateOverBranchTracingEnumPreds(
-    bteToPredsDict: &bteToPredsDict,
-    currentBTEType: topBTEType,
-    in: vjp)
-  var bteSpecializationQueue = [Type]()
-  let bteCount = bteToPredsDict.count
+private func getBranchTracingEnumSpecializationQueue(topBTEType: Type, in vjp: Function) -> [Type]? {
+  var visited = Set<Type>()
+  var active = Set<Type>()
+  var queue = [Type]()
 
-  for _ in 0..<bteCount {
-    for (bteType, btePreds) in bteToPredsDict {
-      guard btePreds.isEmpty else {
-        continue
-      }
-      bteSpecializationQueue.append(bteType)
-      break
+  func visit(_ type: Type) -> Bool {
+    if visited.contains(type) { return true }
+    guard active.insert(type).inserted,
+          let predecessors = getBranchTracingEnumPreds(bteType: type, in: vjp)
+    else { return false }
+    // Declaration order makes the traversal deterministic. Postorder places
+    // every predecessor before the enum whose payload refers to it.
+    for predecessor in predecessors {
+      guard visit(predecessor) else { return false }
     }
-    bteToPredsDict.removeValue(forKey: bteSpecializationQueue.last!)
-    for bteType in bteToPredsDict.keys {
-      bteToPredsDict[bteType]!.remove(bteSpecializationQueue.last!)
-    }
+    active.remove(type)
+    visited.insert(type)
+    queue.append(type)
+    return true
   }
-  assert(bteSpecializationQueue.count == bteCount)
 
-  return bteSpecializationQueue
+  // Complete graph validation before creating any new enum declarations.
+  guard visit(topBTEType) else { return nil }
+  return queue
 }
 
 // The queried type can originate in the pullback's generic environment. Map
@@ -334,9 +313,10 @@ private func autodiffSpecializeBranchTracingEnum(
 func autodiffSpecializeBranchTracingEnums(
   topVJP: Function, topBTE: Type, closuresInBTE: [ClosureInBTE],
   context: FunctionPassContext
-) -> [Type: Type] {
-  let bteSpecializationQueue = getBranchTracingEnumSpecializationQueue(
+) -> [Type: Type]? {
+  guard let bteSpecializationQueue = getBranchTracingEnumSpecializationQueue(
     topBTEType: remapBranchTracingEnumType(topBTE, into: topVJP), in: topVJP)
+  else { return nil }
 
   var closuresInBTEByBTE = [Type: [ClosureInBTE]]()
   for closureInBTE in closuresInBTE {
