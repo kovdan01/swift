@@ -1,11 +1,10 @@
 // REQUIRES: executable_test
 // RUN: %target-run-simple-swift
 //
-// Source control for an explicit VJP that only uses a nested VJP's primal
-// result. Normal compilation keeps a projection and destroy for the discarded
-// pullback until it can remove the closure. The SILOptimizer companion reduces
-// the return ABI to trivial values to exercise unsupported projection shapes;
-// those reduced ABIs have not been observed from this source.
+// An explicit VJP uses only a nested VJP's primal result. Its discarded owned
+// pullback is still projected and destroyed until closure elimination; the VJP
+// result ABI retains its pullback. Exercise this ordinary source form while
+// preserving the inliner's assertions about that ABI.
 
 import _Differentiation
 
