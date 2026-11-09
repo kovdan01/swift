@@ -256,69 +256,12 @@ private func trySpecialize(apply: ApplySite, isRootInvocation: Bool, _ context: 
   specialization.deleteDeadClosures(context)
 
   if isNewFunction && isRootInvocation {
-    /// Further specialization rounds can leave the cloned callee holding a specializable closure and an `apply` which
-    /// takes this closure as an argument. Consider the case when this specializable closure captures an argument from
-    /// the cloned callee, and this argument by itself is a specializable closure constructed in caller and passed to
-    /// the cloned callee as a parameter. Since the applied-check stops at `partial_apply` operands, a closure still
-    /// sitting in the caller (`partial_apply` of `closure0` in example) only becomes specializable once the callee it
-    /// is passed to has itself been specialized deeply enough for that closure to appear transitively full-applied.
-    ///
-    /// We specialze now rather than defer to separate closure specialization run: the caller's specialization loop does
-    /// revisit its apply each round, but unless we mutate the cloned callee now the applied-check still fails and the
-    /// loop makes no progress. So, by the time the closure specialization pass reaches the specialized callee (it's
-    /// added to pass manager worklist via `notifyNewFunction`) and does specialization for it, the caller's specialization
-    /// has already finished and its apply of callee is never revisited at all - stranding the `partial_apply` of `closure0`.
-    ///
-    /// Running `runClosureSpecialization` synchronously on the cloned callee we've just produced fully specializes it
-    /// before the caller's next specialization round, so the caller re-inspects the same apply, now sees `closure0` as
-    /// transitively applied, and specializes it - leaving no `partial_apply` of a specializable closure in the caller.
-    /// This recursion terminates: recursive specialization run on the just-specialized callee is only triggered from the
-    /// actual pass invocation (`isRootInvocation`), so we won't trigger specialization of callees nested deeper.
-    ///
-    /// Round 2 for caller: specialize apply of specialized_callee_r1.
-    ///
-    ///   caller(%0 : Float, %1 : Float) -> Float:
-    ///     %9  = partial_apply @closure0(%0)  : (Float) -> Float
-    ///     return apply @specialized_callee_r2(%1, %9)
-    ///
-    ///   specialized_callee_r2(%0 : Float, %1 : (Float) -> Float) -> Float:
-    ///     %15 = partial_apply @closure1(%1) : (Float) -> Float
-    ///     return apply @closure2(%0, %15)
-    ///
-    /// Recursive round 1 for specialized_callee_r2: specialize apply of closure2.
-    ///
-    ///   specialized_callee_r2(%0 : Float, %1 : (Float) -> Float) -> Float:
-    ///     return apply @specialized_closure2_r1(%0, %1)
-    ///
-    ///   specialized_closure2_r1(%0 : Float, %1 : (Float) -> Float) -> Float:
-    ///     %9 = apply @closure1(%0, %1) // <-- folded from _/ %3 = partial_apply @closure1(%1)
-    ///                                  //                  \ %9 = apply %3(%0)
-    ///     return %9
-    ///
-    /// Now `%9 = partial_apply @closure0(%0)` in caller is recognized as transitively applied in
-    /// `specialized_callee_r2`->`closure1`, making it subject for specialization during the 3rd round.
-    ///
-    /// Round 3 for caller: specialize apply of specialized_callee_r2.
-    ///
-    ///   caller(%0 : Float, %1 : Float) -> Float:
-    ///     return apply @specialized_callee_r3(%1, %0)
-    ///
-    ///   specialized_callee_r3(%0 : Float, %1 : Float) -> Float:
-    ///     %9  = partial_apply @closure0(%1)  : (Float) -> Float
-    ///     return apply @specialized_closure2_r1(%0, %9)
-    ///
-    /// Further specialization rounds of `specialized_callee_r3` and other functions are omitted.
-    /// Final specialization result contains no `partial_apply` left:
-    ///
-    ///   caller(%0 : Float, %1 : Float) -> Float:
-    ///     return apply @specialized_callee_final(%1, %0)
-    ///   specialized_callee_final(%0 : Float, %1 : Float) -> Float:
-    ///     return apply @specialized_closure2_final(%0, %1)
-    ///   specialized_closure2_final(%0 : Float, %1 : Float) -> Float:
-    ///     return apply @specialized_closure1_final(%0, %1)
-    ///   specialized_closure1_final(%0 : Float, %1 : Float) -> Float:
-    ///     return apply @closure0(%0, %1)
-
+    // A caller's closure may only become transitively applied after the cloned
+    // callee has itself been specialized. Process that callee now so the next
+    // caller round can see the exposed application; waiting for its worklist
+    // turn would leave the already-processed caller unchanged.
+    // Only root invocations do this, bounding synchronous specialization to one
+    // additional level. The ordinary worklist handles deeper callees.
     context.buildSpecializedFunction(specializedFunction: specializedFunction) {
       (specializedFunction, specializedContext) in
       runClosureSpecialization(function: specializedFunction, isRootInvocation: false, context: specializedContext)
@@ -854,20 +797,37 @@ private struct SpecializationInfo {
 }
 
 private func isClosureApplied(_ closure: Value) -> Bool {
-  var handledFuncs: Set<Function> = []
-  return checkRecursivelyIfClosureIsApplied(closure, &handledFuncs)
+  // Values can belong to different functions, so a function-local ValueSet
+  // cannot represent this interprocedural traversal. Track each argument
+  // separately: recursion may forward a closure into another parameter of the
+  // same function before that parameter is applied.
+  var visited = Set<HashableValue>()
+  var remainingWork = 4096
+  return checkRecursivelyIfClosureIsApplied(
+    closure, visited: &visited, remainingDepth: 256, remainingWork: &remainingWork)
 }
 
-private func checkRecursivelyIfClosureIsApplied(_ closure: Value, _ handledFuncs: inout Set<Function>) -> Bool {
-  let recursionBudget = 8
+private func checkRecursivelyIfClosureIsApplied(
+  _ closure: Value, visited: inout Set<HashableValue>,
+  remainingDepth: Int, remainingWork: inout Int
+) -> Bool {
+  guard remainingDepth > 0, remainingWork > 0,
+        visited.insert(closure.hashable).inserted
+  else { return false }
+  remainingWork -= 1
+
   for use in closure.uses {
+    guard remainingWork > 0 else { return false }
+    remainingWork -= 1
     switch use.instruction {
 
     case is ConvertFunctionInst,
          is ConvertEscapeToNoEscapeInst,
          is MoveValueInst,
          is CopyValueInst:
-      if checkRecursivelyIfClosureIsApplied(use.instruction as! SingleValueInstruction, &handledFuncs) {
+      if checkRecursivelyIfClosureIsApplied(
+        use.instruction as! SingleValueInstruction, visited: &visited,
+        remainingDepth: remainingDepth - 1, remainingWork: &remainingWork) {
         return true
       }
 
@@ -876,20 +836,24 @@ private func checkRecursivelyIfClosureIsApplied(_ closure: Value, _ handledFuncs
         // `pai.isPartialApplyOfThunk` implies that the captured closure (`closure` here) is applied in the thunk.
         // If the thunk closure (`pai` here) is applied by itself as well, the closure captured by
         // the thunk closure also becomes effectively applied transitively.
-        return checkRecursivelyIfClosureIsApplied(pai, &handledFuncs)
+        if checkRecursivelyIfClosureIsApplied(
+          pai, visited: &visited, remainingDepth: remainingDepth - 1,
+          remainingWork: &remainingWork) {
+          return true
+        }
       }
 
       guard let callee = pai.referencedFunction,
             callee.isDefinition,
-            handledFuncs.insert(callee).inserted,
-            handledFuncs.count <= recursionBudget,
             let calleeArg = pai.calleeArgument(of: use, in: callee)
       else {
         continue
       }
 
       // Check if the captured closure (`closure` here) is applied in context of wrapper closure (`pai` here).
-      if checkRecursivelyIfClosureIsApplied(calleeArg, &handledFuncs) {
+      if checkRecursivelyIfClosureIsApplied(
+        calleeArg, visited: &visited, remainingDepth: remainingDepth - 1,
+        remainingWork: &remainingWork) {
         // If the wrapper closure (`pai` here) is applied by itself complementary to the captured closure applied
         // in context of wrapper closure, the captured closure also becomes effectively applied transitively.
         // For example, treat `%closure1` as applied in `@foo`:
@@ -898,7 +862,11 @@ private func checkRecursivelyIfClosureIsApplied(_ closure: Value, _ handledFuncs
         //     %closure2 = partial_apply @wrapper(%closure1)
         //     apply %closure2(%arg1, %arg2)
         //   }
-        return checkRecursivelyIfClosureIsApplied(pai, &handledFuncs)
+        if checkRecursivelyIfClosureIsApplied(
+          pai, visited: &visited, remainingDepth: remainingDepth - 1,
+          remainingWork: &remainingWork) {
+          return true
+        }
       }
 
     case let apply as FullApplySite:
@@ -909,17 +877,17 @@ private func checkRecursivelyIfClosureIsApplied(_ closure: Value, _ handledFuncs
       // Recurse into called function
       if let callee = apply.referencedFunction,
          callee.isDefinition,
-         handledFuncs.insert(callee).inserted,
-         handledFuncs.count <= recursionBudget,
          let calleeArg = apply.calleeArgument(of: use, in: callee)
       {
-        if checkRecursivelyIfClosureIsApplied(calleeArg, &handledFuncs) {
+        if checkRecursivelyIfClosureIsApplied(
+          calleeArg, visited: &visited, remainingDepth: remainingDepth - 1,
+          remainingWork: &remainingWork) {
           return true
         }
       }
 
     default:
-      break
+      continue
     }
   }
 

@@ -1,0 +1,292 @@
+// RUN: %target-sil-opt -enable-sil-verify-all -closure-specialization %s -o - | %FileCheck %s
+//
+// Generated from validation-test/SILOptimizer/closure_applied_use_analysis.swift
+// with -O -D DEFINITIONS_ONLY -emit-sil -module-name closure_applied_use_analysis,
+// disabling closure-specialization, autodiff-closure-specialization and
+// ownership-model-eliminator. Retain the recursive callees, their callers and
+// closure bodies; remove debug instructions, effect summaries and unrelated main.
+//
+// A closure forwarded recursively without an invocation stays unspecialized,
+// and the applied-use analysis must terminate.
+// CHECK-LABEL: sil [ossa] @$s28closure_applied_use_analysis12unusedCalleryS2f_SiSftF :
+// CHECK: %[[UNUSED:[0-9]+]] = partial_apply
+// CHECK: %[[FORWARD:[0-9]+]] = function_ref @$s28closure_applied_use_analysis13forwardUnusedyS3fc_SiSftF
+// CHECK: apply %[[FORWARD]](%[[UNUSED]],
+// CHECK: return
+//
+// Recursive parameter rotation remains optimizable when interprocedural values
+// are visited separately. This is a positive control: later specialization
+// rounds also recover this case with the original distinct-function analysis.
+// CHECK-LABEL: sil [ossa] @$s28closure_applied_use_analysis13rotatedCalleryS2f_SiSftF :
+// CHECK: bb0(%[[X:[0-9]+]] : $Float, %[[DEPTH:[0-9]+]] : $Int, %[[SEED:[0-9]+]] : $Float):
+// CHECK-NOT: partial_apply
+// CHECK: %[[ROTATE:[0-9]+]] = function_ref @{{[^ ]+}} : $@convention(thin) (Int, Float, Float) -> Float
+// CHECK: apply %[[ROTATE]](%[[DEPTH]], %[[SEED]], %[[X]]) : $@convention(thin) (Int, Float, Float) -> Float
+// CHECK-NOT: partial_apply
+// CHECK: return
+
+// Only one known capturing closure is passed into the recursive rotation;
+// the remaining callbacks are runtime parameters. Function-only visitation
+// cannot reach the applied third parameter, and no other known callback can
+// initiate a specialization round that recovers the first one.
+// CHECK-LABEL: sil [ossa] @$s28closure_applied_use_analysis18mixedRotatedCalleryS2f_SiS3fcS2fctF :
+// CHECK: bb0(%[[MIX_X:[0-9]+]] : $Float, %[[MIX_DEPTH:[0-9]+]] : $Int, %[[MIX_SEED:[0-9]+]] : $Float, %[[SECOND:[0-9]+]] : @guaranteed $@callee_guaranteed (Float) -> Float, %[[THIRD:[0-9]+]] : @guaranteed $@callee_guaranteed (Float) -> Float):
+// CHECK-NOT: partial_apply
+// CHECK: %[[MIX_FN:[0-9]+]] = function_ref @{{[^ ]*AfterRotation[^ ]*}} : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, Int, Float, Float) -> Float
+// CHECK: apply %[[MIX_FN]](%[[SECOND]], %[[THIRD]], %[[MIX_DEPTH]], %[[MIX_SEED]], %[[MIX_X]])
+// CHECK-NOT: partial_apply
+// CHECK: return
+
+// Twelve distinct forwarding functions exceed the original eight-function
+// applied-use budget. Main leaves this stack closure even after all rounds;
+// the bounded value traversal must find the invocation and remove the closure.
+// CHECK-LABEL: sil [ossa] @$s28closure_applied_use_analysis10deepCalleryS2f_SftF :
+// CHECK: bb0(%[[DEEP_X:[0-9]+]] : $Float, %[[DEEP_SEED:[0-9]+]] : $Float):
+// CHECK-NOT: partial_apply
+// CHECK: %[[DEEP_FN:[0-9]+]] = function_ref @{{[^ ]*forward0[^ ]*}} : $@convention(thin) (Float, Float) -> Float
+// CHECK: apply %[[DEEP_FN]](%[[DEEP_SEED]], %[[DEEP_X]]) : $@convention(thin) (Float, Float) -> Float
+// CHECK-NOT: partial_apply
+// CHECK: return
+
+sil_stage canonical
+import Builtin
+import Swift
+import SwiftShims
+
+sil [noinline] [ossa] @$s28closure_applied_use_analysis13forwardUnusedyS3fc_SiSftF : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float {
+bb0(%0 : @guaranteed $@callee_guaranteed (Float) -> Float, %1 : $Int, %2 : $Float):
+  %6 = integer_literal $Builtin.Int64, 0
+  %7 = struct_extract %1, #Int._value
+  %8 = builtin "cmp_eq_Int64"(%7, %6) : $Builtin.Int1
+  cond_br %8, bb1, bb2
+
+bb1:
+  br bb3(%2)
+
+bb2:
+  %11 = integer_literal $Builtin.Int64, 1
+  %12 = integer_literal $Builtin.Int1, -1
+  %13 = builtin "ssub_with_overflow_Int64"(%7, %11, %12) : $(Builtin.Int64, Builtin.Int1)
+  %14 = tuple_extract %13, 0
+  %15 = tuple_extract %13, 1
+  cond_fail %15, "arithmetic overflow"
+  %17 = struct $Int (%14)
+  %18 = function_ref @$s28closure_applied_use_analysis13forwardUnusedyS3fc_SiSftF : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float
+  %19 = apply %18(%0, %17, %2) : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float
+  br bb3(%19)
+
+bb3(%21 : $Float):
+  return %21
+}
+
+sil [noinline] [ossa] @$s28closure_applied_use_analysis0B13AfterRotationyS3fc_S2fcS2fcSiSftF : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float {
+bb0(%0 : @guaranteed $@callee_guaranteed (Float) -> Float, %1 : @guaranteed $@callee_guaranteed (Float) -> Float, %2 : @guaranteed $@callee_guaranteed (Float) -> Float, %3 : $Int, %4 : $Float):
+  %10 = integer_literal $Builtin.Int64, 0
+  %11 = struct_extract %3, #Int._value
+  %12 = builtin "cmp_eq_Int64"(%11, %10) : $Builtin.Int1
+  cond_br %12, bb1, bb2
+
+bb1:
+  %14 = apply %2(%4) : $@callee_guaranteed (Float) -> Float
+  br bb3(%14)
+
+bb2:
+  %16 = integer_literal $Builtin.Int64, 1
+  %17 = integer_literal $Builtin.Int1, -1
+  %18 = builtin "ssub_with_overflow_Int64"(%11, %16, %17) : $(Builtin.Int64, Builtin.Int1)
+  %19 = tuple_extract %18, 0
+  %20 = tuple_extract %18, 1
+  cond_fail %20, "arithmetic overflow"
+  %22 = struct $Int (%19)
+  %23 = function_ref @$s28closure_applied_use_analysis0B13AfterRotationyS3fc_S2fcS2fcSiSftF : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float
+  %24 = apply %23(%2, %0, %1, %22, %4) : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float
+  br bb3(%24)
+
+bb3(%26 : $Float):
+  return %26
+}
+
+sil [ossa] @$s28closure_applied_use_analysis12unusedCalleryS2f_SiSftF : $@convention(thin) (Float, Int, Float) -> Float {
+bb0(%0 : $Float, %1 : $Int, %2 : $Float):
+  %6 = function_ref @$s28closure_applied_use_analysis12unusedCalleryS2f_SiSftFS2fcfU_ : $@convention(thin) (Float, Float) -> Float
+  %7 = partial_apply [callee_guaranteed] %6(%0) : $@convention(thin) (Float, Float) -> Float
+  %8 = function_ref @$s28closure_applied_use_analysis13forwardUnusedyS3fc_SiSftF : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float
+  %9 = apply %8(%7, %1, %2) : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float
+  destroy_value %7
+  return %9
+}
+
+sil private [ossa] @$s28closure_applied_use_analysis12unusedCalleryS2f_SiSftFS2fcfU_ : $@convention(thin) (Float, Float) -> Float {
+bb0(%0 : $Float, %1 : @closureCapture $Float):
+  %3 = struct_extract %0, #Float._value
+  %4 = struct_extract %1, #Float._value
+  %5 = builtin "fmul_FPIEEE32"(%3, %4) : $Builtin.FPIEEE32
+  %6 = struct $Float (%5)
+  return %6
+}
+
+sil [ossa] @$s28closure_applied_use_analysis13rotatedCalleryS2f_SiSftF : $@convention(thin) (Float, Int, Float) -> Float {
+bb0(%0 : $Float, %1 : $Int, %2 : $Float):
+  %6 = function_ref @$s28closure_applied_use_analysis13rotatedCalleryS2f_SiSftFS2fcfU_ : $@convention(thin) (Float, Float) -> Float
+  %7 = partial_apply [callee_guaranteed] %6(%0) : $@convention(thin) (Float, Float) -> Float
+  %8 = function_ref @$s28closure_applied_use_analysis13rotatedCalleryS2f_SiSftFS2fcfU0_ : $@convention(thin) (Float) -> Float
+  %9 = thin_to_thick_function %8 to $@callee_guaranteed (Float) -> Float
+  %10 = function_ref @$s28closure_applied_use_analysis13rotatedCalleryS2f_SiSftFS2fcfU1_ : $@convention(thin) (Float) -> Float
+  %11 = thin_to_thick_function %10 to $@callee_guaranteed (Float) -> Float
+  %12 = function_ref @$s28closure_applied_use_analysis0B13AfterRotationyS3fc_S2fcS2fcSiSftF : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float
+  %13 = apply %12(%7, %9, %11, %1, %2) : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float
+  destroy_value %7
+  return %13
+}
+
+sil private [ossa] @$s28closure_applied_use_analysis13rotatedCalleryS2f_SiSftFS2fcfU_ : $@convention(thin) (Float, Float) -> Float {
+bb0(%0 : $Float, %1 : @closureCapture $Float):
+  %3 = float_literal $Builtin.FPIEEE32, 0x40000000
+  %4 = struct_extract %1, #Float._value
+  %5 = builtin "fmul_FPIEEE32"(%3, %4) : $Builtin.FPIEEE32
+  %6 = struct_extract %0, #Float._value
+  %7 = builtin "fmul_FPIEEE32"(%5, %6) : $Builtin.FPIEEE32
+  %8 = struct $Float (%7)
+  return %8
+}
+
+sil private [ossa] @$s28closure_applied_use_analysis13rotatedCalleryS2f_SiSftFS2fcfU0_ : $@convention(thin) (Float) -> Float {
+bb0(%0 : $Float):
+  %2 = float_literal $Builtin.FPIEEE32, 0x40400000
+  %3 = struct_extract %0, #Float._value
+  %4 = builtin "fmul_FPIEEE32"(%2, %3) : $Builtin.FPIEEE32
+  %5 = struct $Float (%4)
+  return %5
+}
+
+sil private [ossa] @$s28closure_applied_use_analysis13rotatedCalleryS2f_SiSftFS2fcfU1_ : $@convention(thin) (Float) -> Float {
+bb0(%0 : $Float):
+  %2 = float_literal $Builtin.FPIEEE32, 0x40A00000
+  %3 = struct_extract %0, #Float._value
+  %4 = builtin "fmul_FPIEEE32"(%2, %3) : $Builtin.FPIEEE32
+  %5 = struct $Float (%4)
+  return %5
+}
+
+sil [ossa] @$s28closure_applied_use_analysis18mixedRotatedCalleryS2f_SiS3fcS2fctF : $@convention(thin) (Float, Int, Float, @guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float) -> Float {
+bb0(%0 : $Float, %1 : $Int, %2 : $Float, %3 : @guaranteed $@callee_guaranteed (Float) -> Float, %4 : @guaranteed $@callee_guaranteed (Float) -> Float):
+  %10 = function_ref @$s28closure_applied_use_analysis18mixedRotatedCalleryS2f_SiS3fcS2fctFS2fcfU_ : $@convention(thin) (Float, Float) -> Float
+  %11 = partial_apply [callee_guaranteed] %10(%0) : $@convention(thin) (Float, Float) -> Float
+  %12 = function_ref @$s28closure_applied_use_analysis0B13AfterRotationyS3fc_S2fcS2fcSiSftF : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float
+  %13 = apply %12(%11, %3, %4, %1, %2) : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float
+  destroy_value %11
+  return %13
+}
+
+sil private [ossa] @$s28closure_applied_use_analysis18mixedRotatedCalleryS2f_SiS3fcS2fctFS2fcfU_ : $@convention(thin) (Float, Float) -> Float {
+bb0(%0 : $Float, %1 : @closureCapture $Float):
+  %3 = float_literal $Builtin.FPIEEE32, 0x40000000
+  %4 = struct_extract %1, #Float._value
+  %5 = builtin "fmul_FPIEEE32"(%3, %4) : $Builtin.FPIEEE32
+  %6 = struct_extract %0, #Float._value
+  %7 = builtin "fmul_FPIEEE32"(%5, %6) : $Builtin.FPIEEE32
+  %8 = struct $Float (%7)
+  return %8
+}
+
+sil [noinline] [ossa] @$s28closure_applied_use_analysis8forward0yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float {
+bb0(%0 : @guaranteed $@noescape @callee_guaranteed (Float) -> Float, %1 : $Float):
+  %4 = function_ref @$s28closure_applied_use_analysis8forward1yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  %5 = apply %4(%0, %1) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  return %5
+}
+
+sil [noinline] [ossa] @$s28closure_applied_use_analysis8forward1yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float {
+bb0(%0 : @guaranteed $@noescape @callee_guaranteed (Float) -> Float, %1 : $Float):
+  %4 = function_ref @$s28closure_applied_use_analysis8forward2yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  %5 = apply %4(%0, %1) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  return %5
+}
+
+sil [noinline] [ossa] @$s28closure_applied_use_analysis8forward2yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float {
+bb0(%0 : @guaranteed $@noescape @callee_guaranteed (Float) -> Float, %1 : $Float):
+  %4 = function_ref @$s28closure_applied_use_analysis8forward3yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  %5 = apply %4(%0, %1) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  return %5
+}
+
+sil [noinline] [ossa] @$s28closure_applied_use_analysis8forward3yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float {
+bb0(%0 : @guaranteed $@noescape @callee_guaranteed (Float) -> Float, %1 : $Float):
+  %4 = function_ref @$s28closure_applied_use_analysis8forward4yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  %5 = apply %4(%0, %1) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  return %5
+}
+
+sil [noinline] [ossa] @$s28closure_applied_use_analysis8forward4yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float {
+bb0(%0 : @guaranteed $@noescape @callee_guaranteed (Float) -> Float, %1 : $Float):
+  %4 = function_ref @$s28closure_applied_use_analysis8forward5yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  %5 = apply %4(%0, %1) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  return %5
+}
+
+sil [noinline] [ossa] @$s28closure_applied_use_analysis8forward5yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float {
+bb0(%0 : @guaranteed $@noescape @callee_guaranteed (Float) -> Float, %1 : $Float):
+  %4 = function_ref @$s28closure_applied_use_analysis8forward6yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  %5 = apply %4(%0, %1) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  return %5
+}
+
+sil [noinline] [ossa] @$s28closure_applied_use_analysis8forward6yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float {
+bb0(%0 : @guaranteed $@noescape @callee_guaranteed (Float) -> Float, %1 : $Float):
+  %4 = function_ref @$s28closure_applied_use_analysis8forward7yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  %5 = apply %4(%0, %1) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  return %5
+}
+
+sil [noinline] [ossa] @$s28closure_applied_use_analysis8forward7yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float {
+bb0(%0 : @guaranteed $@noescape @callee_guaranteed (Float) -> Float, %1 : $Float):
+  %4 = function_ref @$s28closure_applied_use_analysis8forward8yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  %5 = apply %4(%0, %1) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  return %5
+}
+
+sil [noinline] [ossa] @$s28closure_applied_use_analysis8forward8yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float {
+bb0(%0 : @guaranteed $@noescape @callee_guaranteed (Float) -> Float, %1 : $Float):
+  %4 = function_ref @$s28closure_applied_use_analysis8forward9yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  %5 = apply %4(%0, %1) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  return %5
+}
+
+sil [noinline] [ossa] @$s28closure_applied_use_analysis8forward9yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float {
+bb0(%0 : @guaranteed $@noescape @callee_guaranteed (Float) -> Float, %1 : $Float):
+  %4 = function_ref @$s28closure_applied_use_analysis9forward10yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  %5 = apply %4(%0, %1) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  return %5
+}
+
+sil [noinline] [ossa] @$s28closure_applied_use_analysis9forward10yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float {
+bb0(%0 : @guaranteed $@noescape @callee_guaranteed (Float) -> Float, %1 : $Float):
+  %4 = function_ref @$s28closure_applied_use_analysis9forward11yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  %5 = apply %4(%0, %1) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  return %5
+}
+
+sil [noinline] [ossa] @$s28closure_applied_use_analysis9forward11yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float {
+bb0(%0 : @guaranteed $@noescape @callee_guaranteed (Float) -> Float, %1 : $Float):
+  %4 = apply %0(%1) : $@noescape @callee_guaranteed (Float) -> Float
+  return %4
+}
+
+sil [ossa] @$s28closure_applied_use_analysis10deepCalleryS2f_SftF : $@convention(thin) (Float, Float) -> Float {
+bb0(%0 : $Float, %1 : $Float):
+  %4 = function_ref @$s28closure_applied_use_analysis10deepCalleryS2f_SftFS2fXEfU_ : $@convention(thin) (Float, Float) -> Float
+  %5 = partial_apply [callee_guaranteed] [on_stack] %4(%0) : $@convention(thin) (Float, Float) -> Float
+  %6 = function_ref @$s28closure_applied_use_analysis8forward0yS3fXE_SftF : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  %7 = apply %6(%5, %1) : $@convention(thin) (@guaranteed @noescape @callee_guaranteed (Float) -> Float, Float) -> Float
+  destroy_value %5
+  return %7
+}
+
+sil private [ossa] @$s28closure_applied_use_analysis10deepCalleryS2f_SftFS2fXEfU_ : $@convention(thin) (Float, Float) -> Float {
+bb0(%0 : $Float, %1 : @closureCapture $Float):
+  %3 = struct_extract %1, #Float._value
+  %4 = struct_extract %0, #Float._value
+  %5 = builtin "fmul_FPIEEE32"(%3, %4) : $Builtin.FPIEEE32
+  %6 = struct $Float (%5)
+  return %6
+}
