@@ -1934,12 +1934,11 @@ private struct PullbackSpecializationAgainstBTE {
     using cloner: inout Cloner, autodiffSpecializationInfo: AutoDiffSpecializationInfo,
     enumDict: SpecializedBTEMap
   ) {
-    self.cloneEntryBlockArgsForPullbackSpecializedAgainstBTE(
-      using: &cloner, usingOrigCalleeAt: autodiffSpecializationInfo, enumDict: enumDict)
-
-    cloner.cloneFunctionBody(
-      from: autodiffSpecializationInfo.pullback,
-      entryBlockArguments: Array(cloner.targetFunction.entryBlock.arguments))
+    // Clone with the original operand types. Specializing the tape afterwards
+    // keeps type-changing ownership cleanup local to this transformation.
+    cloner.cloneFunctionBody(from: autodiffSpecializationInfo.pullback)
+    specializeEntryTapeArgument(
+      using: &cloner, info: autodiffSpecializationInfo, enumDict: enumDict)
 
     let vjp = autodiffSpecializationInfo.paiOfPullback.parentFunction
     let bbQueue = computeTopologicalBlockOrder(of: autodiffSpecializationInfo.pullback)!
@@ -2009,32 +2008,29 @@ private struct PullbackSpecializationAgainstBTE {
     }
   }
 
-  private func cloneEntryBlockArgsForPullbackSpecializedAgainstBTE(
-    using cloner: inout Cloner,
-    usingOrigCalleeAt autodiffSpecializationInfo: AutoDiffSpecializationInfo,
+  private func specializeEntryTapeArgument(
+    using cloner: inout Cloner, info: AutoDiffSpecializationInfo,
     enumDict: SpecializedBTEMap
   ) {
-    let pb = autodiffSpecializationInfo.pullback
-    let vjp = autodiffSpecializationInfo.vjp
-    let enumType = remapBranchTracingEnumType(
-      pb.entryBlock.getBranchTracingEnumArg(vjp: vjp)!.type, into: vjp)
-
-    let originalEntryBlock = autodiffSpecializationInfo.pullback.entryBlock
-    let clonedFunction = cloner.targetFunction
-    let clonedEntryBlock = cloner.getOrCreateEntryBlock()
-
-    for arg in originalEntryBlock.arguments {
-      var clonedEntryBlockArgType = arg.type.getLoweredType(in: clonedFunction)
-      if remapBranchTracingEnumType(arg.type, into: vjp) == enumType {
-        // The enum schema is analyzed in the VJP environment. The cloned
-        // pullback has its own archetypes, even if their printed names agree.
-        clonedEntryBlockArgType = remapBranchTracingEnumType(
-          enumDict[enumType]!, into: clonedFunction)
+    let sourceArg = info.pullback.entryBlock.getBranchTracingEnumArg(vjp: info.vjp)!
+    let enumType = remapBranchTracingEnumType(sourceArg.type, into: info.vjp)
+    let function = cloner.targetFunction
+    let entry = function.entryBlock
+    let oldArg = entry.arguments[sourceArg.index] as! FunctionArgument
+    let newType = remapBranchTracingEnumType(enumDict[enumType]!, into: function)
+    let isTrivial = newType.isTrivial(in: function)
+    let newArg = entry.insertFunctionArgument(
+      atPosition: oldArg.index, type: newType,
+      ownership: isTrivial ? .none : oldArg.ownership, cloner.context)
+    newArg.copyFlags(from: oldArg, cloner.context)
+    for use in Array(oldArg.uses) {
+      if isTrivial, let destroy = use.instruction as? DestroyValueInst {
+        cloner.context.erase(instruction: destroy)
+      } else {
+        use.set(to: newArg, cloner.context)
       }
-      let clonedEntryBlockArg = clonedEntryBlock.addFunctionArgument(
-        type: clonedEntryBlockArgType, cloner.context)
-      clonedEntryBlockArg.copyFlags(from: arg as! FunctionArgument, cloner.context)
     }
+    entry.eraseArgument(at: oldArg.index, cloner.context)
   }
 }
 
