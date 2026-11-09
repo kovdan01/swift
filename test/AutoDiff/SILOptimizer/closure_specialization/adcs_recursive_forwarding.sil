@@ -1,0 +1,202 @@
+// RUN: %target-sil-opt -enable-sil-verify-all -closure-specialization %s -o - | %FileCheck %s
+//
+// Reduced from the generated functions and custom pullback closures in
+// validation-test/closure_specialization/adcs_recursive_forwarding.swift.
+// Emit optimized SIL with closure-specialization, autodiff-closure-specialization,
+// and ownership-model-eliminator disabled; remove unrelated definitions.
+//
+// A closure forwarded through a finite recursive call, but never invoked, must
+// not cause unbounded analysis or become a profitable specialization candidate.
+// CHECK-LABEL: sil private {{.*}}@$s25adcs_recursive_forwarding25vjpIdentityWithForwardingySf5value_S2fc8pullbacktSf_SitFS2fcfU_ :
+// CHECK: partial_apply
+// CHECK: function_ref @$s25adcs_recursive_forwarding13forwardUnusedyS3fc_SiSftF :
+// CHECK: return
+//
+// The first parameter reaches an application through the second and third
+// parameters of the same recursive function. Function-only visitation would
+// stop at the second parameter. All three static closures should specialize.
+// CHECK-LABEL: sil private {{.*}}@$s25adcs_recursive_forwarding20vjpRotatedDerivativeySf5value_S2fc8pullbacktSf_SitFS2fcfU_ :
+// CHECK-NOT: partial_apply
+// CHECK: function_ref @{{[^ ]+}} : $@convention(thin) (Int, Float, Float) -> Float
+// CHECK-NOT: partial_apply
+// CHECK: return
+
+sil_stage canonical
+
+import Builtin
+import Swift
+import SwiftShims
+import _Differentiation
+
+sil [noinline] [ossa] @$s25adcs_recursive_forwarding13forwardUnusedyS3fc_SiSftF : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float {
+[%0: noescape **, read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0 "body"                                      // users: %19, %3
+// %1 "depth"                                     // users: %7, %4
+// %2 "seed"                                      // users: %19, %10, %5
+bb0(%0 : @guaranteed $@callee_guaranteed (Float) -> Float, %1 : $Int, %2 : $Float):
+  debug_value %0, let, name "body", argno 1       // id: %3
+  debug_value %1, let, name "depth", argno 2      // id: %4
+  debug_value %2, let, name "seed", argno 3       // id: %5
+  %6 = integer_literal $Builtin.Int64, 0          // user: %8
+  %7 = struct_extract %1, #Int._value             // users: %13, %8
+  %8 = builtin "cmp_eq_Int64"(%7, %6) : $Builtin.Int1 // user: %9
+  cond_br %8, bb1, bb2                            // id: %9
+
+bb1:                                              // Preds: bb0
+  br bb3(%2)                                      // id: %10
+
+bb2:                                              // Preds: bb0
+  %11 = integer_literal $Builtin.Int64, 1         // user: %13
+  %12 = integer_literal $Builtin.Int1, -1         // user: %13
+  %13 = builtin "ssub_with_overflow_Int64"(%7, %11, %12) : $(Builtin.Int64, Builtin.Int1) // users: %15, %14
+  %14 = tuple_extract %13, 0                      // user: %17
+  %15 = tuple_extract %13, 1                      // user: %16
+  cond_fail %15, "arithmetic overflow"            // id: %16
+  %17 = struct $Int (%14)                         // user: %19
+  // function_ref forwardUnused(_:_:_:)
+  %18 = function_ref @$s25adcs_recursive_forwarding13forwardUnusedyS3fc_SiSftF : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float // user: %19
+  %19 = apply %18(%0, %17, %2) : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float // user: %20
+  br bb3(%19)                                     // id: %20
+
+// %21                                            // user: %22
+bb3(%21 : $Float):                                // Preds: bb2 bb1
+  return %21                                      // id: %22
+} // end sil function '$s25adcs_recursive_forwarding13forwardUnusedyS3fc_SiSftF'
+
+sil [noinline] [ossa] @$s25adcs_recursive_forwarding20appliedAfterRotationyS3fc_S2fcS2fcSiSftF : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float {
+[%0: read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[%1: read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[%2: read v**.c*.v**, write v**.c*.v**, copy v**.**, destroy v**.c*.v**]
+[%4: read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0 "first"                                     // users: %24, %5
+// %1 "second"                                    // users: %24, %6
+// %2 "third"                                     // users: %14, %7, %24
+// %3 "depth"                                     // users: %11, %8
+// %4 "seed"                                      // users: %24, %14, %9
+bb0(%0 : @guaranteed $@callee_guaranteed (Float) -> Float, %1 : @guaranteed $@callee_guaranteed (Float) -> Float, %2 : @guaranteed $@callee_guaranteed (Float) -> Float, %3 : $Int, %4 : $Float):
+  debug_value %0, let, name "first", argno 1      // id: %5
+  debug_value %1, let, name "second", argno 2     // id: %6
+  debug_value %2, let, name "third", argno 3      // id: %7
+  debug_value %3, let, name "depth", argno 4      // id: %8
+  debug_value %4, let, name "seed", argno 5       // id: %9
+  %10 = integer_literal $Builtin.Int64, 0         // user: %12
+  %11 = struct_extract %3, #Int._value            // users: %18, %12
+  %12 = builtin "cmp_eq_Int64"(%11, %10) : $Builtin.Int1 // user: %13
+  cond_br %12, bb1, bb2                           // id: %13
+
+bb1:                                              // Preds: bb0
+  %14 = apply %2(%4) : $@callee_guaranteed (Float) -> Float // user: %15
+  br bb3(%14)                                     // id: %15
+
+bb2:                                              // Preds: bb0
+  %16 = integer_literal $Builtin.Int64, 1         // user: %18
+  %17 = integer_literal $Builtin.Int1, -1         // user: %18
+  %18 = builtin "ssub_with_overflow_Int64"(%11, %16, %17) : $(Builtin.Int64, Builtin.Int1) // users: %20, %19
+  %19 = tuple_extract %18, 0                      // user: %22
+  %20 = tuple_extract %18, 1                      // user: %21
+  cond_fail %20, "arithmetic overflow"            // id: %21
+  %22 = struct $Int (%19)                         // user: %24
+  // function_ref appliedAfterRotation(_:_:_:_:_:)
+  %23 = function_ref @$s25adcs_recursive_forwarding20appliedAfterRotationyS3fc_S2fcS2fcSiSftF : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float // user: %24
+  %24 = apply %23(%2, %0, %1, %22, %4) : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float // user: %25
+  br bb3(%24)                                     // id: %25
+
+// %26                                            // user: %27
+bb3(%26 : $Float):                                // Preds: bb2 bb1
+  return %26                                      // id: %27
+} // end sil function '$s25adcs_recursive_forwarding20appliedAfterRotationyS3fc_S2fcS2fcSiSftF'
+
+sil private [heuristic_always_inline] [ossa] @$s25adcs_recursive_forwarding25vjpIdentityWithForwardingySf5value_S2fc8pullbacktSf_SitFS2fcfU_ : $@convention(thin) (Float, Float, Int) -> Float {
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0 "seed"                                      // users: %7, %3
+// %1 "x"                                         // user: %5
+// %2 "depth"                                     // user: %7
+bb0(%0 : $Float, %1 : @closureCapture $Float, %2 : @closureCapture $Int):
+  debug_value %0, let, name "seed", argno 1       // id: %3
+  // function_ref closure #1 in closure #1 in vjpIdentityWithForwarding(_:_:)
+  %4 = function_ref @$s25adcs_recursive_forwarding25vjpIdentityWithForwardingySf5value_S2fc8pullbacktSf_SitFS2fcfU_S2fcfU_ : $@convention(thin) (Float, Float) -> Float // user: %5
+  %5 = partial_apply [callee_guaranteed] %4(%1) : $@convention(thin) (Float, Float) -> Float // users: %8, %7
+  // function_ref forwardUnused(_:_:_:)
+  %6 = function_ref @$s25adcs_recursive_forwarding13forwardUnusedyS3fc_SiSftF : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float // user: %7
+  %7 = apply %6(%5, %2, %0) : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float // user: %9
+  destroy_value %5                                // id: %8
+  return %7                                       // id: %9
+} // end sil function '$s25adcs_recursive_forwarding25vjpIdentityWithForwardingySf5value_S2fc8pullbacktSf_SitFS2fcfU_'
+
+sil private [heuristic_always_inline] [ossa] @$s25adcs_recursive_forwarding25vjpIdentityWithForwardingySf5value_S2fc8pullbacktSf_SitFS2fcfU_S2fcfU_ : $@convention(thin) (Float, Float) -> Float {
+[global: ]
+// %0 "value"                                     // users: %3, %2
+// %1 "x"                                         // user: %4
+bb0(%0 : $Float, %1 : @closureCapture $Float):
+  debug_value %0, let, name "value", argno 1      // id: %2
+  %3 = struct_extract %0, #Float._value           // user: %5
+  %4 = struct_extract %1, #Float._value           // user: %5
+  %5 = builtin "fmul_FPIEEE32"(%3, %4) : $Builtin.FPIEEE32 // user: %6
+  %6 = struct $Float (%5)                         // user: %7
+  return %6                                       // id: %7
+} // end sil function '$s25adcs_recursive_forwarding25vjpIdentityWithForwardingySf5value_S2fc8pullbacktSf_SitFS2fcfU_S2fcfU_'
+
+sil private [heuristic_always_inline] [ossa] @$s25adcs_recursive_forwarding20vjpRotatedDerivativeySf5value_S2fc8pullbacktSf_SitFS2fcfU_ : $@convention(thin) (Float, Float, Int) -> Float {
+[%0: read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0 "seed"                                      // users: %11, %3
+// %1 "x"                                         // user: %5
+// %2 "depth"                                     // user: %11
+bb0(%0 : $Float, %1 : @closureCapture $Float, %2 : @closureCapture $Int):
+  debug_value %0, let, name "seed", argno 1       // id: %3
+  // function_ref closure #1 in closure #1 in vjpRotatedDerivative(_:_:)
+  %4 = function_ref @$s25adcs_recursive_forwarding20vjpRotatedDerivativeySf5value_S2fc8pullbacktSf_SitFS2fcfU_S2fcfU_ : $@convention(thin) (Float, Float) -> Float // user: %5
+  %5 = partial_apply [callee_guaranteed] %4(%1) : $@convention(thin) (Float, Float) -> Float // users: %12, %11
+  // function_ref closure #2 in closure #1 in vjpRotatedDerivative(_:_:)
+  %6 = function_ref @$s25adcs_recursive_forwarding20vjpRotatedDerivativeySf5value_S2fc8pullbacktSf_SitFS2fcfU_S2fcfU0_ : $@convention(thin) (Float) -> Float // user: %7
+  %7 = thin_to_thick_function %6 to $@callee_guaranteed (Float) -> Float // user: %11; ownership: none
+  // function_ref closure #3 in closure #1 in vjpRotatedDerivative(_:_:)
+  %8 = function_ref @$s25adcs_recursive_forwarding20vjpRotatedDerivativeySf5value_S2fc8pullbacktSf_SitFS2fcfU_S2fcfU1_ : $@convention(thin) (Float) -> Float // user: %9
+  %9 = thin_to_thick_function %8 to $@callee_guaranteed (Float) -> Float // user: %11; ownership: none
+  // function_ref appliedAfterRotation(_:_:_:_:_:)
+  %10 = function_ref @$s25adcs_recursive_forwarding20appliedAfterRotationyS3fc_S2fcS2fcSiSftF : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float // user: %11
+  %11 = apply %10(%5, %7, %9, %2, %0) : $@convention(thin) (@guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, @guaranteed @callee_guaranteed (Float) -> Float, Int, Float) -> Float // user: %13
+  destroy_value %5                                // id: %12
+  return %11                                      // id: %13
+} // end sil function '$s25adcs_recursive_forwarding20vjpRotatedDerivativeySf5value_S2fc8pullbacktSf_SitFS2fcfU_'
+
+sil private [heuristic_always_inline] [ossa] @$s25adcs_recursive_forwarding20vjpRotatedDerivativeySf5value_S2fc8pullbacktSf_SitFS2fcfU_S2fcfU_ : $@convention(thin) (Float, Float) -> Float {
+[global: ]
+// %0 "$0"                                        // users: %6, %2
+// %1 "x"                                         // user: %4
+bb0(%0 : $Float, %1 : @closureCapture $Float):
+  debug_value %0, let, name "$0", argno 1         // id: %2
+  %3 = float_literal $Builtin.FPIEEE32, 0x40000000 // 2 // user: %5
+  %4 = struct_extract %1, #Float._value           // user: %5
+  %5 = builtin "fmul_FPIEEE32"(%3, %4) : $Builtin.FPIEEE32 // user: %7
+  %6 = struct_extract %0, #Float._value           // user: %7
+  %7 = builtin "fmul_FPIEEE32"(%5, %6) : $Builtin.FPIEEE32 // user: %8
+  %8 = struct $Float (%7)                         // user: %9
+  return %8                                       // id: %9
+} // end sil function '$s25adcs_recursive_forwarding20vjpRotatedDerivativeySf5value_S2fc8pullbacktSf_SitFS2fcfU_S2fcfU_'
+
+sil private [heuristic_always_inline] [ossa] @$s25adcs_recursive_forwarding20vjpRotatedDerivativeySf5value_S2fc8pullbacktSf_SitFS2fcfU_S2fcfU0_ : $@convention(thin) (Float) -> Float {
+[global: ]
+// %0 "$0"                                        // users: %3, %1
+bb0(%0 : $Float):
+  debug_value %0, let, name "$0", argno 1         // id: %1
+  %2 = float_literal $Builtin.FPIEEE32, 0x40400000 // 3 // user: %4
+  %3 = struct_extract %0, #Float._value           // user: %4
+  %4 = builtin "fmul_FPIEEE32"(%2, %3) : $Builtin.FPIEEE32 // user: %5
+  %5 = struct $Float (%4)                         // user: %6
+  return %5                                       // id: %6
+} // end sil function '$s25adcs_recursive_forwarding20vjpRotatedDerivativeySf5value_S2fc8pullbacktSf_SitFS2fcfU_S2fcfU0_'
+
+sil private [heuristic_always_inline] [ossa] @$s25adcs_recursive_forwarding20vjpRotatedDerivativeySf5value_S2fc8pullbacktSf_SitFS2fcfU_S2fcfU1_ : $@convention(thin) (Float) -> Float {
+[global: ]
+// %0 "$0"                                        // users: %3, %1
+bb0(%0 : $Float):
+  debug_value %0, let, name "$0", argno 1         // id: %1
+  %2 = float_literal $Builtin.FPIEEE32, 0x40A00000 // 5 // user: %4
+  %3 = struct_extract %0, #Float._value           // user: %4
+  %4 = builtin "fmul_FPIEEE32"(%2, %3) : $Builtin.FPIEEE32 // user: %5
+  %5 = struct $Float (%4)                         // user: %6
+  return %5                                       // id: %6
+} // end sil function '$s25adcs_recursive_forwarding20vjpRotatedDerivativeySf5value_S2fc8pullbacktSf_SitFS2fcfU_S2fcfU1_'
