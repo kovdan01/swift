@@ -544,7 +544,6 @@ private enum PayloadUseShape {
   case apply(ApplyInst)
   case destroyValue(DestroyValueInst)
   case uncheckedEnumData(UncheckedEnumDataInst)
-  case convertFunction(ConvertFunctionInst)
   case beginBorrow(BeginBorrowInst)
   case switchEnum(SwitchEnumInst)
   case tupleExtract(TupleExtractInst)
@@ -553,7 +552,6 @@ private enum PayloadUseShape {
 private enum ClosurePayloadUseShape {
   case apply(ApplyInst)
   case beginBorrow(applyUse: Operand, endBorrowUse: Operand)
-  case convertFunction(beginBorrowUse: Operand, destroyValueUse: Operand)
 }
 
 // Phi simplification can hoist the projection of a singleton BTE payload tuple
@@ -678,37 +676,6 @@ private func classifyUncheckedEnumDataPayloadUse(_ uedi: UncheckedEnumDataInst) 
   return nil
 }
 
-private func classifyConvertFunctionPayloadUse(_ cfi: ConvertFunctionInst)
-  -> (beginBorrowUse: Operand, destroyValueUse: Operand)?
-{
-  guard cfi.uses.isExactlyTwo else {
-    return nil
-  }
-
-  var beginBorrowUse: Operand? = nil
-  var destroyValueUse: Operand? = nil
-  for cfiUse in cfi.uses {
-    switch cfiUse.instruction {
-    case _ as BeginBorrowInst:
-      guard beginBorrowUse == nil else {
-        return nil
-      }
-      beginBorrowUse = cfiUse
-    case _ as DestroyValueInst:
-      guard destroyValueUse == nil else {
-        return nil
-      }
-      destroyValueUse = cfiUse
-    default:
-      return nil
-    }
-  }
-
-  assert(beginBorrowUse != nil)
-  assert(destroyValueUse != nil)
-  return (beginBorrowUse!, destroyValueUse!)
-}
-
 private func classifyBeginBorrowPayloadUse(_ bbi: BeginBorrowInst)
   -> (applyUse: Operand, endBorrowUse: Operand)?
 {
@@ -751,13 +718,6 @@ private func classifyClosurePayloadUse(_ use: Operand) -> ClosurePayloadUseShape
     return .beginBorrow(
       applyUse: classified.applyUse,
       endBorrowUse: classified.endBorrowUse)
-  case let cfi as ConvertFunctionInst:
-    guard let classified = classifyConvertFunctionPayloadUse(cfi) else {
-      return nil
-    }
-    return .convertFunction(
-      beginBorrowUse: classified.beginBorrowUse,
-      destroyValueUse: classified.destroyValueUse)
   default:
     return nil
   }
@@ -773,10 +733,10 @@ private func classifyPayloadUse(_ use: Operand) -> PayloadUseShape? {
     return classifyUncheckedEnumDataPayloadUse(uedi) == nil && uedi.uses.singleUse != nil
       ? nil
       : .uncheckedEnumData(uedi)
-  case let cfi as ConvertFunctionInst:
-    return classifyConvertFunctionPayloadUse(cfi) == nil && !cfi.uses.isEmpty
-      ? nil
-      : .convertFunction(cfi)
+  case is ConvertFunctionInst:
+    // Generated taped callbacks are invoked with their stored function type.
+    // Do not synthesize conversions for an unexpected payload callable.
+    return nil
   case let bbi as BeginBorrowInst:
     return classifyBeginBorrowPayloadUse(bbi) == nil && !bbi.uses.isEmpty
       ? nil
@@ -837,11 +797,6 @@ private func validateUncheckedEnumDataPayloadUse(uedi: UncheckedEnumDataInst, pr
   classifyUncheckedEnumDataPayloadUse(uedi) != nil || uedi.uses.isEmpty
 }
 
-private func validateConvertFunctionPayloadUse(cfi: ConvertFunctionInst, prefixFail: String) -> Bool
-{
-  classifyConvertFunctionPayloadUse(cfi) != nil
-}
-
 private func validateBeginBorrowPayloadUse(bbi: BeginBorrowInst, prefixFail: String) -> Bool {
   if classifyBeginBorrowPayloadUse(bbi) != nil {
     return true
@@ -875,10 +830,6 @@ func checkIfCanRunForPayloadValues(
         ()
       case .uncheckedEnumData(let uedi):
         if !validateUncheckedEnumDataPayloadUse(uedi: uedi, prefixFail: prefixFail) {
-          return false
-        }
-      case .convertFunction(let cfi):
-        if !validateConvertFunctionPayloadUse(cfi: cfi, prefixFail: prefixFail) {
           return false
         }
       case .beginBorrow(let bbi):
@@ -1312,116 +1263,6 @@ private func extractTupleElements(
   return elements
 }
 
-// Rebuild the closure-building graph from the capture values stored in the
-// specialized payload. Each caller transfers an owned capture tuple, so an
-// escaping partial_apply can consume its captures as in the original graph.
-private func rebuildCapturedClosure(
-  closureInfo: ClosureInBTE, capturedValues: [Value],
-  before insertionPoint: Instruction, _ context: FunctionPassContext
-) -> Value {
-  let builder = Builder(before: insertionPoint, context)
-  let root: Value
-  let rootCaptureCount = closureInfo.numRootCapturesInPayload
-  if !closureInfo.runtimeWrapperCallees.isEmpty {
-    // An unknown adapter may retain or repeatedly invoke the inner closure.
-    // Keep the existing inner context instead of allocating another one.
-    root = capturedValues[0]
-  } else if let partialApply = closureInfo.closure as? PartialApplyInst {
-    var arguments = Array(capturedValues.prefix(rootCaptureCount))
-    var allocations = [AllocStackInst]()
-    for (index, operand) in partialApply.argumentOperands.enumerated() {
-      if operand.value.type.isAddress && !partialApply.convention(of: operand)!.isInout {
-        let allocation = builder.createAllocStack(arguments[index].type)
-        builder.createStore(source: arguments[index], destination: allocation, ownership: .initialize)
-        arguments[index] = allocation
-        allocations.append(allocation)
-      }
-    }
-    var cloner = SIL.Cloner(cloneBefore: insertionPoint, context)
-    defer { cloner.deinitialize() }
-    let callee = cloner.cloneRecursively(value: partialApply.callee)
-    // Capture operands must be mapped by position: the same source SSA value
-    // can occupy multiple fields, while a value-map alone would merge them.
-    root = builder.createPartialApply(
-      function: callee, substitutionMap: partialApply.substitutionMap.substitute(
-        with: insertionPoint.parentFunction.forwardingSubstitutionMap),
-      capturedArguments: arguments, calleeConvention: partialApply.calleeConvention,
-      hasUnknownResultIsolation: partialApply.hasUnknownResultIsolation,
-      isOnStack: partialApply.isOnStack, isNested: partialApply.isNested,
-      executionSemantics: partialApply.executionSemantics)
-    for allocation in allocations.reversed() {
-      builder.createDeallocStack(allocation)
-    }
-  } else {
-    assert(closureInfo.closure is ThinToThickFunctionInst)
-    let thinToThick = closureInfo.closure as! ThinToThickFunctionInst
-    let reference = thinToThick.callee as! FunctionRefInst
-    let callee = builder.createFunctionRef(reference.referencedFunction)
-    let type = insertionPoint.parentFunction.mapTypeIntoEnvironment(
-      thinToThick.type.rawType.mapOutOfEnvironment()).canonical
-      .loweredType(in: insertionPoint.parentFunction)
-    root = builder.createThinToThickFunction(thinFunction: callee, resultType: type)
-  }
-
-  var current = root
-  var runtimeCalleeIndex = rootCaptureCount
-  for wrapper in closureInfo.reabstractions {
-    let callee: Value
-    if let reference = wrapper.callee as? FunctionRefInst {
-      callee = builder.createFunctionRef(reference.referencedFunction)
-    } else {
-      callee = capturedValues[runtimeCalleeIndex]
-      runtimeCalleeIndex += 1
-    }
-    // The adapter comes from the VJP, whereas its replacement lives in the
-    // cloned pullback. Compose substitutions to remap both replacement types
-    // and conformances into that function's generic environment.
-    current = builder.createPartialApply(
-      function: callee, substitutionMap: wrapper.substitutionMap.substitute(
-        with: insertionPoint.parentFunction.forwardingSubstitutionMap),
-      capturedArguments: [current], calleeConvention: wrapper.calleeConvention,
-      hasUnknownResultIsolation: wrapper.hasUnknownResultIsolation,
-      isOnStack: wrapper.isOnStack, isNested: wrapper.isNested,
-      executionSemantics: wrapper.executionSemantics)
-  }
-  assert(runtimeCalleeIndex == capturedValues.count)
-  return current
-}
-
-private func rewriteConvertFunctionUse(
-  cfi: ConvertFunctionInst, resultIdx: Int,
-  result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
-) {
-  if let closureInfo = findMatchingClosureInfo(in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx) {
-    let builder = Builder(before: cfi, context)
-    // convert_function forwards ownership into the converted closure, whose
-    // original destroy_value ends that ownership. Transfer the replacement
-    // context once at the same instruction, rather than copying its captures.
-    assert(result.type.isTrivial(in: cfi.parentFunction) || result.ownership == .owned)
-    let capturedValues = extractTupleElements(
-      from: result, useTupleExtract: rewriteCtx.useTei, builder: builder)
-    let closure = rebuildCapturedClosure(
-      closureInfo: closureInfo, capturedValues: capturedValues, before: cfi, context)
-
-    // A conversion can require argument/result casts, not just a representation
-    // change. Preserve it and its original borrow/apply/destroy graph; the
-    // shared SIL combiner folds the reconstructed closure through the
-    // conversion while retaining any necessary casts.
-    var cloner = SIL.Cloner(cloneBefore: cfi, context)
-    defer { cloner.deinitialize() }
-    cloner.recordFoldedValue(cfi.fromFunction, mappedTo: closure)
-    let converted = cloner.clone(instruction: cfi) as! ConvertFunctionInst
-    cfi.replace(with: converted, context)
-  } else {
-    let builder = Builder(before: cfi, context)
-    let newCFI = builder.createConvertFunction(
-      originalFunction: result,
-      resultType: cfi.type,
-      kind: cfi.conversionKind)
-    cfi.replace(with: newCFI, context)
-  }
-}
-
 private func rewriteBeginBorrowUse(
   bbi: BeginBorrowInst, resultIdx: Int,
   result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
@@ -1662,11 +1503,6 @@ private func rewriteUsesOfPayloadItem(
   }
 
   switch payloadUseShape {
-  case .convertFunction(let cfi):
-    rewriteConvertFunctionUse(
-      cfi: cfi, resultIdx: resultIdx,
-      result: result, rewriteCtx: rewriteCtx, context)
-
   case .beginBorrow(let bbi):
     rewriteBeginBorrowUse(
       bbi: bbi, resultIdx: resultIdx,
