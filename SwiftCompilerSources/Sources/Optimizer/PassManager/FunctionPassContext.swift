@@ -211,6 +211,12 @@ struct FunctionPassContext : MutatingContext {
     String(taking: bridgedPassContext.mangleWithChangedRepresentation(original.bridged))
   }
 
+  func mangle(withBranchTracingEnum arg: Value, argIdx: Int, from pullback: Function) -> String {
+    String(
+      taking: bridgedPassContext.mangleWithAutoDiffBranchTracingEnum(
+        arg.bridged, argIdx, pullback.bridged))
+  }
+
   /// Makes sure that the lifetime of `value` ends at all control flow paths, even in dead-end blocks.
   /// Inserts destroys in dead-end blocks if those are missing.
   func completeLifetime(of value: Value) {
