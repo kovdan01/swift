@@ -1855,7 +1855,6 @@ private func getEnumCasesForSwitchEnumInst(_ sei: SwitchEnumInst) -> [(Int, Basi
 
 private struct PayloadRewriteContext {
   let closureInfoArray: [ClosureInBTE]
-  let useTei: Bool
   let throwingSuccessor: BasicBlock?
 }
 
@@ -1893,10 +1892,11 @@ private func insertLifetimeEndIfNeeded(
 }
 
 private func extractTupleElements(
-  from tuple: Value, useTupleExtract: Bool, builder: Builder
+  from tuple: Value, builder: Builder
 ) -> [Value] {
   var elements = [Value]()
-  if useTupleExtract {
+  // Consume owned captures; borrowed and trivial tuples use nonconsuming projections.
+  if tuple.ownership != .owned {
     for (tupleIdx, _) in tuple.type.tupleElements.enumerated() {
       elements.append(builder.createTupleExtract(tuple: tuple, elementIndex: tupleIdx))
     }
@@ -2041,7 +2041,7 @@ private func rewriteApplyUse(
     in: rewriteCtx.closureInfoArray, forPayloadIndex: resultIdx)
   {
     let extractedElements = extractTupleElements(
-      from: result, useTupleExtract: rewriteCtx.useTei, builder: builder)
+      from: result, builder: builder)
     rewriteApplyDirectClosure(
       ai: ai, closureInfo: closureInfo, extractedElements: extractedElements,
       builder: builder, context)
@@ -2773,7 +2773,7 @@ private struct PullbackSpecializationAgainstBTE {
   private func rebuildPayloadProjections(
     of payload: Argument, fieldIndex: Int?, originalUses: [Operand],
     context: FunctionPassContext
-  ) -> (values: [PayloadProjection], useTei: Bool, obsoleteDestructure: DestructureTupleInst?) {
+  ) -> (values: [PayloadProjection], obsoleteDestructure: DestructureTupleInst?) {
     if let fieldIndex {
       // Predecessors have remapped the enum data. Recreate its field projections
       // with the specialized types, leaving the phi in canonical field form.
@@ -2792,7 +2792,7 @@ private struct PullbackSpecializationAgainstBTE {
             tuple: old.tuple, elementIndex: fieldIndex), context)
         }
       }
-      return ([(fieldIndex, originalUses, payload)], payload.type.isTrivial(in: payload.parentFunction), nil)
+      return ([(fieldIndex, originalUses, payload)], nil)
     }
     if let singleUse = payload.uses.singleUse,
        let oldDti = singleUse.instruction as? DestructureTupleInst {
@@ -2806,7 +2806,7 @@ private struct PullbackSpecializationAgainstBTE {
         )
       }
       // Keep the old consuming projection until all its result uses are rewritten.
-      return (projections, false, oldDti)
+      return (projections, oldDti)
     }
 
     var projections = [PayloadProjection]()
@@ -2820,7 +2820,7 @@ private struct PullbackSpecializationAgainstBTE {
         replacementValue: newTei.results[0]))
       oldTei.replace(with: newTei, context)
     }
-    return (projections, true, nil)
+    return (projections, nil)
   }
 
   private func rewriteProjectedPayloadValues(
@@ -2905,7 +2905,6 @@ private struct PullbackSpecializationAgainstBTE {
           of: newArg, fieldIndex: flow.fieldIndex, originalUses: oldUses, context: cloner.context)
         let rewriteCtx = PayloadRewriteContext(
           closureInfoArray: closureInfoArray,
-          useTei: projections.useTei,
           throwingSuccessor: throwingSuccessor)
         rewriteProjectedPayloadValues(
           projections: projections.values,
