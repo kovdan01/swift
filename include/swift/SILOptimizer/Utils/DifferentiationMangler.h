@@ -21,7 +21,16 @@
 #include "swift/SIL/SILFunction.h"
 
 namespace swift {
+
 namespace Mangle {
+
+/// A deterministic name for a specialized tape layout in its generic context.
+std::string mangleAutoDiffSpecializedBranchTracingEnum(
+    StringRef prefix, CanType schema, CanGenericSignature signature);
+
+/// Identify a rewritten pullback by its originating VJP and new tape type.
+std::string mangleAutoDiffSpecializedPullback(
+    SILFunction *pullback, SILFunction *vjp, SILType enumType, unsigned argIndex);
 
 /// A mangler for generated differentiation functions.
 class DifferentiationMangler : public ASTMangler {

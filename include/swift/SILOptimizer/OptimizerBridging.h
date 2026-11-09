@@ -253,6 +253,14 @@ struct BridgedPassContext {
                                                 BridgedFunction applySiteCallee) const;
   BridgedOwnedString mangleWithChangedRepresentation(BridgedFunction applySiteCallee) const;
 
+  BridgedOwnedString mangleWithAutoDiffBranchTracingEnum(
+      BridgedType enumType, SwiftInt argIdx, BridgedFunction vjp,
+      BridgedFunction pullback) const;
+  BridgedOwnedString mangleAutoDiffBranchTracingEnum(
+      BridgedStringRef prefix, BridgedASTType schema, BridgedFunction vjp) const;
+  OptionalBridgedDeclObj lookupAutoDiffSpecializedBranchTracingEnum(
+      BridgedStringRef name, BridgedFunction vjp) const;
+
   void inlineFunction(BridgedInstruction apply, bool mandatoryInline) const;
   void eraseFunction(BridgedFunction function) const;
 

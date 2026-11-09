@@ -13,6 +13,7 @@
 #define DEBUG_TYPE "sil-inliner"
 #include "swift/AST/Module.h"
 #include "swift/AST/SemanticAttrs.h"
+#include "swift/Demangling/ManglingMacros.h"
 #include "swift/SIL/MemAccessUtils.h"
 #include "swift/SIL/OptimizationRemark.h"
 #include "swift/SILOptimizer/Analysis/BasicCalleeAnalysis.h"
@@ -563,6 +564,123 @@ static bool isTrivialVJP(SILFunction *vjp) {
   return true;
 }
 
+// See also ASTMangler::mangleAutoDiffGeneratedDeclaration.
+static bool isAutodiffBranchTracingEnumInVJP(SILType type, SILFunction *vjp) {
+  assert(isFunctionAutodiffVJP(vjp));
+  EnumDecl *ed = type.getEnumDecl();
+  if (ed == nullptr)
+    return false;
+
+  llvm::StringRef edName = ed->getNameStr();
+  if (!edName.starts_with("_AD__"))
+    return false;
+  if (!llvm::StringRef(edName.data() + 5, edName.size() - 5)
+           .starts_with(MANGLING_PREFIX_STR))
+    return false;
+
+  // At this point, we know that the type is indeed a branch tracing enum.
+  // Now we need to ensure that it is the enum related to the given VJP.
+
+  std::size_t idx = edName.rfind("__Pred__");
+  assert(idx != std::string::npos);
+
+  // Before "__Pred__", we have "_bbX", where X is a number.
+  // The loop calculates the start position of X.
+  for (; idx != 0 && std::isdigit(edName[idx - 1]); --idx)
+    ;
+
+  assert(std::isdigit(edName[idx]));
+  assert(!std::isdigit(edName[idx - 1]));
+
+  // The branch tracing enum decl name has the following components:
+  // 1) "_AD__";
+  // 2) MANGLING_PREFIX;
+  // 3) original function name;
+  // 4) "_bb";
+  // 5) X at position idx (see above);
+  // 6) the rest of the enum decl name.
+  // Thus, "_AD__", MANGLING_PREFIX and "_bb" must have total length less than
+  // idx.
+  std::size_t manglingPrefixSize = std::strlen(MANGLING_PREFIX_STR);
+  assert(idx > 5 + manglingPrefixSize + 3);
+  assert(std::string_view(edName.data() + idx - 3, 3) == "_bb");
+  assert(std::string_view(edName.data(), 5 + manglingPrefixSize) == "_AD__$s");
+
+  llvm::StringRef enumOrigFuncName =
+      std::string_view(edName.data() + 5 + manglingPrefixSize,
+                       idx - (5 + manglingPrefixSize + 3));
+
+  Demangle::Context Ctx;
+  if (auto *root = Ctx.demangleSymbolAsNode(vjp->getName()))
+    if (auto *node =
+            root->findByKind(Demangle::Node::Kind::Function, /*maxDepth=*/3))
+      if (mangleNode(node).result() == enumOrigFuncName)
+        return true;
+
+  return false;
+}
+
+static PartialApplyInst *getTopLevelPullback(SILFunction *vjp) {
+  ReturnInst *ri = nullptr;
+  for (SILBasicBlock &bb : *vjp) {
+    if (auto *retInst = dyn_cast<ReturnInst>(bb.getTerminator())) {
+      ri = retInst;
+      break;
+    }
+  }
+  if (!ri)
+    return nullptr;
+
+  auto handleConvertFunctionOrPartialApply =
+      [](SILInstruction *inst) -> PartialApplyInst * {
+    if (auto *pai = dyn_cast<PartialApplyInst>(inst)) {
+      return pai;
+    }
+    if (auto *cfi = dyn_cast<ConvertFunctionInst>(inst)) {
+      if (auto *pai = dyn_cast<PartialApplyInst>(cfi->getOperand())) {
+        return pai;
+      }
+    }
+    return nullptr;
+  };
+
+  SILInstruction *retValDefInst = ri->getOperand().getDefiningInstruction();
+  if (retValDefInst == nullptr)
+    return nullptr;
+
+  if (auto *ti = dyn_cast<TupleInst>(retValDefInst)) {
+    assert(ti->getNumOperands() > 0);
+    SILInstruction *lastElemDefInst =
+        ti->getOperand(ti->getNumOperands() - 1).getDefiningInstruction();
+    if (lastElemDefInst == nullptr)
+      return nullptr;
+    return handleConvertFunctionOrPartialApply(lastElemDefInst);
+  }
+
+  return handleConvertFunctionOrPartialApply(retValDefInst);
+}
+
+static bool vjpHasBranchTracingEnumContext(SILFunction *vjp) {
+  PartialApplyInst *topLevelPullback = getTopLevelPullback(vjp);
+  if (topLevelPullback == nullptr)
+    return false;
+
+  for (SILValue arg : topLevelPullback->getArguments())
+    if (isAutodiffBranchTracingEnumInVJP(arg->getType(), vjp))
+      return true;
+
+  return false;
+}
+
+static bool vjpHasLoopContext(SILFunction *vjp) {
+  for (SILBasicBlock &bb : *vjp)
+    for (SILInstruction &inst : bb)
+      if (auto *builtinInst = dyn_cast<BuiltinInst>(&inst))
+        if (builtinInst->getName().is("autoDiffProjectTopLevelSubcontext"))
+          return true;
+  return false;
+}
+
 static bool isProfitableToInlineAutodiffVJP(FullApplySite applySiteOfVJP,
                                             StringRef stageName) {
   SILFunction *caller = applySiteOfVJP.getFunction();
@@ -571,7 +689,6 @@ static bool isProfitableToInlineAutodiffVJP(FullApplySite applySiteOfVJP,
 
   bool isLowLevelFunctionPassPipeline = stageName == "LowLevel,Function";
   auto isCallerVJP = isFunctionAutodiffVJP(caller);
-  auto callerHasControlFlow = caller->size() > 1;
 
   // If the pass is being run as part of the low-level function pass pipeline,
   // the autodiff closure-spec optimization is done doing its work. Therefore,
@@ -599,18 +716,41 @@ static bool isProfitableToInlineAutodiffVJP(FullApplySite applySiteOfVJP,
     return false;
   }
 
-  if (isCallerVJP && callerHasControlFlow) {
-    // If pullback extracted from this VJP call result is only passed to
-    // top-level pullback of caller VJP, consider this callee VJP for inlining.
-    // It does not harm ADCS effectiveness since it properly handles nested
-    // inlining by running multiple specialization rounds and immediately
-    // folding partial_apply+apply pairs in the specialized caller pullback.
-    if (hasPullbackOnlyDirectUses(applySiteOfVJP))
-      return true;
+  bool callerHasLoops = vjpHasLoopContext(caller);
+  bool calleeHasLoops = vjpHasLoopContext(calleeVJP);
 
-    // TODO: allow inlining into VJP callers with control flow when ADCS handles
-    // this properly.
+  bool hasOnlyDirectUses = hasPullbackOnlyDirectUses(applySiteOfVJP);
+
+  bool calleeHasBTE = vjpHasBranchTracingEnumContext(calleeVJP);
+  bool callerHasBTE = vjpHasBranchTracingEnumContext(caller);
+
+  if (callerHasLoops) {
+    if (calleeHasLoops) {
+      // Iterative specialization does its job.
+      return hasOnlyDirectUses;
+    }
+    if (!calleeHasBTE) {
+      return hasOnlyDirectUses;
+    }
     return false;
+  }
+
+  if (calleeHasLoops) {
+    if (callerHasBTE) {
+      return false;
+    }
+    // Iterative specialization does its job.
+    return hasOnlyDirectUses;
+  }
+
+  assert(!callerHasLoops && !calleeHasLoops);
+
+  // Can only do specialization against BTE when non-inlined
+  if (calleeHasBTE)
+    return false;
+
+  if (callerHasBTE) {
+    return hasOnlyDirectUses;
   }
 
   return true;

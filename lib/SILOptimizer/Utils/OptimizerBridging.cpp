@@ -30,6 +30,7 @@
 #include "swift/SILOptimizer/Utils/Devirtualize.h"
 #include "swift/SILOptimizer/Utils/Generics.h"
 #include "swift/SILOptimizer/Utils/InstOptUtils.h"
+#include "swift/SILOptimizer/Utils/DifferentiationMangler.h"
 #include "swift/SILOptimizer/Utils/SILInliner.h"
 #include "swift/SILOptimizer/Utils/SILOptFunctionBuilder.h"
 #include "swift/SILOptimizer/Utils/SpecializationMangler.h"
@@ -515,6 +516,31 @@ void BridgedPassContext::fixStackNesting(BridgedFunction function) const {
       break;
   }
   invocation->setNeedFixStackNesting(false);
+}
+
+BridgedOwnedString BridgedPassContext::mangleWithAutoDiffBranchTracingEnum(
+    BridgedType enumType, SwiftInt argIdx, BridgedFunction vjp,
+    BridgedFunction pullback) const {
+  return BridgedOwnedString(Mangle::mangleAutoDiffSpecializedPullback(
+      pullback.getFunction(), vjp.getFunction(), enumType.unbridged(), argIdx));
+}
+
+BridgedOwnedString BridgedPassContext::mangleAutoDiffBranchTracingEnum(
+    BridgedStringRef prefix, BridgedASTType schema, BridgedFunction vjp) const {
+  return BridgedOwnedString(Mangle::mangleAutoDiffSpecializedBranchTracingEnum(
+      prefix.unbridged(), schema.unbridged()->getCanonicalType(),
+      vjp.getFunction()->getGenericSignature().getCanonicalSignature()));
+}
+
+OptionalBridgedDeclObj
+BridgedPassContext::lookupAutoDiffSpecializedBranchTracingEnum(
+    BridgedStringRef name, BridgedFunction vjp) const {
+  auto *module = vjp.getFunction()->getModule().getSwiftModule();
+  SmallVector<ValueDecl *, 1> results;
+  module->lookupValue(module->getASTContext().getIdentifier(name.unbridged()),
+                      NLKind::QualifiedLookup, results);
+  assert(results.size() <= 1 && "specialized tape names must be unique");
+  return {results.empty() ? nullptr : cast<EnumDecl>(results.front())};
 }
 
 bool BridgedPassContext::enableSimplificationFor(BridgedInstruction inst) const {
