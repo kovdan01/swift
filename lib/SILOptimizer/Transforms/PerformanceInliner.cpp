@@ -573,7 +573,7 @@ static bool isTrivialVJP(SILFunction *vjp) {
 // See also ASTMangler::mangleAutoDiffGeneratedDeclaration.
 static bool isAutodiffBranchTracingEnumInVJP(SILType type, SILFunction *vjp) {
   assert(isFunctionAutodiffVJP(vjp));
-  EnumDecl *ed = type.getEnumOrBoundGenericEnum();
+  EnumDecl *ed = type.getEnumDecl();
   if (ed == nullptr)
     return false;
 
