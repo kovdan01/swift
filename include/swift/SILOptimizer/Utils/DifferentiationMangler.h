@@ -22,10 +22,6 @@
 
 namespace swift {
 
-/// Whether a tape enum name identifies a branch-tracing context for this VJP.
-/// Both the inliner and AutoDiff closure specialization use this classification.
-bool isAutoDiffBranchTracingEnum(SILType type, SILFunction *vjp);
-
 namespace Mangle {
 
 /// A deterministic name for a specialized tape layout in its generic context.
