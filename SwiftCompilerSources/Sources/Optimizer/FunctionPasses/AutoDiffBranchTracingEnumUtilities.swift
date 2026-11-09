@@ -315,10 +315,12 @@ private func autodiffSpecializeBranchTracingEnum(
   newEDName = newEDName._withBridgedStringRef {
     String(taking: context.bridgedPassContext.mangleAutoDiffBranchTracingEnum($0, schema.bridged, topVJP.bridged))
   }
-  // Synthesized declarations already belong to the AST module. Reuse its name
-  // lookup instead of maintaining a second, AutoDiff-specific enum registry.
-  if let existing = context.moduleDecl.lookupNominalType(name: newEDName) {
-    let existingType = getBranchTracingEnumLoweredType(ed: existing as! EnumDecl, vjp: topVJP)
+  // Generic specialization can produce VJP variants with the same tape layout.
+  // Share their declaration to avoid duplicating emitted enum metadata.
+  if let existing = newEDName._withBridgedStringRef({
+    context.bridgedPassContext.lookupAutoDiffSpecializedBranchTracingEnum($0, topVJP.bridged).getAs(EnumDecl.self)
+  }) {
+    let existingType = getBranchTracingEnumLoweredType(ed: existing, vjp: topVJP)
     assert(existingType.getEnumCases(in: topVJP)!.map {
       $0.payload!.rawType.mapOutOfEnvironment().canonical
     } == newPayloadTypes.map { $0.canonical })

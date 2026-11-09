@@ -350,8 +350,6 @@ struct BridgedDeclObj {
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedDeclContext asGenericContext() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedDeclContext asTopLevelCodeDecl() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedDeclContext asModuleDecl() const;
-  SWIFT_IMPORT_UNSAFE BRIDGED_INLINE OptionalBridgedDeclObj
-  ModuleDecl_lookupNominalType(BridgedStringRef name) const;
   BRIDGED_INLINE void setImplicit() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedStringRef Type_getName() const;
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedStringRef Value_getUserFacingName() const;

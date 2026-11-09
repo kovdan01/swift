@@ -196,23 +196,6 @@ BridgedDeclContext BridgedDeclObj::asModuleDecl() const {
   return {static_cast<swift::DeclContext *>(getAs<swift::ModuleDecl>())};
 }
 
-OptionalBridgedDeclObj
-BridgedDeclObj::ModuleDecl_lookupNominalType(BridgedStringRef name) const {
-  auto *module = getAs<swift::ModuleDecl>();
-  llvm::SmallVector<swift::ValueDecl *, 1> results;
-  module->lookupValue(module->getASTContext().getIdentifier(name.unbridged()),
-                      swift::NLKind::QualifiedLookup, results);
-  swift::NominalTypeDecl *result = nullptr;
-  for (auto *decl : results) {
-    if (auto *nominal = llvm::dyn_cast<swift::NominalTypeDecl>(decl)) {
-      if (result && result != nominal)
-        return {nullptr};
-      result = nominal;
-    }
-  }
-  return {result};
-}
-
 void BridgedDeclObj::setImplicit() const {
   unbridged()->setImplicit();
 }
