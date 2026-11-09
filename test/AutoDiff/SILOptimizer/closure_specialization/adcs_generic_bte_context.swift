@@ -17,3 +17,10 @@
 // BOUND: enum ${{_AD__[^, ]+_spec[^, ]+}},
 // BOUND-NOT: [[INT_TAPE]]
 // BOUND: } // end sil function
+
+// The metadata-preserving Int VJP shares its layout with the metadata-dropping
+// variant above. Giving each VJP its own nominal duplicates emitted metadata.
+// BOUND-LABEL: sil shared {{.*}}@$s8Identity6branchyS2f_xmtlFlTJrSUpSrSi_Tg5
+// BOUND: enum ${{_AD__[^, ]+}}<Int>,
+// BOUND-LABEL: sil shared {{.*}}@$s8Identity6branchyS2f_xmtlFlTJrSUpSrSi_Tg5
+// BOUND: enum $[[INT_TAPE]],
