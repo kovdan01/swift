@@ -627,22 +627,6 @@ static bool vjpHasLoopContext(SILFunction *vjp) {
   return false;
 }
 
-static bool vjpHasTopLevelSpecializableClosures(SILFunction *vjp) {
-  PartialApplyInst *topLevelPullback = getTopLevelPullback(vjp);
-  if (topLevelPullback == nullptr)
-    return false;
-
-  for (SILValue arg : topLevelPullback->getArguments()) {
-    if (arg->getType().getASTType()->getAs<SILFunctionType>() != nullptr) {
-      // Be conservative, treat any function type as potential specializable
-      // closure
-      return true;
-    }
-  }
-
-  return false;
-}
-
 static bool isProfitableToInlineAutodiffVJP(FullApplySite applySiteOfVJP,
                                             StringRef stageName) {
   SILFunction *caller = applySiteOfVJP.getFunction();
@@ -672,13 +656,6 @@ static bool isProfitableToInlineAutodiffVJP(FullApplySite applySiteOfVJP,
     return true;
   }
 
-  bool calleeHasLoops = vjpHasLoopContext(calleeVJP);
-  bool calleeHasTopLevelSpecClosures =
-      calleeHasLoops && vjpHasTopLevelSpecializableClosures(calleeVJP);
-  if (calleeHasLoops && !calleeHasTopLevelSpecClosures) {
-    return true;
-  }
-
   // After inlining to a non-VJP caller, we can no longer run ADCS for the
   // callee VJP. Skip inlining for now.
   if (!isCallerVJP) {
@@ -686,6 +663,7 @@ static bool isProfitableToInlineAutodiffVJP(FullApplySite applySiteOfVJP,
   }
 
   bool callerHasLoops = vjpHasLoopContext(caller);
+  bool calleeHasLoops = vjpHasLoopContext(calleeVJP);
 
   bool hasOnlyDirectUses = hasPullbackOnlyDirectUses(applySiteOfVJP);
 
@@ -694,7 +672,6 @@ static bool isProfitableToInlineAutodiffVJP(FullApplySite applySiteOfVJP,
 
   if (callerHasLoops) {
     if (calleeHasLoops) {
-      assert(calleeHasTopLevelSpecClosures);
       // Iterative specialization does its job.
       return hasOnlyDirectUses;
     }
@@ -708,7 +685,6 @@ static bool isProfitableToInlineAutodiffVJP(FullApplySite applySiteOfVJP,
     if (callerHasBTE) {
       return false;
     }
-    assert(calleeHasTopLevelSpecClosures);
     // Iterative specialization does its job.
     return hasOnlyDirectUses;
   }
