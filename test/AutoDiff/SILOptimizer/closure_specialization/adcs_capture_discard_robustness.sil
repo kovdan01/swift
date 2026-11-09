@@ -1,15 +1,13 @@
-// RUN: %target-sil-opt -enable-sil-verify-all -autodiff-closure-specialization %s -o - | %FileCheck %s
-//
-// Supplementary reduced-SIL ownership regression. The genuine Swift/generated
-// SIL pair is adcs_discarded_pullback.swift/.sil. That source exercises the analogous
-// lifetime inside a custom pullback; the current pipeline does not expose this
-// exact field-use graph to BTE specialization. This explicit input ensures the
-// accepted ownership pattern is nevertheless transformed correctly.
-//
-// CHECK-LABEL: // specialized pullback of myfoo08
-// CHECK: (%{{[0-9]+}}, %[[CAPTURES:[0-9]+]]) = destructure_tuple
-// CHECK-NEXT: destroy_value %[[CAPTURES]]
-// CHECK-NEXT: br
+// RUN: %target-sil-opt -sil-print-types -enable-sil-verify-all -autodiff-closure-specialization %s -o - | %FileCheck %s --implicit-check-not='_AD__{{.*}}_spec'
+
+// Reduced unsupported-SIL boundary. In adcs_discarded_pullback.{swift,sil}, an
+// unused inner closure is nested in the outer tape context; inactive original
+// calls do not receive a taped derivative. A directly taped callback without
+// an invocation is not generated, so reject it before enum specialization.
+
+// CHECK-LABEL: sil [ossa] @$s3outyycfU6_7myfoo08L_yS2f_SftFTJpSUpSr
+// CHECK-NOT: = apply
+// CHECK: destroy_value {{.*}} : $@callee_guaranteed (Float) -> Float
 // CHECK: } // end sil function
 
 sil_stage canonical
