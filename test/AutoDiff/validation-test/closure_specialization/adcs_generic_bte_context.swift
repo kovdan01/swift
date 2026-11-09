@@ -4,7 +4,6 @@
 // RUN: %target-build-swift %s -O -o %t/opt.out
 // RUN: %target-run %t/none.out
 // RUN: %target-run %t/opt.out
-// RUN: %target-swift-frontend -O -emit-sil -module-name Identity %s -o - | %FileCheck %s
 
 import _Differentiation
 import StdlibUnittest

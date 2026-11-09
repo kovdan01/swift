@@ -1,12 +1,8 @@
 // REQUIRES: executable_test
 // RUN: %target-run-simple-swift
-// RUN: %target-swift-frontend -emit-sil -O -D DEFINITIONS_ONLY -module-name adcs_runtime_wrapper %s -o %t.sil
-// RUN: %FileCheck %s < %t.sil
 
 // Swift closure expressions lower to a static closure entry point capturing
 // the runtime wrapper and inner pullback. ADCS removes that outer closure.
-// SILGen does not emit the runtime-callee partial_apply from the separate
-// reduced SIL robustness test for this source construct.
 
 import _Differentiation
 

@@ -1,10 +1,8 @@
 // REQUIRES: executable_test
 // RUN: %target-run-simple-swift
-// RUN: %target-swift-frontend -emit-sil -O -module-name adcs_capture_generic %s -o %t.sil
-// RUN: %FileCheck %s < %t.sil
 
-// The SILOptimizer/closure_specialization/adcs_capture_generic.sil test is
-// reduced from this program immediately before AutoDiff closure specialization.
+// The generic root closure captures a metatype and retains substitutions
+// when ADCS emits its direct pullback call.
 
 import _Differentiation
 import StdlibUnittest

@@ -55,7 +55,6 @@ tests.testWithLeakChecking("RuntimeTape") {
     let result = valueWithPullback(at: Float(2), of: loop)
     expectEqual(value, result.value)
     expectEqual(derivative, result.pullback(1))
-    expectEqual(derivative, result.pullback(1))
     expectEqual(derivative, caller(2))
     for flag in [false, true] {
       let outer = valueWithPullback(at: Float(2), of: { branchingLoop($0, flag) })

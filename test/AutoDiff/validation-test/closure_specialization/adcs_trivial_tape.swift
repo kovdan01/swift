@@ -9,7 +9,7 @@
 
 import _Differentiation
 
-// Reduced from myfoo17 in multi_bb_bte2.swift. Tuple-result derivative lowering
+// Tuple-result derivative lowering
 // leaves a pullback which only destroys its tape. Replacing the taped functions
 // with Float captures makes the entire tape trivial, so that destroy must be
 // removed by the type-changing AutoDiff rewrite.
