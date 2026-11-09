@@ -548,9 +548,9 @@ private func getPayloadValues(payload: Argument, vjp: Function) -> PayloadValues
   return PayloadValues.tupleExtract(results)
 }
 
-// PullbackCloner emits one invocation per active source apply. Multiple uses
-// exposed by inlining custom derivatives belong to nested capture tuples, not
-// to these directly taped function fields.
+// Capture extraction and cleanup are emitted at the callback application.
+// Require one direct application; unused or repeatedly applied fields would
+// need independent cleanup or per-call copies, which this rewrite does not emit.
 private func hasSingleTapedInvocation(_ value: Value) -> Bool {
   var invocationCount = 0
   for use in value.uses {
