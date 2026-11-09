@@ -1,0 +1,258 @@
+// RUN: %target-sil-opt -enable-sil-verify-all -autodiff-closure-specialization %s -o %t.sil
+// RUN: %FileCheck %s < %t.sil
+// RUN: %FileCheck %s --check-prefix=TWICE < %t.sil
+// RUN: %FileCheck %s --check-prefix=TRIPLE < %t.sil
+//
+// Supplemental callable-identity coverage. The two generated VJPs below share
+// one original pullback and exactly the same specialized payload layout, but
+// their eliminated closures call twice and threeTimes respectively. The final
+// VJP is an alias with the same body as the first, exercising exact-plan reuse.
+//
+// Derived from a Swift callableBranch(x, body, flag) which branches between
+// applyLinear(x, body) and applyLinear(x, body) + x. applyLinear has a custom
+// derivative returning body as its pullback. Compile with -O, inline threshold
+// zero, and ownership elimination disabled, then inline the derivative thunks.
+// Remove unrelated functions, debug instructions, and printed forwarding flags.
+//
+// CHECK-LABEL: sil shared {{.*}}@$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJrSUUpSr04$s16A19Identity5twiceyS2fFTf1ncn_n :
+// CHECK: function_ref @[[TWICE_PB:[^ ]+]] : $@convention(thin) (Float, @owned [[LAYOUT:_AD__[^ )]+_spec_[^ )]+]]) -> Float
+// CHECK-LABEL: sil shared {{.*}}@$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJrSUUpSr04$s16A25Identity10threeTimesyS2fFTf1ncn_n :
+// CHECK-NOT: @[[TWICE_PB]]
+// CHECK: function_ref @[[TRIPLE_PB:[^ ]+]] : $@convention(thin) (Float, @owned [[LAYOUT]]) -> Float
+// CHECK-NOT: @[[TWICE_PB]]
+// CHECK: return
+// CHECK-LABEL: sil shared {{.*}}@$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJrSUUpSr04$s16A19Identity5twiceyS2fFTf1ncn_nTf4nn_n :
+// CHECK: function_ref @[[TWICE_PB]] : $@convention(thin) (Float, @owned [[LAYOUT]]) -> Float
+//
+// Each generated body must call its own eliminated callable.
+// TWICE-LABEL: sil shared {{.*}}@$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJrSUUpSr04$s16A19Identity5twiceyS2fFTf1ncn_n :
+// TWICE: function_ref @[[PB:[^ ]+]] : $@convention(thin) (Float, @owned {{.*}}_spec_{{.*}}) -> Float
+// TWICE: sil {{.*}} @[[PB]] :
+// TWICE-NOT: } // end sil function
+// TWICE: function_ref @$s16CallableIdentity5twiceyS2fF
+//
+// TRIPLE-LABEL: sil shared {{.*}}@$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJrSUUpSr04$s16A25Identity10threeTimesyS2fFTf1ncn_n :
+// TRIPLE: function_ref @[[PB:[^ ]+]] : $@convention(thin) (Float, @owned {{.*}}_spec_{{.*}}) -> Float
+// TRIPLE: sil {{.*}} @[[PB]] :
+// TRIPLE-NOT: } // end sil function
+// TRIPLE: function_ref @$s16CallableIdentity10threeTimesyS2fF
+
+sil_stage canonical
+
+import Builtin
+import Swift
+import SwiftShims
+import _Differentiation
+
+enum _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb0__Pred__src_0_wrt_0 {
+}
+
+enum _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb1__Pred__src_0_wrt_0 {
+  case bb0(())
+}
+
+enum _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb2__Pred__src_0_wrt_0 {
+  case bb0(())
+}
+
+enum _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0 {
+  case bb2((predecessor: _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb2__Pred__src_0_wrt_0, (Float) -> Float, (Float) -> (Float, Float)))
+  case bb1((predecessor: _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb1__Pred__src_0_wrt_0, (Float) -> Float))
+}
+
+sil @$s16CallableIdentity10threeTimesyS2fF : $@convention(thin) (Float) -> Float
+sil @$s16CallableIdentity5twiceyS2fF : $@convention(thin) (Float) -> Float
+sil @$sSf16_DifferentiationE7_vjpAdd3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float) -> (Float, Float)
+sil shared [ossa] @$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJrSUUpSr04$s16A19Identity5twiceyS2fFTf1ncn_n : $@convention(thin) (Float, Bool) -> (Float, @owned @callee_guaranteed (Float) -> Float) {
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0                                             // users: %15, %13, %11, %28, %26, %24, %30, %2
+// %1                                             // users: %5, %4
+bb0(%0 : $Float, %1 : $Bool):
+  %5 = struct_extract %1, #Bool._value            // user: %7
+  %6 = tuple ()                                   // users: %21, %8
+  cond_br %5, bb1, bb2                            // id: %7
+
+bb1:                                              // Preds: bb0
+  %8 = enum $_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb1__Pred__src_0_wrt_0, #_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb1__Pred__src_0_wrt_0.bb0!enumelt, %6 // user: %18
+  // function_ref twice(_:)
+  %9 = function_ref @$s16CallableIdentity5twiceyS2fF : $@convention(thin) (Float) -> Float // user: %10
+  %10 = thin_to_thick_function %9 to $@callee_guaranteed (Float) -> Float // users: %18, %12; ownership: none
+  %14 = float_literal $Builtin.FPIEEE32, 0x40000000 // 2 // user: %16
+  %15 = struct_extract %0, #Float._value          // user: %16
+  %16 = builtin "fmul_FPIEEE32"(%14, %15) : $Builtin.FPIEEE32 // user: %17
+  %17 = struct $Float (%16)                       // user: %20
+  %18 = tuple $(predecessor: _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb1__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float) (%8, %10) // user: %19
+  %19 = enum $_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0, #_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0.bb1!enumelt, %18 // user: %20
+  br bb3(%17, %19)                                // id: %20
+
+bb2:                                              // Preds: bb0
+  %21 = enum $_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb2__Pred__src_0_wrt_0, #_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb2__Pred__src_0_wrt_0.bb0!enumelt, %6 // user: %35
+  // function_ref twice(_:)
+  %22 = function_ref @$s16CallableIdentity5twiceyS2fF : $@convention(thin) (Float) -> Float // user: %23
+  %23 = thin_to_thick_function %22 to $@callee_guaranteed (Float) -> Float // users: %35, %25; ownership: none
+  %27 = float_literal $Builtin.FPIEEE32, 0x40000000 // 2 // user: %29
+  %28 = struct_extract %0, #Float._value          // user: %29
+  %29 = builtin "fmul_FPIEEE32"(%27, %28) : $Builtin.FPIEEE32 // user: %31
+  %30 = struct_extract %0, #Float._value          // user: %31
+  %31 = builtin "fadd_FPIEEE32"(%29, %30) : $Builtin.FPIEEE32 // user: %32
+  %32 = struct $Float (%31)                       // user: %37
+  // function_ref closure #1 in static Float._vjpAdd(lhs:rhs:)
+  %33 = function_ref @$sSf16_DifferentiationE7_vjpAdd3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float) -> (Float, Float) // user: %34
+  %34 = thin_to_thick_function %33 to $@callee_guaranteed (Float) -> (Float, Float) // user: %35; ownership: none
+  %35 = tuple $(predecessor: _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb2__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float, @callee_guaranteed (Float) -> (Float, Float)) (%21, %23, %34) // user: %36
+  %36 = enum $_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0, #_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0.bb2!enumelt, %35 // user: %37
+  br bb3(%32, %36)                                // id: %37
+
+// %38                                            // user: %42
+// %39                                            // user: %41
+bb3(%38 : $Float, %39 : @owned $_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0): // Preds: bb2 bb1
+  // function_ref pullback of callableBranch(_:_:_:)
+  %40 = function_ref @$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJpSUUpSr : $@convention(thin) (Float, @owned _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0) -> Float // user: %41
+  %41 = partial_apply [callee_guaranteed] %40(%39) : $@convention(thin) (Float, @owned _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0) -> Float // user: %42
+  %42 = tuple (%38, %41)                          // user: %43
+  return %42                                      // id: %43
+} // end sil function '$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJrSUUpSr04$s16A19Identity5twiceyS2fFTf1ncn_n'
+
+sil shared [ossa] @$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJrSUUpSr04$s16A25Identity10threeTimesyS2fFTf1ncn_n : $@convention(thin) (Float, Bool) -> (Float, @owned @callee_guaranteed (Float) -> Float) {
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0                                             // users: %15, %13, %11, %28, %26, %24, %30, %2
+// %1                                             // users: %5, %4
+bb0(%0 : $Float, %1 : $Bool):
+  %5 = struct_extract %1, #Bool._value            // user: %7
+  %6 = tuple ()                                   // users: %21, %8
+  cond_br %5, bb1, bb2                            // id: %7
+
+bb1:                                              // Preds: bb0
+  %8 = enum $_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb1__Pred__src_0_wrt_0, #_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb1__Pred__src_0_wrt_0.bb0!enumelt, %6 // user: %18
+  // function_ref threeTimes(_:)
+  %9 = function_ref @$s16CallableIdentity10threeTimesyS2fF : $@convention(thin) (Float) -> Float // user: %10
+  %10 = thin_to_thick_function %9 to $@callee_guaranteed (Float) -> Float // users: %18, %12; ownership: none
+  %14 = float_literal $Builtin.FPIEEE32, 0x40400000 // 3 // user: %16
+  %15 = struct_extract %0, #Float._value          // user: %16
+  %16 = builtin "fmul_FPIEEE32"(%14, %15) : $Builtin.FPIEEE32 // user: %17
+  %17 = struct $Float (%16)                       // user: %20
+  %18 = tuple $(predecessor: _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb1__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float) (%8, %10) // user: %19
+  %19 = enum $_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0, #_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0.bb1!enumelt, %18 // user: %20
+  br bb3(%17, %19)                                // id: %20
+
+bb2:                                              // Preds: bb0
+  %21 = enum $_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb2__Pred__src_0_wrt_0, #_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb2__Pred__src_0_wrt_0.bb0!enumelt, %6 // user: %35
+  // function_ref threeTimes(_:)
+  %22 = function_ref @$s16CallableIdentity10threeTimesyS2fF : $@convention(thin) (Float) -> Float // user: %23
+  %23 = thin_to_thick_function %22 to $@callee_guaranteed (Float) -> Float // users: %35, %25; ownership: none
+  %27 = float_literal $Builtin.FPIEEE32, 0x40400000 // 3 // user: %29
+  %28 = struct_extract %0, #Float._value          // user: %29
+  %29 = builtin "fmul_FPIEEE32"(%27, %28) : $Builtin.FPIEEE32 // user: %31
+  %30 = struct_extract %0, #Float._value          // user: %31
+  %31 = builtin "fadd_FPIEEE32"(%29, %30) : $Builtin.FPIEEE32 // user: %32
+  %32 = struct $Float (%31)                       // user: %37
+  // function_ref closure #1 in static Float._vjpAdd(lhs:rhs:)
+  %33 = function_ref @$sSf16_DifferentiationE7_vjpAdd3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float) -> (Float, Float) // user: %34
+  %34 = thin_to_thick_function %33 to $@callee_guaranteed (Float) -> (Float, Float) // user: %35; ownership: none
+  %35 = tuple $(predecessor: _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb2__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float, @callee_guaranteed (Float) -> (Float, Float)) (%21, %23, %34) // user: %36
+  %36 = enum $_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0, #_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0.bb2!enumelt, %35 // user: %37
+  br bb3(%32, %36)                                // id: %37
+
+// %38                                            // user: %42
+// %39                                            // user: %41
+bb3(%38 : $Float, %39 : @owned $_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0): // Preds: bb2 bb1
+  // function_ref pullback of callableBranch(_:_:_:)
+  %40 = function_ref @$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJpSUUpSr : $@convention(thin) (Float, @owned _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0) -> Float // user: %41
+  %41 = partial_apply [callee_guaranteed] %40(%39) : $@convention(thin) (Float, @owned _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0) -> Float // user: %42
+  %42 = tuple (%38, %41)                          // user: %43
+  return %42                                      // id: %43
+} // end sil function '$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJrSUUpSr04$s16A25Identity10threeTimesyS2fFTf1ncn_n'
+
+sil shared [ossa] @$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJrSUUpSr04$s16A19Identity5twiceyS2fFTf1ncn_nTf4nn_n : $@convention(thin) (Float, Bool) -> (Float, @owned @callee_guaranteed (Float) -> Float) {
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0                                             // users: %15, %13, %11, %28, %26, %24, %30, %2
+// %1                                             // users: %5, %4
+bb0(%0 : $Float, %1 : $Bool):
+  %5 = struct_extract %1, #Bool._value            // user: %7
+  %6 = tuple ()                                   // users: %21, %8
+  cond_br %5, bb1, bb2                            // id: %7
+
+bb1:                                              // Preds: bb0
+  %8 = enum $_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb1__Pred__src_0_wrt_0, #_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb1__Pred__src_0_wrt_0.bb0!enumelt, %6 // user: %18
+  // function_ref twice(_:)
+  %9 = function_ref @$s16CallableIdentity5twiceyS2fF : $@convention(thin) (Float) -> Float // user: %10
+  %10 = thin_to_thick_function %9 to $@callee_guaranteed (Float) -> Float // users: %18, %12; ownership: none
+  %14 = float_literal $Builtin.FPIEEE32, 0x40000000 // 2 // user: %16
+  %15 = struct_extract %0, #Float._value          // user: %16
+  %16 = builtin "fmul_FPIEEE32"(%14, %15) : $Builtin.FPIEEE32 // user: %17
+  %17 = struct $Float (%16)                       // user: %20
+  %18 = tuple $(predecessor: _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb1__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float) (%8, %10) // user: %19
+  %19 = enum $_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0, #_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0.bb1!enumelt, %18 // user: %20
+  br bb3(%17, %19)                                // id: %20
+
+bb2:                                              // Preds: bb0
+  %21 = enum $_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb2__Pred__src_0_wrt_0, #_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb2__Pred__src_0_wrt_0.bb0!enumelt, %6 // user: %35
+  // function_ref twice(_:)
+  %22 = function_ref @$s16CallableIdentity5twiceyS2fF : $@convention(thin) (Float) -> Float // user: %23
+  %23 = thin_to_thick_function %22 to $@callee_guaranteed (Float) -> Float // users: %35, %25; ownership: none
+  %27 = float_literal $Builtin.FPIEEE32, 0x40000000 // 2 // user: %29
+  %28 = struct_extract %0, #Float._value          // user: %29
+  %29 = builtin "fmul_FPIEEE32"(%27, %28) : $Builtin.FPIEEE32 // user: %31
+  %30 = struct_extract %0, #Float._value          // user: %31
+  %31 = builtin "fadd_FPIEEE32"(%29, %30) : $Builtin.FPIEEE32 // user: %32
+  %32 = struct $Float (%31)                       // user: %37
+  // function_ref closure #1 in static Float._vjpAdd(lhs:rhs:)
+  %33 = function_ref @$sSf16_DifferentiationE7_vjpAdd3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float) -> (Float, Float) // user: %34
+  %34 = thin_to_thick_function %33 to $@callee_guaranteed (Float) -> (Float, Float) // user: %35; ownership: none
+  %35 = tuple $(predecessor: _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb2__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float, @callee_guaranteed (Float) -> (Float, Float)) (%21, %23, %34) // user: %36
+  %36 = enum $_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0, #_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0.bb2!enumelt, %35 // user: %37
+  br bb3(%32, %36)                                // id: %37
+
+// %38                                            // user: %42
+// %39                                            // user: %41
+bb3(%38 : $Float, %39 : @owned $_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0): // Preds: bb2 bb1
+  // function_ref pullback of callableBranch(_:_:_:)
+  %40 = function_ref @$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJpSUUpSr : $@convention(thin) (Float, @owned _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0) -> Float // user: %41
+  %41 = partial_apply [callee_guaranteed] %40(%39) : $@convention(thin) (Float, @owned _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0) -> Float // user: %42
+  %42 = tuple (%38, %41)                          // user: %43
+  return %42                                      // id: %43
+} // end sil function '$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJrSUUpSr04$s16A19Identity5twiceyS2fFTf1ncn_nTf4nn_n'
+
+sil private [ossa] @$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJpSUUpSr : $@convention(thin) (Float, @owned _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0) -> Float {
+[%0: read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[%1: noescape v**, read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0                                             // users: %28, %9
+// %1                                             // user: %4
+bb0(%0 : $Float, %1 : @owned $_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0):
+  %2 = float_literal $Builtin.FPIEEE32, 0x0 // 0  // users: %31, %17, %14, %3
+  switch_enum %1, case #_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0.bb2!enumelt: bb1, case #_AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb3__Pred__src_0_wrt_0.bb1!enumelt: bb2 // id: %4
+
+// %5                                             // user: %6
+bb1(%5 : @owned $(predecessor: _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb2__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float, @callee_guaranteed (Float) -> (Float, Float))): // Preds: bb0
+  (%6, %7, %8) = destructure_tuple %5             // users: %19, %18, %10, %9
+  %9 = apply %8(%0) : $@callee_guaranteed (Float) -> (Float, Float) // users: %12, %11
+  destroy_value %8                                // id: %10
+  %11 = tuple_extract %9, 0                       // user: %13
+  %12 = tuple_extract %9, 1                       // user: %16
+  %13 = struct_extract %11, #Float._value         // user: %14
+  %14 = builtin "fadd_FPIEEE32"(%13, %2) : $Builtin.FPIEEE32 // user: %15
+  %15 = struct $Float (%14)                       // user: %18
+  %16 = struct_extract %12, #Float._value         // user: %17
+  %17 = builtin "fadd_FPIEEE32"(%16, %2) : $Builtin.FPIEEE32 // user: %21
+  %18 = apply %7(%15) : $@callee_guaranteed (Float) -> Float // user: %20
+  destroy_value %7                                // id: %19
+  %20 = struct_extract %18, #Float._value         // user: %21
+  %21 = builtin "fadd_FPIEEE32"(%20, %17) : $Builtin.FPIEEE32 // user: %22
+  %22 = struct $Float (%21)                       // users: %24, %23
+  br bb3(%22)                                     // id: %24
+
+// %25                                            // user: %26
+bb2(%25 : @owned $(predecessor: _AD__$s16CallableIdentity14callableBranchyS2f_S2fcSbtF_bb1__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float)): // Preds: bb0
+  (%26, %27) = destructure_tuple %25              // users: %29, %28
+  %28 = apply %27(%0) : $@callee_guaranteed (Float) -> Float // user: %30
+  destroy_value %27                               // id: %29
+  %30 = struct_extract %28, #Float._value         // user: %31
+  %31 = builtin "fadd_FPIEEE32"(%30, %2) : $Builtin.FPIEEE32 // user: %32
+  %32 = struct $Float (%31)                       // users: %34, %33
+  br bb3(%32)                                     // id: %34
+
+// %35                                            // users: %37, %36
+bb3(%35 : $Float):                                // Preds: bb2 bb1
+  return %35                                      // id: %37
+} // end sil function '$s16CallableIdentity14callableBranchyS2f_S2fcSbtFTJpSUUpSr'

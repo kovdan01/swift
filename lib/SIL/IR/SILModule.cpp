@@ -828,6 +828,34 @@ SILModule::lookUpDifferentiabilityWitnessesForFunction(StringRef name) {
   return DifferentiabilityWitnessesByFunction[name];
 }
 
+EnumDecl *SILModule::lookUpAutoDiffSpecializedBranchTracingEnum(
+    CanType schema, CanGenericSignature signature) const {
+  auto found = AutoDiffSpecializedBranchTracingEnums.find(
+      {schema, signature.getPointer()});
+  return found == AutoDiffSpecializedBranchTracingEnums.end() ? nullptr
+                                                            : found->second;
+}
+
+void SILModule::registerAutoDiffSpecializedBranchTracingEnum(
+    CanType schema, CanGenericSignature signature, EnumDecl *decl) {
+  assert(isAutoDiffSpecializedBranchTracingEnumNameAvailable(
+      decl->getNameStr(), schema, signature));
+  auto result = AutoDiffSpecializedBranchTracingEnums.try_emplace(
+      AutoDiffBranchTracingEnumKey{schema, signature.getPointer()}, decl);
+  assert(result.second || result.first->second == decl);
+  (void)result;
+}
+
+bool SILModule::isAutoDiffSpecializedBranchTracingEnumNameAvailable(
+    StringRef name, CanType schema, CanGenericSignature signature) const {
+  AutoDiffBranchTracingEnumKey key{schema, signature.getPointer()};
+  for (auto &entry : AutoDiffSpecializedBranchTracingEnums) {
+    if (entry.second->getNameStr() == name && entry.first != key)
+      return false;
+  }
+  return true;
+}
+
 bool SILModule::loadDifferentiabilityWitness(SILDifferentiabilityWitness *dw) {
   auto *newDW = getSILLoader()->lookupDifferentiabilityWitness(dw->getKey());
   if (!newDW)

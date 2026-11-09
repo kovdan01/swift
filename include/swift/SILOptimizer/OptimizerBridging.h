@@ -255,6 +255,25 @@ struct BridgedPassContext {
   BridgedOwnedString
   mangleWithAutoDiffBranchTracingEnum(BridgedValue arg, SwiftInt argIdx,
                                       BridgedFunction pullback) const;
+  struct AutoDiffClosureMangling {
+    BridgedType enumType;
+    SwiftInt caseIndex;
+    SwiftInt payloadIndex;
+    SwiftInt chainIndex;
+    BridgedInstruction closure;
+    SwiftInt optionalCaseIndex;
+  };
+  BridgedOwnedString mangleWithAutoDiffBranchTracingEnumSchema(
+      BridgedType enumType, SwiftInt argIdx, BridgedArrayRef closures,
+      BridgedFunction pullback) const;
+
+  SWIFT_IMPORT_UNSAFE OptionalBridgedDeclObj
+  lookupAutoDiffSpecializedBranchTracingEnum(BridgedASTType schema,
+                                             BridgedFunction vjp) const;
+  BridgedOwnedString mangleAutoDiffSpecializedBranchTracingEnum(
+      BridgedStringRef prefix, BridgedASTType schema, BridgedFunction vjp) const;
+  void registerAutoDiffSpecializedBranchTracingEnum(
+      BridgedDeclObj decl, BridgedASTType schema, BridgedFunction vjp) const;
 
   void inlineFunction(BridgedInstruction apply, bool mandatoryInline) const;
   void eraseFunction(BridgedFunction function) const;
