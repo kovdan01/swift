@@ -1,7 +1,6 @@
 // VJP inlining tests.
 
-// RUN: %target-swift-frontend -emit-sil -O -verify -Xllvm -debug-only=sil-inliner %s 2>&1
-// TODO: %FileCheck %s
+// RUN: %target-swift-frontend -emit-sil -O -verify -Xllvm -debug-only=sil-inliner %s 2>&1 | %FileCheck %s
 
 // REQUIRES: asserts
 // UNSUPPORTED: OS=windows-msvc
@@ -41,14 +40,12 @@ func caller_of_with_control_flow(x: Float) -> Float {
 func wrapperOnWithControlFlow(x: Float) -> Float {
     return with_control_flow(x)
 }
-// CHECK-LABEL: decision {{.*}} $s12vjp_inlining17with_control_flowyS2fFTJrSpSr
-// CHECK-NEXT: "reverse-mode derivative of vjp_inlining.with_control_flow(_:)" inlined into "reverse-mode derivative of vjp_inlining.wrapperOnWithControlFlow(x:)"
+// CHECK-DAG: "reverse-mode derivative of vjp_inlining.with_control_flow(_:)" inlined into "reverse-mode derivative of vjp_inlining.wrapperOnWithControlFlow(x:)"
 
-// CHECK-LABEL: decision {{.*}} $s12vjp_inlining17with_control_flowyS2fFTJrSpSr
-// CHECK-NEXT: "reverse-mode derivative of vjp_inlining.with_control_flow(_:)" inlined into "caller_of_with_control_flow"
+// CHECK-DAG: "reverse-mode derivative of vjp_inlining.with_control_flow(_:)" inlined into "caller_of_with_control_flow"
 
 // =============================================================== //
-// VJPs without control-flow are not inlined into non-VJP callers
+// Constant VJP calls can be folded in non-VJP callers
 // =============================================================== //
 @differentiable(reverse)
 func simple(x: Float) -> Float {
@@ -66,10 +63,10 @@ func simple(x: Float) -> Float {
 func caller_of_simple(x: Float) -> Float {
   gradient(at: Float(4), of: simple)
 }
-// CHECK-NOT: "reverse-mode derivative of vjp_inlining.simple(x:)" inlined into "caller_of_simple"
+// CHECK-DAG: pure-call decision $s12vjp_inlining6simple1xS2f_tFTJrSpSr
 
 // ============================================================================ //
-// VJPs without control-flow are not inlined into VJP callers with control-flow
+// VJPs without control-flow are inlined into VJP callers with control-flow
 // ============================================================================ //
 @differentiable(reverse)
 func wrapperWithControlFlowOnSimple(x: Float) -> Float {
@@ -79,7 +76,7 @@ func wrapperWithControlFlowOnSimple(x: Float) -> Float {
         return simple(x: x) * simple(x: x)
     }
 }
-// CHECK-NOT: "reverse-mode derivative of vjp_inlining.simple(x:)" inlined into "reverse-mode derivative of vjp_inlining.wrapperWithControlFlowOnSimple(x:)"
+// CHECK-DAG: "reverse-mode derivative of vjp_inlining.simple(x:)" inlined into "reverse-mode derivative of vjp_inlining.wrapperWithControlFlowOnSimple(x:)"
 
 // =============================================================== //
 // VJPs without control-flow are inlined into VJP callers
@@ -88,6 +85,4 @@ func wrapperWithControlFlowOnSimple(x: Float) -> Float {
 func wrapperOnSimple(x: Float) -> Float {
     return simple(x: x)
 }
-// CHECK-LABEL: decision {{.*}} $s12vjp_inlining6simple1xS2f_tFTJrSpSr
-// TODO: check why this is failing
-// xCHECK-NEXT: "reverse-mode derivative of vjp_inlining.simple(x:)" inlined into "reverse-mode derivative of vjp_inlining.wrapperOnSimple(x:)"
+// CHECK-DAG: "reverse-mode derivative of vjp_inlining.simple(x:)" inlined into "reverse-mode derivative of vjp_inlining.wrapperOnSimple(x:)"
