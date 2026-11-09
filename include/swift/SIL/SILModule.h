@@ -315,14 +315,6 @@ private:
   /// The list of SILDifferentiabilityWitnesses in the module.
   DifferentiabilityWitnessListType differentiabilityWitnesses;
 
-  /// Specialized AutoDiff branch tracing enums are shared by all functions in
-  /// this module with the same original instantiation and payload schema.
-  /// The signature is canonical and gives meaning to schema type parameters.
-  using AutoDiffBranchTracingEnumKey =
-      std::pair<CanType, const GenericSignatureImpl *>;
-  llvm::DenseMap<AutoDiffBranchTracingEnumKey, EnumDecl *>
-      AutoDiffSpecializedBranchTracingEnums;
-
   /// Lookup table for SIL vtables from class decls.
   llvm::DenseMap<const NominalTypeDecl *, SILMoveOnlyDeinit *>
       MoveOnlyDeinitMap;
@@ -1030,13 +1022,6 @@ public:
   /// Look up the differentiability witness corresponding to the given function.
   llvm::ArrayRef<SILDifferentiabilityWitness *>
   lookUpDifferentiabilityWitnessesForFunction(StringRef name);
-
-  EnumDecl *lookUpAutoDiffSpecializedBranchTracingEnum(
-      CanType schema, CanGenericSignature signature) const;
-  void registerAutoDiffSpecializedBranchTracingEnum(
-      CanType schema, CanGenericSignature signature, EnumDecl *decl);
-  bool isAutoDiffSpecializedBranchTracingEnumNameAvailable(
-      StringRef name, CanType schema, CanGenericSignature signature) const;
 
   /// Attempt to deserialize the SILDifferentiabilityWitness. Returns true if
   /// deserialization succeeded, false otherwise.

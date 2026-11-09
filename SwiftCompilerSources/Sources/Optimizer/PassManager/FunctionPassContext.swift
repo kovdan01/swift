@@ -204,27 +204,6 @@ struct FunctionPassContext : MutatingContext {
     }
   }
 
-  func lookupAutoDiffSpecializedBranchTracingEnum(schema: AST.`Type`, in vjp: Function) -> EnumDecl? {
-    bridgedPassContext.lookupAutoDiffSpecializedBranchTracingEnum(
-      schema.bridged, vjp.bridged).getAs(EnumDecl.self)
-  }
-
-  func mangleAutoDiffSpecializedBranchTracingEnum(
-    prefix: String, schema: AST.`Type`, in vjp: Function
-  ) -> String {
-    prefix._withBridgedStringRef {
-      String(taking: bridgedPassContext.mangleAutoDiffSpecializedBranchTracingEnum(
-        $0, schema.bridged, vjp.bridged))
-    }
-  }
-
-  func registerAutoDiffSpecializedBranchTracingEnum(
-    _ decl: EnumDecl, schema: AST.`Type`, in vjp: Function
-  ) {
-    bridgedPassContext.registerAutoDiffSpecializedBranchTracingEnum(
-      decl.bridged, schema.bridged, vjp.bridged)
-  }
-
   func createSpecializedFunctionDeclaration(
     from original: Function, withName specializedFunctionName: String,
     withParams specializedParameters: [ParameterInfo],

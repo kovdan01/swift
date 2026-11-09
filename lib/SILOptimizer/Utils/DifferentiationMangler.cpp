@@ -13,10 +13,30 @@
 #include "swift/SILOptimizer/Utils/DifferentiationMangler.h"
 #include "swift/AST/AutoDiff.h"
 #include "swift/AST/GenericSignature.h"
+#include "swift/Basic/MD5Stream.h"
 #include "swift/Demangling/ManglingMacros.h"
 
 using namespace swift;
 using namespace Mangle;
+
+std::string Mangle::mangleAutoDiffSpecializedBranchTracingEnum(
+    StringRef prefix, CanType schema, CanGenericSignature signature) {
+  ASTMangler mangler(schema->getASTContext());
+  auto key = mangler.mangleTypeForDebugger(schema, signature);
+  if (signature) {
+    ASTMangler signatureMangler(schema->getASTContext());
+    key += signatureMangler.mangleGenericSignature(signature);
+  }
+  // A digest keeps nested predecessor schemas from making names grow
+  // exponentially. Layout consistency is asserted when the name is reused.
+  MD5Stream stream;
+  stream << key;
+  llvm::MD5::MD5Result digest;
+  stream.final(digest);
+  SmallString<32> suffix;
+  llvm::MD5::stringifyResult(digest, suffix);
+  return (prefix + "_" + suffix).str();
+}
 
 /// Mangles the generic signature and get its mangling tree. This is necessary
 /// because the derivative generic signature's requirements may contain names

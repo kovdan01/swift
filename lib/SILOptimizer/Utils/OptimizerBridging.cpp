@@ -16,7 +16,6 @@
 #include "swift/AST/ConformanceLookup.h"
 #include "swift/AST/SemanticAttrs.h"
 #include "swift/Basic/CodeGenerationModel.h"
-#include "swift/Basic/MD5Stream.h"
 #include "swift/SIL/DynamicCasts.h"
 #include "swift/SIL/OSSACompleteLifetime.h"
 #include "swift/SIL/SILConstants.h"
@@ -518,15 +517,6 @@ void BridgedPassContext::fixStackNesting(BridgedFunction function) const {
   invocation->setNeedFixStackNesting(false);
 }
 
-OptionalBridgedDeclObj
-BridgedPassContext::lookupAutoDiffSpecializedBranchTracingEnum(
-    BridgedASTType schema, BridgedFunction vjp) const {
-  auto *function = vjp.getFunction();
-  return {function->getModule().lookUpAutoDiffSpecializedBranchTracingEnum(
-      schema.unbridged()->getCanonicalType(),
-      function->getGenericSignature().getCanonicalSignature())};
-}
-
 BridgedOwnedString
 BridgedPassContext::mangleWithAutoDiffBranchTracingEnumSchema(
     BridgedType enumType, SwiftInt argIdx, BridgedArrayRef closures,
@@ -549,45 +539,11 @@ BridgedPassContext::mangleWithAutoDiffBranchTracingEnumSchema(
   return BridgedOwnedString(mangler.mangle());
 }
 
-BridgedOwnedString BridgedPassContext::mangleAutoDiffSpecializedBranchTracingEnum(
-    BridgedStringRef prefix, BridgedASTType schema, BridgedFunction vjp) const {
-  auto *function = vjp.getFunction();
-  auto type = schema.unbridged()->getCanonicalType();
-  auto signature = function->getGenericSignature().getCanonicalSignature();
-  Mangle::ASTMangler typeMangler(function->getASTContext());
-  auto key = typeMangler.mangleTypeForDebugger(type, signature);
-  // The same type parameters may have different requirements in different
-  // function contexts. Include the full signature, even unused requirements.
-  if (signature) {
-    Mangle::ASTMangler signatureMangler(function->getASTContext());
-    key += signatureMangler.mangleGenericSignature(signature);
-  }
-
-  // Keep nested predecessor schemas from producing exponentially long names.
-  // The module table is keyed by exact canonical types, not by this digest.
-  MD5Stream stream;
-  stream << key;
-  llvm::MD5::MD5Result digest;
-  stream.final(digest);
-  SmallString<32> suffix;
-  llvm::MD5::stringifyResult(digest, suffix);
-  std::string name = (prefix.unbridged() + "_" + suffix).str();
-  if (!function->getModule().isAutoDiffSpecializedBranchTracingEnumNameAvailable(
-          name, type, signature)) {
-    // A digest collision must not give distinct schemas the same AST identity.
-    // Only this exceptional path needs the full canonical mangling.
-    name += "_" + key;
-  }
-  return BridgedOwnedString(name);
-}
-
-void BridgedPassContext::registerAutoDiffSpecializedBranchTracingEnum(
-    BridgedDeclObj decl, BridgedASTType schema, BridgedFunction vjp) const {
-  auto *function = vjp.getFunction();
-  function->getModule().registerAutoDiffSpecializedBranchTracingEnum(
-      schema.unbridged()->getCanonicalType(),
-      function->getGenericSignature().getCanonicalSignature(),
-      decl.getAs<EnumDecl>());
+BridgedOwnedString BridgedAutoDiff::mangleBranchTracingEnum(
+    BridgedStringRef prefix, BridgedASTType schema, BridgedFunction vjp) {
+  return BridgedOwnedString(Mangle::mangleAutoDiffSpecializedBranchTracingEnum(
+      prefix.unbridged(), schema.unbridged()->getCanonicalType(),
+      vjp.getFunction()->getGenericSignature().getCanonicalSignature()));
 }
 
 bool BridgedPassContext::enableSimplificationFor(BridgedInstruction inst) const {

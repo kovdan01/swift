@@ -158,6 +158,12 @@ struct BridgedLoopTree {
   SWIFT_IMPORT_UNSAFE BRIDGED_INLINE BridgedBasicBlock splitEdge(BridgedBasicBlock bb, SwiftInt edgeIndex, BridgedDomTree domTree) const;
 };
 
+// Stateless AutoDiff operations exposed to the Swift optimizer.
+struct BridgedAutoDiff {
+  static BridgedOwnedString mangleBranchTracingEnum(
+      BridgedStringRef prefix, BridgedASTType schema, BridgedFunction vjp);
+};
+
 struct BridgedPassContext {
   swift::SwiftPassInvocation * _Nonnull invocation;
 
@@ -263,14 +269,6 @@ struct BridgedPassContext {
   BridgedOwnedString mangleWithAutoDiffBranchTracingEnumSchema(
       BridgedType enumType, SwiftInt argIdx, BridgedArrayRef closures,
       BridgedFunction pullback) const;
-
-  SWIFT_IMPORT_UNSAFE OptionalBridgedDeclObj
-  lookupAutoDiffSpecializedBranchTracingEnum(BridgedASTType schema,
-                                             BridgedFunction vjp) const;
-  BridgedOwnedString mangleAutoDiffSpecializedBranchTracingEnum(
-      BridgedStringRef prefix, BridgedASTType schema, BridgedFunction vjp) const;
-  void registerAutoDiffSpecializedBranchTracingEnum(
-      BridgedDeclObj decl, BridgedASTType schema, BridgedFunction vjp) const;
 
   void inlineFunction(BridgedInstruction apply, bool mandatoryInline) const;
   void eraseFunction(BridgedFunction function) const;

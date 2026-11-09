@@ -28,6 +28,10 @@ bool isAutoDiffBranchTracingEnum(SILType type, SILFunction *vjp);
 
 namespace Mangle {
 
+/// A deterministic name for a specialized tape layout in its generic context.
+std::string mangleAutoDiffSpecializedBranchTracingEnum(
+    StringRef prefix, CanType schema, CanGenericSignature signature);
+
 /// A mangler for generated differentiation functions.
 class DifferentiationMangler : public ASTMangler {
 public:
