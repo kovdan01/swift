@@ -1,24 +1,15 @@
-// RUN: %target-sil-opt -enable-sil-verify-all -autodiff-closure-specialization -sil-combine %s -o %t
-// RUN: %FileCheck %s --check-prefix=A < %t
-// RUN: %FileCheck %s --check-prefix=B < %t
+// RUN: %target-sil-opt -enable-sil-verify-all -autodiff-closure-specialization %s -o - | %FileCheck %s
 //
-// Supplementary reduced-SIL robustness regression. Unlike the source-derived
-// adcs_merged_payload.sil, this deliberately puts different callable identities
-// in equal-typed tuple fields on the incoming edges. Ordinary differentiation
-// uses a fixed field order for one original source block, but an optimizer must
-// not infer callable identity from that layout alone when accepting this SIL.
-// Keep this construction explicit rather than presenting it as emitted Swift.
-//
-// Specialization must retain direct calls on both paths. In particular, it must
-// not use one predecessor's closure ordering for the entire merged block.
-// A-LABEL: // specialized pullback of myfoo08
-// A-COUNT-2: function_ref @$s4test8closureAyS2fF
-// A-NOT: function_ref @$s4test8closureAyS2fF
-// A: } // end sil function
-// B-LABEL: // specialized pullback of myfoo08
-// B-COUNT-2: function_ref @$s4test8closureByS2fF
-// B-NOT: function_ref @$s4test8closureByS2fF
-// B: } // end sil function
+// Source differentiation emits a fixed callable order for each original block.
+// These equal-typed tuple fields deliberately disagree across incoming edges.
+// Decline before enum synthesis instead of cloning paths for an unexpected shape.
+// The source-derived common-merge control is adcs_merged_payload.swift/.sil.
+// CHECK: sil_stage canonical
+// CHECK-NOT: _AD__{{.*}}_spec
+// CHECK: sil private [ossa] @$s3outyycfU6_7myfoo08L_yS2f_SftFTJpSSpSr
+// CHECK: apply {{%[0-9]+}}({{%[0-9]+}}) : $@callee_guaranteed
+// CHECK: return
+// CHECK-NOT: _AD__{{.*}}_spec
 
 sil_stage canonical
 import Builtin

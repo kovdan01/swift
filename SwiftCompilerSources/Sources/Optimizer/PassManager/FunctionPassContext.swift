@@ -62,16 +62,6 @@ struct FunctionPassContext : MutatingContext {
     bridgedPassContext.updateAnalysis()
   }
 
-  func canCloneBranchTarget(_ branch: BranchInst) -> Bool {
-    bridgedPassContext.canCloneBranchTarget(branch.bridged)
-  }
-
-  func cloneBranchTarget(_ branch: BranchInst) {
-    notifyInstructionsChanged()
-    notifyBranchesChanged()
-    bridgedPassContext.cloneBranchTarget(branch.bridged)
-  }
-
   func loadFunction(name: StaticString, loadCalleesRecursively: Bool) -> Function? {
     return name.withUTF8Buffer { (nameBuffer: UnsafeBufferPointer<UInt8>) in
       let nameStr = BridgedStringRef(data: nameBuffer.baseAddress, count: nameBuffer.count)
