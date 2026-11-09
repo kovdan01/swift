@@ -201,9 +201,6 @@ struct BridgedPassContext {
     bool cfgChanged;
   };
 
-  bool canCloneBranchTarget(BridgedInstruction branch) const;
-  void cloneBranchTarget(BridgedInstruction branch) const;
-
   bool tryOptimizeApplyOfPartialApply(BridgedInstruction closure) const;
   bool tryDeleteDeadClosure(BridgedInstruction closure, bool needKeepArgsAlive) const;
 
