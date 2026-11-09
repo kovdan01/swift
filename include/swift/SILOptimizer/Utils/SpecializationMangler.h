@@ -141,8 +141,6 @@ public:
       unsigned OrigArgIdx, SILInstruction *DifferentiableFunction,
       SILInstruction *OriginalRoot, SILInstruction *JVPRoot,
       SILInstruction *VJPRoot);
-  void setArgumentAutoDiffBranchTracingEnum(unsigned OrigArgIdx,
-                                            ValueBase *Arg);
   void setArgumentAutoDiffBranchTracingEnum(
       unsigned OrigArgIdx, SILType specializedEnumType,
       ArrayRef<AutoDiffClosureSpecializationDescriptor> closures);
