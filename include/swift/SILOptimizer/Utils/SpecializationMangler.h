@@ -21,7 +21,6 @@
 
 namespace swift {
 namespace Mangle {
-
 SWIFT_BEGIN_INLINE_NAMESPACE
 
 class PartialSpecializationMangler : public SpecializationMangler {
@@ -98,7 +97,7 @@ class FunctionSignatureSpecializationMangler : public SpecializationMangler {
       SILInstruction *inst;
       unsigned otherArgIdx; // only for `ClosurePropPreviousArg`
       unsigned differentiableFunctionIdx; // only for `DifferentiableFunctionProp`
-      const char *specializationKey; // ASTContext-uniqued argument key
+      Identifier autoDiffBranchTracingEnumIdentity;
     };
 
     ArgInfo(ArgumentModifier kind) : kind(kind), inst(nullptr) {}
@@ -131,7 +130,8 @@ public:
       unsigned OrigArgIdx, SILInstruction *DifferentiableFunction,
       SILInstruction *OriginalRoot, SILInstruction *JVPRoot,
       SILInstruction *VJPRoot);
-  void setArgumentAutoDiffBranchTracingEnum(unsigned OrigArgIdx, StringRef key);
+  // Identity includes the originating VJP and the canonical specialized tape type.
+  void setArgumentAutoDiffBranchTracingEnum(unsigned OrigArgIdx, Identifier identity);
   void setArgumentDead(unsigned OrigArgIdx);
   void setArgumentOwnedToGuaranteed(unsigned OrigArgIdx);
   void setArgumentGuaranteedToOwned(unsigned OrigArgIdx);
@@ -152,7 +152,6 @@ private:
   void mangleConstantProp(SILInstruction *constInst);
   void mangleClosureProp(SILInstruction *Inst);
   void mangleDifferentiableFunctionProp(const DifferentiableFunctionInfo &Info);
-  void mangleAutoDiffBranchTracingEnum(StringRef key);
   void mangleArgument(ArgInfo argInfo);
   void mangleReturnValue(ReturnValueModifierIntBase RetMod);
 };

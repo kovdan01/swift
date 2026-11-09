@@ -51,7 +51,8 @@ std::string Mangle::mangleAutoDiffSpecializedPullback(
   FunctionSignatureSpecializationMangler mangler(
       pullback->getASTContext(), Demangle::SpecializationPass::ClosureSpecializer,
       pullback->getSerializedKind(), pullback);
-  mangler.setArgumentAutoDiffBranchTracingEnum(argIndex, key);
+  mangler.setArgumentAutoDiffBranchTracingEnum(
+      argIndex, pullback->getASTContext().getIdentifier(key));
   return mangler.mangle();
 }
 
