@@ -566,6 +566,72 @@ static bool isTrivialVJP(SILFunction *vjp) {
   return true;
 }
 
+static PartialApplyInst *getTopLevelPullback(SILFunction *vjp) {
+  ReturnInst *ri = nullptr;
+  for (SILBasicBlock &bb : *vjp) {
+    if (auto *retInst = dyn_cast<ReturnInst>(bb.getTerminator())) {
+      ri = retInst;
+      break;
+    }
+  }
+  if (!ri)
+    return nullptr;
+
+  auto handleConvertFunctionOrPartialApply =
+      [](SILInstruction *inst) -> PartialApplyInst * {
+    if (auto *pai = dyn_cast<PartialApplyInst>(inst)) {
+      return pai;
+    }
+    if (auto *cfi = dyn_cast<ConvertFunctionInst>(inst)) {
+      if (auto *pai = dyn_cast<PartialApplyInst>(cfi->getOperand())) {
+        return pai;
+      }
+    }
+    return nullptr;
+  };
+
+  SILInstruction *retValDefInst = ri->getOperand().getDefiningInstruction();
+  if (retValDefInst == nullptr)
+    return nullptr;
+
+  if (auto *ti = dyn_cast<TupleInst>(retValDefInst)) {
+    if (ti->getNumOperands() == 0)
+      return nullptr;
+    SILInstruction *lastElemDefInst =
+        ti->getOperand(ti->getNumOperands() - 1).getDefiningInstruction();
+    if (lastElemDefInst == nullptr)
+      return nullptr;
+    return handleConvertFunctionOrPartialApply(lastElemDefInst);
+  }
+
+  return handleConvertFunctionOrPartialApply(retValDefInst);
+}
+
+static bool vjpHasLoopContext(SILFunction *vjp) {
+  for (SILBasicBlock &bb : *vjp)
+    for (SILInstruction &inst : bb)
+      if (auto *builtinInst = dyn_cast<BuiltinInst>(&inst))
+        if (builtinInst->getName().is("autoDiffProjectTopLevelSubcontext"))
+          return true;
+  return false;
+}
+
+static bool vjpHasTopLevelSpecializableClosures(SILFunction *vjp) {
+  PartialApplyInst *topLevelPullback = getTopLevelPullback(vjp);
+  if (topLevelPullback == nullptr)
+    return false;
+
+  for (SILValue arg : topLevelPullback->getArguments()) {
+    if (arg->getType().getASTType()->getAs<SILFunctionType>() != nullptr) {
+      // Be conservative, treat any function type as potential specializable
+      // closure
+      return true;
+    }
+  }
+
+  return false;
+}
+
 static bool isProfitableToInlineAutodiffVJP(FullApplySite applySiteOfVJP,
                                             StringRef stageName) {
   SILFunction *caller = applySiteOfVJP.getFunction();
@@ -593,6 +659,13 @@ static bool isProfitableToInlineAutodiffVJP(FullApplySite applySiteOfVJP,
   // ADCS does not harm ADCS effectiveness (we know in advance that it would not
   // be effective). Always consider for inlining.
   if (isTrivialVJP(calleeVJP)) {
+    return true;
+  }
+
+  // Loop contexts are stored in the runtime tape. Without a top-level closure
+  // capture there is nothing for closure specialization to expose.
+  if (vjpHasLoopContext(calleeVJP) &&
+      !vjpHasTopLevelSpecializableClosures(calleeVJP)) {
     return true;
   }
 
