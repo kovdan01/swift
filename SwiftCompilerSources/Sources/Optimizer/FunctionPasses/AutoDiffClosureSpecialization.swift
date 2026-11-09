@@ -21,21 +21,85 @@ private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
   }
 }
 
-/// AutoDiff closure specialization removes intermediate pullback contexts from
-/// the reverse-mode tape. A VJP returns `(value, pullback)`; the pullback captures
-/// the saved values and closures needed by the reverse pass.
+/// AutoDiff Closure Specialization
+/// -------------------------------
+/// A reverse-mode derivative (VJP) returns primal results and a pullback. The
+/// pullback closes over the values and callbacks saved for the reverse pass.
+/// This pass specializes those callbacks so their contexts can be replaced by
+/// the captured values. Ordinary closure specialization handles straight-line
+/// code; branch-tracing enum specialization handles control-flow tapes.
 ///
-/// For straight-line tapes, reuse the general closure specializer after VJP
-/// inlining exposes the captured closures. With control flow, the tape is a
-/// branch-tracing enum whose cases hold `(predecessor, saved values...)` tuples:
+/// For example, consider differentiating:
 ///
-/// 1. Validate the VJP, pullback, payload uses and callable correspondence.
-/// 2. Intern enum schemas that replace selected closure fields with captures.
-/// 3. Clone the pullback, remap its tape types and rewrite projected field uses.
-/// 4. Rewrite the VJP to construct the new payloads and capture the new tape.
+/// ```swift
+/// @differentiable(reverse)
+/// func foo(_ x: Float) -> Float { sin(x) }
+/// ```
 ///
-/// Validation precedes enum synthesis and function mutation. Loop tapes and
-/// unexpected payload-use shapes are declined rather than partially rewritten.
+/// Before specialization, the VJP of sin has been inlined into the VJP of foo.
+/// The pullback of foo still captures the sin pullback as a closure. This
+/// schematic SIL omits ownership/debug instructions and shows the seed argument
+/// explicitly; `partial_apply` captures the trailing arguments of its function.
+///
+/// ```
+/// vjp_foo(%x: Float) -> (Float, (Float) -> Float):
+///   %value = apply @sin(%x)
+///   %sin_pb = partial_apply @pb_sin(%x)
+///   %foo_pb = partial_apply @pb_foo(%sin_pb)
+///   return (%value, %foo_pb)
+///
+/// pb_foo(%seed: Float, %sin_pb: (Float) -> Float) -> Float:
+///   %gradient = apply %sin_pb(%seed)
+///   return %gradient
+/// ```
+///
+/// Specializing pb_foo replaces the captured callback parameter with its Float
+/// capture. The VJP now captures x directly. The conceptual intermediate body
+/// recreates the callback at its use; the cloner can fold this pair immediately.
+///
+/// ```
+/// vjp_foo(%x: Float) -> (Float, (Float) -> Float):
+///   %value = apply @sin(%x)
+///   %foo_pb = partial_apply @specialized_pb_foo(%x)
+///   return (%value, %foo_pb)
+///
+/// specialized_pb_foo(%seed: Float, %x: Float) -> Float:
+///   %sin_pb = partial_apply @pb_sin(%x)
+///   %gradient = apply %sin_pb(%seed)
+///   return %gradient
+/// ```
+///
+/// After folding partial_apply + apply, the specialized pullback calls the sin
+/// pullback directly. Further inlining can remove this remaining direct call.
+///
+/// ```
+/// specialized_pb_foo(%seed: Float, %x: Float) -> Float:
+///   %gradient = apply @pb_sin(%seed, %x)
+///   return %gradient
+/// ```
+///
+/// With control flow, the saved callback is a field of a branch-tracing enum.
+/// The same replacement happens in the tape's payload, rather than directly in
+/// the top-level pullback parameters. For one representative enum case:
+///
+/// ```
+/// Before:
+///   Tape.case((%predecessor, partial_apply @pb_multiply(%x, %y)))
+///
+/// Specialized layout and VJP construction:
+///   SpecializedTape.case((%specializedPredecessor, (%x, %y)))
+///
+/// Specialized pullback use:
+///   %captures = ... // the field formerly containing the callback
+///   %gradient = apply @pb_multiply(%seed, %captures.0, %captures.1)
+/// ```
+///
+/// The payload may reach a pullback block as a whole tuple or as a field phi
+/// after aggregate unwrapping. Both forms use the same payload-flow analysis:
+/// validate origins and callable plans, choose specialized enum layouts, clone
+/// the pullback and rewrite its field uses, then rewrite the VJP's tape values.
+/// Validation precedes declaration synthesis and rewriting. Loop tapes and
+/// unsupported payload uses are declined during preflight.
 let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-specialization") {
   (function: Function, context: FunctionPassContext) in
 
