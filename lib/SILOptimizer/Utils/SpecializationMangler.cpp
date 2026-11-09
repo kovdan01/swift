@@ -113,15 +113,10 @@ void FunctionSignatureSpecializationMangler::setArgumentAutoDiffBranchTracingEnu
     appendSILType(record, closure->getType(), contextSignature);
     if (auto *pai = dyn_cast<PartialApplyInst>(inst)) {
       appendField(record, "partial_apply");
-      if (auto *callee = dyn_cast<FunctionRefInst>(pai->getCallee())) {
-        appendField(record, "direct");
-        appendField(record, callee->getReferencedFunction()->getName());
-      } else {
-        // A runtime wrapper callee is stored in the new payload and remains
-        // runtime data. Its identity must not split otherwise reusable plans.
-        appendField(record, "dynamic");
-        appendSILType(record, pai->getCallee()->getType(), contextSignature);
-      }
+      // Eligibility has already rejected runtime adapter callees.
+      auto *callee = cast<FunctionRefInst>(pai->getCallee());
+      appendField(record, "direct");
+      appendField(record, callee->getReferencedFunction()->getName());
       appendType(record, pai->getOrigCalleeType(), contextSignature);
       appendType(record, pai->getSubstCalleeType(), contextSignature);
       appendNumber(record, unsigned(pai->isOnStack()));
