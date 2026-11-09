@@ -567,15 +567,15 @@ bool BridgedPassContext::enableMandatoryVerification(BridgedFunction function) c
   return SILPassManager::isMandatoryVerificationEnabled(function.getFunction());
 }
 
-BridgedOwnedString BridgedAutoDiff::manglePullback(
+BridgedOwnedString BridgedPassContext::mangleWithAutoDiffBranchTracingEnum(
     BridgedType enumType, SwiftInt argIdx, BridgedFunction vjp,
-    BridgedFunction pullback) {
+    BridgedFunction pullback) const {
   return BridgedOwnedString(Mangle::mangleAutoDiffSpecializedPullback(
       pullback.getFunction(), vjp.getFunction(), enumType.unbridged(), argIdx));
 }
 
-BridgedOwnedString BridgedAutoDiff::mangleBranchTracingEnum(
-    BridgedStringRef prefix, BridgedASTType schema, BridgedFunction vjp) {
+BridgedOwnedString BridgedPassContext::mangleAutoDiffBranchTracingEnum(
+    BridgedStringRef prefix, BridgedASTType schema, BridgedFunction vjp) const {
   return BridgedOwnedString(Mangle::mangleAutoDiffSpecializedBranchTracingEnum(
       prefix.unbridged(), schema.unbridged()->getCanonicalType(),
       vjp.getFunction()->getGenericSignature().getCanonicalSignature()));
