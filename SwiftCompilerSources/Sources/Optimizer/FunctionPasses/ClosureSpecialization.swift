@@ -523,18 +523,8 @@ private func ensureEnumPayloadsAreTupleInst(vjp: Function) -> Bool {
     if !ei.type.isBranchTracingEnum(in: vjp) {
       continue
     }
-    let instOpt = ei.operands[0].value.definingInstruction
-    if instOpt == nil {
-      log("Branch tracing enum payload is not defined by an instruction: \(ei)")
-      log("Parent BB begin")
-      log("\(ei.parentBlock)")
-      log("Parent BB end")
-      return false
-    }
-    let tiOpt = instOpt as? TupleInst
-    if tiOpt == nil {
-      log("Branch tracing enum payload is defined by a non-tuple instruction: \(ei)")
-      log("Defining instruction: \(instOpt!)")
+    guard let _ = ei.payload?.definingInstruction as? TupleInst else {
+      log("Branch tracing enum payload is not defined by a TupleInst: \(ei)")
       return false
     }
   }
