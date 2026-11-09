@@ -68,96 +68,10 @@ void FunctionSignatureSpecializationMangler::setArgumentClosurePropPreviousArg(
 }
 
 void FunctionSignatureSpecializationMangler::setArgumentAutoDiffBranchTracingEnum(
-    unsigned OrigArgIdx, SILType specializedEnumType,
-    ArrayRef<AutoDiffClosureSpecializationDescriptor> closures) {
-  auto appendField = [](std::string &key, StringRef field) {
-    key += std::to_string(field.size()) + ":";
-    key.append(field.data(), field.size());
-  };
-  auto appendNumber = [&](std::string &key, auto number) {
-    appendField(key, std::to_string(number));
-  };
-  auto appendType = [&](std::string &key, Type type, GenericSignature signature) {
-    ASTMangler mangler(getASTContext());
-    appendField(key, mangler.mangleTypeForDebugger(
-                         type->mapTypeOutOfEnvironment()->getCanonicalType(),
-                         signature));
-  };
-  auto appendSILType = [&](std::string &key, SILType type,
-                           GenericSignature signature) {
-    appendNumber(key, type.isAddress());
-    appendType(key, type.getASTType(), signature);
-  };
-  auto signature = Function->getGenericSignature().getCanonicalSignature();
-  std::string key;
-  appendSILType(key, specializedEnumType, signature);
-  if (signature) {
-    ASTMangler mangler(getASTContext());
-    appendField(key, mangler.mangleGenericSignature(signature));
-  } else {
-    appendField(key, "");
-  }
-
-  SmallVector<std::string> descriptors;
-  for (const auto &descriptor : closures) {
-    std::string record;
-    auto *inst = descriptor.closure;
-    auto contextSignature =
-        inst->getFunction()->getGenericSignature().getCanonicalSignature();
-    appendSILType(record, descriptor.enumType, contextSignature);
-    appendNumber(record, descriptor.caseIndex);
-    appendNumber(record, descriptor.payloadIndex);
-    appendNumber(record, descriptor.chainIndex);
-    appendNumber(record, descriptor.optionalCaseIndex);
-    auto *closure = cast<SingleValueInstruction>(inst);
-    appendSILType(record, closure->getType(), contextSignature);
-    if (auto *pai = dyn_cast<PartialApplyInst>(inst)) {
-      appendField(record, "partial_apply");
-      // Eligibility has already rejected runtime adapter callees.
-      auto *callee = cast<FunctionRefInst>(pai->getCallee());
-      appendField(record, "direct");
-      appendField(record, callee->getReferencedFunction()->getName());
-      appendType(record, pai->getOrigCalleeType(), contextSignature);
-      appendType(record, pai->getSubstCalleeType(), contextSignature);
-      appendNumber(record, unsigned(pai->isOnStack()));
-      appendNumber(record, unsigned(pai->getCalleeConvention()));
-      // Replacement types must be explicit: phantom generic substitutions can
-      // change a direct callee's behavior without occurring in its SIL type.
-      auto substitutions = pai->getSubstitutionMap();
-      auto replacements = substitutions.getReplacementTypes();
-      appendNumber(record, replacements.size());
-      for (auto replacement : replacements)
-        appendType(record, replacement, contextSignature);
-      auto arguments = pai->getArguments();
-      appendNumber(record, arguments.size());
-      auto conventions = pai->getSubstCalleeConv();
-      auto firstCapture = conventions.getNumSILArguments() - arguments.size();
-      for (unsigned index : indices(arguments)) {
-        appendSILType(record, arguments[index]->getType(), contextSignature);
-        appendNumber(record, unsigned(arguments[index]->getOwnershipKind()));
-        appendNumber(record, unsigned(conventions.getSILArgumentConvention(
-                                          firstCapture + index).Value));
-      }
-    } else {
-      auto *tttf = cast<ThinToThickFunctionInst>(inst);
-      appendField(record, "thin_to_thick_function");
-      auto *callee = cast<FunctionRefInst>(tttf->getCallee());
-      appendField(record, callee->getReferencedFunction()->getName());
-      appendSILType(record, callee->getType(), contextSignature);
-    }
-    descriptors.push_back(std::move(record));
-  }
-  // CFG discovery and dictionary order must not affect specialization identity.
-  llvm::sort(descriptors);
-  descriptors.erase(std::unique(descriptors.begin(), descriptors.end()),
-                    descriptors.end());
-  appendNumber(key, descriptors.size());
-  for (auto &descriptor : descriptors)
-    appendField(key, descriptor);
-
+    unsigned OrigArgIdx, StringRef key) {
   auto &Info = OrigArgs[OrigArgIdx];
   Info.kind = ArgumentModifier::AutoDiffBranchTracingEnum;
-  Info.autoDiffBranchTracingEnumKey = std::move(key);
+  Info.specializationKey = getASTContext().getIdentifier(key).str().data();
 }
 
 void FunctionSignatureSpecializationMangler::setArgumentConstantProp(
@@ -379,7 +293,7 @@ void FunctionSignatureSpecializationMangler::mangleArgument(ArgInfo argInfo) {
     return;
 
   case ArgumentModifier::AutoDiffBranchTracingEnum:
-    mangleAutoDiffBranchTracingEnum(argInfo.autoDiffBranchTracingEnumKey);
+    mangleAutoDiffBranchTracingEnum(argInfo.specializationKey);
     return;
 
   case ArgumentModifier::Unmodified:

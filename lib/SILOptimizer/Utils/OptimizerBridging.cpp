@@ -517,26 +517,11 @@ void BridgedPassContext::fixStackNesting(BridgedFunction function) const {
   invocation->setNeedFixStackNesting(false);
 }
 
-BridgedOwnedString
-BridgedPassContext::mangleWithAutoDiffBranchTracingEnumSchema(
-    BridgedType enumType, SwiftInt argIdx, BridgedArrayRef closures,
-    BridgedFunction pullback) const {
-  auto *function = pullback.getFunction();
-  Mangle::FunctionSignatureSpecializationMangler mangler(
-      function->getASTContext(), Demangle::SpecializationPass::ClosureSpecializer,
-      function->getSerializedKind(), function);
-  SmallVector<Mangle::AutoDiffClosureSpecializationDescriptor> descriptors;
-  for (auto &closure : closures.unbridged<AutoDiffClosureMangling>()) {
-    descriptors.push_back({closure.enumType.unbridged(),
-                           unsigned(closure.caseIndex),
-                           unsigned(closure.payloadIndex),
-                           unsigned(closure.chainIndex),
-                           closure.closure.unbridged(),
-                           int(closure.optionalCaseIndex)});
-  }
-  mangler.setArgumentAutoDiffBranchTracingEnum(argIdx, enumType.unbridged(),
-                                               descriptors);
-  return BridgedOwnedString(mangler.mangle());
+BridgedOwnedString BridgedAutoDiff::manglePullback(
+    BridgedType enumType, SwiftInt argIdx, BridgedFunction vjp,
+    BridgedFunction pullback) {
+  return BridgedOwnedString(Mangle::mangleAutoDiffSpecializedPullback(
+      pullback.getFunction(), vjp.getFunction(), enumType.unbridged(), argIdx));
 }
 
 BridgedOwnedString BridgedAutoDiff::mangleBranchTracingEnum(

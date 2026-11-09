@@ -15,6 +15,7 @@
 #include "swift/AST/GenericSignature.h"
 #include "swift/Basic/MD5Stream.h"
 #include "swift/Demangling/ManglingMacros.h"
+#include "swift/SILOptimizer/Utils/SpecializationMangler.h"
 
 using namespace swift;
 using namespace Mangle;
@@ -36,6 +37,23 @@ std::string Mangle::mangleAutoDiffSpecializedBranchTracingEnum(
   SmallString<32> suffix;
   llvm::MD5::stringifyResult(digest, suffix);
   return (prefix + "_" + suffix).str();
+}
+
+std::string Mangle::mangleAutoDiffSpecializedPullback(
+    SILFunction *pullback, SILFunction *vjp, SILType enumType, unsigned argIndex) {
+  ASTMangler typeMangler(vjp->getASTContext());
+  auto type = enumType.getASTType()->mapTypeOutOfEnvironment()->getCanonicalType();
+  auto typeName = typeMangler.mangleTypeForDebugger(
+      type, vjp->getGenericSignature().getCanonicalSignature());
+  // A VJP name already identifies its generic/function specialization choices.
+  // A further ADCS round changes its tape type as function fields become captures.
+  auto name = vjp->getName();
+  auto key = std::to_string(name.size()) + ":" + name.str() + typeName;
+  FunctionSignatureSpecializationMangler mangler(
+      pullback->getASTContext(), Demangle::SpecializationPass::ClosureSpecializer,
+      pullback->getSerializedKind(), pullback);
+  mangler.setArgumentAutoDiffBranchTracingEnum(argIndex, key);
+  return mangler.mangle();
 }
 
 /// Mangles the generic signature and get its mangling tree. This is necessary

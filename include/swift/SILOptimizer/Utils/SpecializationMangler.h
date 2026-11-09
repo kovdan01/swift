@@ -22,16 +22,6 @@
 namespace swift {
 namespace Mangle {
 
-/// A statically referenced root closure or ordered reabstraction wrapper in an AutoDiff
-/// branch tracing enum payload. Instruction identity is not part of the key.
-struct AutoDiffClosureSpecializationDescriptor {
-  SILType enumType;
-  unsigned caseIndex;
-  unsigned payloadIndex;
-  unsigned chainIndex;
-  SILInstruction *closure;
-  int optionalCaseIndex;
-};
 SWIFT_BEGIN_INLINE_NAMESPACE
 
 class PartialSpecializationMangler : public SpecializationMangler {
@@ -98,8 +88,8 @@ class FunctionSignatureSpecializationMangler : public SpecializationMangler {
     union {
       SILInstruction *inst;
       unsigned otherArgIdx; // only for `ClosurePropPreviousArg`
+      const char *specializationKey; // ASTContext-uniqued argument key
     };
-    std::string autoDiffBranchTracingEnumKey;
 
     ArgInfo(ArgumentModifier kind) : kind(kind), inst(nullptr) {}
 
@@ -127,9 +117,7 @@ public:
 
   void setArgumentClosureProp(unsigned OrigArgIdx, SILInstruction *closure);
   void setArgumentClosurePropPreviousArg(unsigned OrigArgIdx, unsigned otherArgIdx);
-  void setArgumentAutoDiffBranchTracingEnum(
-      unsigned OrigArgIdx, SILType specializedEnumType,
-      ArrayRef<AutoDiffClosureSpecializationDescriptor> closures);
+  void setArgumentAutoDiffBranchTracingEnum(unsigned OrigArgIdx, StringRef key);
   void setArgumentDead(unsigned OrigArgIdx);
   void setArgumentOwnedToGuaranteed(unsigned OrigArgIdx);
   void setArgumentGuaranteedToOwned(unsigned OrigArgIdx);

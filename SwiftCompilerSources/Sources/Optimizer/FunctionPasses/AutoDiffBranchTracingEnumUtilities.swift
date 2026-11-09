@@ -2,6 +2,16 @@ import AST
 import SIL
 import OptimizerBridging
 
+extension FunctionPassContext {
+  func mangle(
+    withSpecializedBranchTracingEnum enumType: Type, argIdx: Int,
+    in vjp: Function, from pullback: Function
+  ) -> String {
+    String(taking: BridgedAutoDiff.manglePullback(
+      enumType.bridged, argIdx, vjp.bridged, pullback.bridged))
+  }
+}
+
 extension Type {
   func isBranchTracingEnum(in vjp: Function) -> Bool {
     return self.bridged.isAutodiffBranchTracingEnumInVJP(vjp.bridged)

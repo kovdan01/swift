@@ -183,27 +183,6 @@ struct FunctionPassContext : MutatingContext {
     String(taking: bridgedPassContext.mangleWithChangedRepresentation(original.bridged))
   }
 
-  func mangle(
-    withSpecializedBranchTracingEnum enumType: Type, argIdx: Int,
-    closuresInBTE: [ClosureInBTE], from pullback: Function
-  ) -> String {
-    var descriptors = [BridgedPassContext.AutoDiffClosureMangling]()
-    for info in closuresInBTE {
-      let chain: [SingleValueInstruction] = [info.closure] + info.reabstractions
-      for (chainIndex, closure) in chain.enumerated() {
-        descriptors.append(BridgedPassContext.AutoDiffClosureMangling(
-          enumType: info.enumCase.enumType.bridged,
-          caseIndex: info.enumCase.index, payloadIndex: info.indexInPayload,
-          chainIndex: chainIndex, closure: closure.bridged,
-          optionalCaseIndex: info.optionalWrapper?.caseIndex ?? -1))
-      }
-    }
-    return descriptors.withBridgedArrayRef {
-      String(taking: bridgedPassContext.mangleWithAutoDiffBranchTracingEnumSchema(
-        enumType.bridged, argIdx, $0, pullback.bridged))
-    }
-  }
-
   func createSpecializedFunctionDeclaration(
     from original: Function, withName specializedFunctionName: String,
     withParams specializedParameters: [ParameterInfo],
