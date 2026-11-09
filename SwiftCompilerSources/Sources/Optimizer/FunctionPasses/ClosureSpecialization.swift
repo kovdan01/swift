@@ -1365,8 +1365,12 @@ private func rewriteApplyDirectClosure(
     newArgs.append(contentsOf: extractedElements)
     let vjpFn = closureInfo.closure.asSupportedClosureFn!
     let newFri = builder.createFunctionRef(vjpFn)
+    // A thick closure application has already applied the root function's
+    // generic substitutions. Recover them from the closure being eliminated.
+    let substitutions = (closureInfo.closure as? PartialApplyInst)?.substitutionMap ?? ai.substitutionMap
     let newAi = builder.createApply(
-      function: newFri, ai.substitutionMap, arguments: newArgs)
+      function: newFri, substitutions.substitute(with: ai.parentFunction.forwardingSubstitutionMap),
+      arguments: newArgs)
     ai.replace(with: newAi, context)
 
     // TODO: maybe we can set insertion point earlier
@@ -1395,7 +1399,7 @@ private func rewriteApplyDirectClosure(
 
     rootClosure = builder.createPartialApply(
       function: newFri,
-      substitutionMap: pai.substitutionMap, // TODO
+      substitutionMap: pai.substitutionMap.substitute(with: ai.parentFunction.forwardingSubstitutionMap),
       capturedArguments: extractedElements,
       calleeConvention: pai.calleeConvention, 
       hasUnknownResultIsolation: pai.hasUnknownResultIsolation,
@@ -1409,7 +1413,9 @@ private func rewriteApplyDirectClosure(
     }
   } else {
     assert(closureInfo.closure is ThinToThickFunctionInst)
-    rootClosure = builder.createThinToThickFunction(thinFunction: newFri, resultType: closureInfo.closure.type)
+    let type = ai.parentFunction.mapTypeIntoEnvironment(
+      closureInfo.closure.type.rawType.mapOutOfEnvironment()).canonical.loweredType(in: ai.parentFunction)
+    rootClosure = builder.createThinToThickFunction(thinFunction: newFri, resultType: type)
   }
 
   var allNewClosures : [SingleValueInstruction] = [rootClosure]
@@ -1420,7 +1426,7 @@ private func rewriteApplyDirectClosure(
     let reabstractionFri = builder.createFunctionRef(reabstractionFn)
     let newReabstraction = builder.createPartialApply(
       function: reabstractionFri,
-      substitutionMap: reabstraction.substitutionMap, // TODO
+      substitutionMap: reabstraction.substitutionMap.substitute(with: ai.parentFunction.forwardingSubstitutionMap),
       capturedArguments: [currentClosure],
       calleeConvention: reabstraction.calleeConvention,
       hasUnknownResultIsolation: reabstraction.hasUnknownResultIsolation,
@@ -1436,7 +1442,9 @@ private func rewriteApplyDirectClosure(
   let fn = closureInfo.reabstractions.last!.asSupportedClosureFn!
   let newFriForAi = builder.createFunctionRef(fn)
   let newAi = builder.createApply(
-    function: newFriForAi, ai.substitutionMap, arguments: newArgs)
+    function: newFriForAi,
+    closureInfo.reabstractions.last!.substitutionMap.substitute(with: ai.parentFunction.forwardingSubstitutionMap),
+    arguments: newArgs)
   ai.replace(with: newAi, context)
 
   for newClosure in allNewClosures.reversed() {
