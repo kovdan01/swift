@@ -22,7 +22,7 @@
 namespace swift {
 namespace Mangle {
 
-/// A root closure or one of its ordered reabstraction wrappers in an AutoDiff
+/// A statically referenced root closure or ordered reabstraction wrapper in an AutoDiff
 /// branch tracing enum payload. Instruction identity is not part of the key.
 struct AutoDiffClosureSpecializationDescriptor {
   SILType enumType;
