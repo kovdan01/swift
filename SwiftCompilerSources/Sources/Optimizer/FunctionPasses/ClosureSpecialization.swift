@@ -1196,7 +1196,7 @@ private func rewriteConvertFunctionUse(
     let newCFI = builder.createConvertFunction(
       originalFunction: result,
       resultType: cfi.type,
-      withoutActuallyEscaping: cfi.withoutActuallyEscaping)
+      kind: cfi.conversionKind)
     cfi.replace(with: newCFI, context)
   }
 }
