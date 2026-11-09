@@ -1,5 +1,6 @@
 import AST
 import SIL
+import OptimizerBridging
 
 extension Type {
   func isBranchTracingEnum(in vjp: Function) -> Bool {
@@ -258,11 +259,18 @@ private func autodiffSpecializeBranchTracingEnum(
   // closures, optional wrappers, and already-specialized predecessor enums.
   let schema = context.getTupleType(elements:
     [bteType.rawType.mapOutOfEnvironment()] + newPayloadTypes)
-  if let existing = context.lookupAutoDiffSpecializedBranchTracingEnum(schema: schema, in: topVJP) {
-    return getBranchTracingEnumLoweredType(ed: existing, vjp: topVJP)
+  newEDName = newEDName._withBridgedStringRef {
+    String(taking: BridgedAutoDiff.mangleBranchTracingEnum($0, schema.bridged, topVJP.bridged))
   }
-  newEDName = context.mangleAutoDiffSpecializedBranchTracingEnum(
-    prefix: newEDName, schema: schema, in: topVJP)
+  // Synthesized declarations already belong to the AST module. Reuse its name
+  // lookup instead of maintaining a second, AutoDiff-specific enum registry.
+  if let existing = context.moduleDecl.lookupNominalType(name: newEDName) {
+    let existingType = getBranchTracingEnumLoweredType(ed: existing as! EnumDecl, vjp: topVJP)
+    assert(existingType.getEnumCases(in: topVJP)!.map {
+      $0.payload!.rawType.mapOutOfEnvironment().canonical
+    } == newPayloadTypes.map { $0.canonical })
+    return existingType
+  }
 
   let genericParams =
     if canonicalGenericSig.isEmpty { GenericParameterList?(nil) }
@@ -302,7 +310,6 @@ private func autodiffSpecializeBranchTracingEnum(
   // for some reason it results in crashes for many existing tests
   newED.setAccess(swift.AccessLevel.public)
   getSourceFileFor(derivative: topVJP).addTopLevelDecl(newED.bridgedDecl)
-  context.registerAutoDiffSpecializedBranchTracingEnum(newED, schema: schema, in: topVJP)
 
   return getBranchTracingEnumLoweredType(ed: newED, vjp: topVJP)
 }

@@ -232,27 +232,6 @@ struct FunctionPassContext : MutatingContext {
     }
   }
 
-  func lookupAutoDiffSpecializedBranchTracingEnum(schema: AST.`Type`, in vjp: Function) -> EnumDecl? {
-    bridgedPassContext.lookupAutoDiffSpecializedBranchTracingEnum(
-      schema.bridged, vjp.bridged).getAs(EnumDecl.self)
-  }
-
-  func mangleAutoDiffSpecializedBranchTracingEnum(
-    prefix: String, schema: AST.`Type`, in vjp: Function
-  ) -> String {
-    prefix._withBridgedStringRef {
-      String(taking: bridgedPassContext.mangleAutoDiffSpecializedBranchTracingEnum(
-        $0, schema.bridged, vjp.bridged))
-    }
-  }
-
-  func registerAutoDiffSpecializedBranchTracingEnum(
-    _ decl: EnumDecl, schema: AST.`Type`, in vjp: Function
-  ) {
-    bridgedPassContext.registerAutoDiffSpecializedBranchTracingEnum(
-      decl.bridged, schema.bridged, vjp.bridged)
-  }
-
   /// Makes sure that the lifetime of `value` ends at all control flow paths, even in dead-end blocks.
   /// Inserts destroys in dead-end blocks if those are missing.
   func completeLifetime(of value: Value) {
