@@ -47,9 +47,15 @@ struct ClosureInBTE : Equatable {
 }
 
 private func getCapturedArgTypesTupleForClosure(
-  closureInBTE: ClosureInBTE, context: FunctionPassContext
+  closure: SingleValueInstruction, context: FunctionPassContext
 ) -> AST.`Type` {
-  context.getTupleType(elements: closureInBTE.capturedArgs.map { $0.type.rawType })
+  var capturedArgTypes = [AST.`Type`]()
+  if let pai = closure as? PartialApplyInst {
+    capturedArgTypes.append(contentsOf: pai.arguments.map{ $0.type.rawType })
+  } else {
+    assert(closure is ThinToThickFunctionInst)
+  }
+  return context.getTupleType(elements: capturedArgTypes)
 }
 
 // For a given branch tracing enum type, return an array of branch tracing enum types
@@ -61,17 +67,43 @@ private func getCapturedArgTypesTupleForClosure(
 //     case bbB((predecessor: _AD__$xxx_bbB__Pred__xxx, /* closure types */))
 //     case bbC((predecessor: _AD__$xxx_bbC__Pred__xxx, /* closure types */))
 //   }
-private func getBranchTracingEnumPreds(bteType: Type, in vjp: Function) -> [Type]? {
-  guard let enumCases = bteType.getEnumCases(in: vjp) else { return nil }
+private func getBranchTracingEnumPreds(bteType: Type, in vjp: Function) -> Set<Type>? {
+  guard let enumCases = bteType.getEnumCases(in: vjp) else {
+    return nil
+  }
 
-  var predecessors = [Type]()
+  var btePreds = Set<Type>()
   for enumCase in enumCases {
     guard let payload = enumCase.payload, payload.isTuple else { return nil }
-    if let firstElement = payload.tupleElements.first, firstElement.isBranchTracingEnum(in: vjp) {
-      predecessors.append(firstElement)
+    guard let firstTupleElementType = payload.tupleElements.first else {
+      continue
+    }
+    if firstTupleElementType.isBranchTracingEnum(in: vjp) {
+      btePreds.insert(firstTupleElementType)
     }
   }
-  return predecessors
+
+  return btePreds
+}
+
+private func iterateOverBranchTracingEnumPreds(
+  bteToPredsDict: inout [Type: Set<Type>],
+  currentBTEType: Type,
+  in vjp: Function
+) -> Bool {
+  guard let currentBTEPreds = getBranchTracingEnumPreds(bteType: currentBTEType, in: vjp) else {
+    return false
+  }
+  bteToPredsDict[currentBTEType] = currentBTEPreds
+  for currentBTEPred in currentBTEPreds {
+    if bteToPredsDict[currentBTEPred] == nil {
+      guard iterateOverBranchTracingEnumPreds(
+        bteToPredsDict: &bteToPredsDict, currentBTEType: currentBTEPred, in: vjp) else {
+        return false
+      }
+    }
+  }
+  return true
 }
 
 // Get branch tracing enum type queue for further specialization. The types in the queue
@@ -99,29 +131,32 @@ private func getBranchTracingEnumPreds(bteType: Type, in vjp: Function) -> [Type
 //     case bbE((/* closure types */))
 //   }
 private func getBranchTracingEnumSpecializationQueue(topBTEType: Type, in vjp: Function) -> [Type]? {
-  var visited = Set<Type>()
-  var active = Set<Type>()
-  var queue = [Type]()
+  var bteToPredsDict = [Type: Set<Type>]()
+  guard iterateOverBranchTracingEnumPreds(
+    bteToPredsDict: &bteToPredsDict,
+    currentBTEType: topBTEType,
+    in: vjp) else { return nil }
+  var bteSpecializationQueue = [Type]()
+  let bteCount = bteToPredsDict.count
 
-  func visit(_ type: Type) -> Bool {
-    if visited.contains(type) { return true }
-    guard active.insert(type).inserted,
-          let predecessors = getBranchTracingEnumPreds(bteType: type, in: vjp)
-    else { return false }
-    // Declaration order makes the traversal deterministic. Postorder places
-    // every predecessor before the enum whose payload refers to it.
-    for predecessor in predecessors {
-      guard visit(predecessor) else { return false }
+  for _ in 0..<bteCount {
+    let previousCount = bteSpecializationQueue.count
+    for (bteType, btePreds) in bteToPredsDict {
+      guard btePreds.isEmpty else {
+        continue
+      }
+      bteSpecializationQueue.append(bteType)
+      break
     }
-    active.remove(type)
-    visited.insert(type)
-    queue.append(type)
-    return true
+    guard bteSpecializationQueue.count > previousCount else { return nil }
+    bteToPredsDict.removeValue(forKey: bteSpecializationQueue.last!)
+    for bteType in bteToPredsDict.keys {
+      bteToPredsDict[bteType]!.remove(bteSpecializationQueue.last!)
+    }
   }
+  assert(bteSpecializationQueue.count == bteCount)
 
-  // Complete graph validation before creating any new enum declarations.
-  guard visit(topBTEType) else { return nil }
-  return queue
+  return bteSpecializationQueue
 }
 
 // The queried type can originate in the pullback's generic environment. Map
@@ -181,14 +216,15 @@ private func cloneGenericParameters(
 // Assuming that the closure at index 1 is capturing one Float argument and the closure at index 2 is
 // capturing two Float arguments, the specialized case would look like this:
 //   case bbB((predecessor: _AD__$xxx_bbB__Pred__xxx_spec, (Float), Optional<(Float, Float)>))
-private func getSpecializedPayloadTypeForEnumCase(
+private func getSpecializedParamDeclForEnumCase(
   enumCase: EnumCase,
   closuresInBTE: [ClosureInBTE],
   newEDName: inout String,
+  newPayloadTypes: inout [AST.`Type`],
   specializedBTEDict: [Type: Type],
   topVJP: Function,
   context: FunctionPassContext
-) -> AST.`Type` {
+) -> ParamDecl {
   let oldPayloadTupleElementTypes = enumCase.payload!.tupleElements
   let closuresInBTEForCase = closuresInBTE.filter{ $0.enumCase.index == enumCase.index }
 
@@ -211,7 +247,7 @@ private func getSpecializedPayloadTypeForEnumCase(
     if let closureInBTE = closuresInBTEForCaseAndPayloadIndex.first {
       nameSuffix += "_\(elementIndex)"
       newElementType = getCapturedArgTypesTupleForClosure(
-        closureInBTE: closureInBTE, context: context)
+        closure: closureInBTE.closure, context: context)
       if oldElementType.isOptional {
         assert(elementIndex + 1 == oldPayloadTupleElementTypes.count)
         newElementType = newElementType.optionalType
@@ -231,10 +267,15 @@ private func getSpecializedPayloadTypeForEnumCase(
     newEDName += "_\(enumElementDecl.name)\(nameSuffix)"
   }
 
-  return context.getTupleType(elements: newPayloadTupleElementTypes).mapOutOfEnvironment()
+  let newParamDecl = enumElementDecl.parameterList.singleElement!.cloneWithoutType()
+  let newPayloadType = context.getTupleType(elements: newPayloadTupleElementTypes).mapOutOfEnvironment()
+  newPayloadTypes.append(newPayloadType)
+  newParamDecl.setInterfaceType(type: newPayloadType)
+
+  return newParamDecl
 }
 
-// Create a specialized EnumDecl for a given branch tracing enum. See getSpecializedPayloadTypeForEnumCase
+// Create a specialized EnumDecl for a given branch tracing enum. See getSpecializedParamDeclForEnumCase
 // for more info on how each enum case payload is specialized.
 // The specialized enum name includes the changed payload positions followed by
 // a digest of the complete canonical schema. For example:
@@ -257,10 +298,23 @@ private func autodiffSpecializeBranchTracingEnum(
 
   var newEDName: String = oldED.name.string + "_spec"
 
-  let newPayloadTypes = bteType.getEnumCases(in: topVJP)!.map {
-    getSpecializedPayloadTypeForEnumCase(
-      enumCase: $0, closuresInBTE: closuresInBTE, newEDName: &newEDName,
-      specializedBTEDict: specializedBTEDict, topVJP: topVJP, context: context)
+  var newPayloadTypes = [AST.`Type`]()
+  let newPLs = bteType.getEnumCases(in: topVJP)!.map{
+    ParameterList.create(
+      leftParenLoc: nil,
+      parameters: [
+        getSpecializedParamDeclForEnumCase(
+          enumCase: $0,
+          closuresInBTE: closuresInBTE,
+          newEDName: &newEDName,
+          newPayloadTypes: &newPayloadTypes,
+          specializedBTEDict: specializedBTEDict,
+          topVJP: topVJP,
+          context: context
+        )
+      ],
+      rightParenLoc: nil, astContext
+    )
   }
 
   let canonicalGenericSig = topVJP.genericSignature.canonicalSignature
@@ -303,14 +357,10 @@ private func autodiffSpecializeBranchTracingEnum(
   }
 
   for (idx, enumCase) in bteType.getEnumCases(in: topVJP)!.enumerated() {
-    let newParamDecl = enumCase.enumElementDecl.parameterList.singleElement!.cloneWithoutType()
-    newParamDecl.setInterfaceType(type: newPayloadTypes[idx])
     let newEED = EnumElementDecl.create(
       declContext: newED,
       name: enumCase.enumElementDecl.baseIdentifier, nameLoc: nil,
-      parameterList: ParameterList.create(
-        leftParenLoc: nil, parameters: [newParamDecl],
-        rightParenLoc: nil, astContext),
+      parameterList: newPLs[idx],
       equalsLoc: nil, rawValue: nil, astContext)
     newEED.setImplicit()
     newED.add(member: newEED)
