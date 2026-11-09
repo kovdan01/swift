@@ -170,14 +170,14 @@ private func cloneGenericParameters(
 // Assuming that the closure at index 1 is capturing one Float argument and the closure at index 2 is
 // capturing two Float arguments, the specialized case would look like this:
 //   case bbB((predecessor: _AD__$xxx_bbB__Pred__xxx_spec, (Float), Optional<(Float, Float)>))
-private func getSpecializedParamDeclForEnumCase(
+private func getSpecializedPayloadTypeForEnumCase(
   enumCase: EnumCase,
   closuresInBTE: [ClosureInBTE],
   newEDName: inout String,
   specializedBTEDict: [Type: Type],
   topVJP: Function,
   context: FunctionPassContext
-) -> (parameter: ParamDecl, payloadType: AST.`Type`) {
+) -> AST.`Type` {
   let oldPayloadTupleElementTypes = enumCase.payload!.tupleElements
   let closuresInBTEForCase = closuresInBTE.filter{ $0.enumCase.index == enumCase.index }
 
@@ -220,14 +220,10 @@ private func getSpecializedParamDeclForEnumCase(
     newEDName += "_\(enumElementDecl.name)\(nameSuffix)"
   }
 
-  let newParamDecl = enumElementDecl.parameterList.singleElement!.cloneWithoutType()
-  let newPayloadType = context.getTupleType(elements: newPayloadTupleElementTypes).mapOutOfEnvironment()
-  newParamDecl.setInterfaceType(type: newPayloadType)
-
-  return (newParamDecl, newPayloadType)
+  return context.getTupleType(elements: newPayloadTupleElementTypes).mapOutOfEnvironment()
 }
 
-// Create a specialized EnumDecl for a given branch tracing enum. See getSpecializedParamDeclForEnumCase
+// Create a specialized EnumDecl for a given branch tracing enum. See getSpecializedPayloadTypeForEnumCase
 // for more info on how each enum case payload is specialized.
 // The specialized enum name includes the changed payload positions followed by
 // a digest of the complete canonical schema. For example:
@@ -250,8 +246,8 @@ private func autodiffSpecializeBranchTracingEnum(
 
   var newEDName: String = oldED.name.string + "_spec"
 
-  let newCasePayloads = bteType.getEnumCases(in: topVJP)!.map {
-    getSpecializedParamDeclForEnumCase(
+  let newPayloadTypes = bteType.getEnumCases(in: topVJP)!.map {
+    getSpecializedPayloadTypeForEnumCase(
       enumCase: $0, closuresInBTE: closuresInBTE, newEDName: &newEDName,
       specializedBTEDict: specializedBTEDict, topVJP: topVJP, context: context)
   }
@@ -261,7 +257,7 @@ private func autodiffSpecializeBranchTracingEnum(
   // occur in a payload. The complete ordered payload schema includes preserved
   // closures, optional wrappers, and already-specialized predecessor enums.
   let schema = context.getTupleType(elements:
-    [bteType.rawType.mapOutOfEnvironment()] + newCasePayloads.map { $0.payloadType })
+    [bteType.rawType.mapOutOfEnvironment()] + newPayloadTypes)
   if let existing = context.lookupAutoDiffSpecializedBranchTracingEnum(schema: schema, in: topVJP) {
     return getBranchTracingEnumLoweredType(ed: existing, vjp: topVJP)
   }
@@ -289,11 +285,13 @@ private func autodiffSpecializeBranchTracingEnum(
   }
 
   for (idx, enumCase) in bteType.getEnumCases(in: topVJP)!.enumerated() {
+    let newParamDecl = enumCase.enumElementDecl.parameterList.singleElement!.cloneWithoutType()
+    newParamDecl.setInterfaceType(type: newPayloadTypes[idx])
     let newEED = EnumElementDecl.create(
       declContext: newED,
       name: enumCase.enumElementDecl.baseIdentifier, nameLoc: nil,
       parameterList: ParameterList.create(
-        leftParenLoc: nil, parameters: [newCasePayloads[idx].parameter],
+        leftParenLoc: nil, parameters: [newParamDecl],
         rightParenLoc: nil, astContext),
       equalsLoc: nil, rawValue: nil, astContext)
     newEED.setImplicit()
