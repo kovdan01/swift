@@ -21,89 +21,21 @@ private func log(prefix: Bool = true, _ message: @autoclosure () -> String) {
   }
 }
 
-/// AutoDiff Closure Specialization
-/// -------------------------------
-/// This optimization performs closure specialization tailored for the patterns seen in Swift Autodiff. In principle,
-/// the optimization does the same thing as the general closure specialization pass. However, it is tailored to the
-/// patterns of Swift Autodiff.
+/// AutoDiff closure specialization removes intermediate pullback contexts from
+/// the reverse-mode tape. A VJP returns `(value, pullback)`; the pullback captures
+/// the saved values and closures needed by the reverse pass.
 ///
-/// The compiler performs reverse-mode differentiation on functions marked with `@differentiable(reverse)`. In doing so,
-/// it generates corresponding VJP and Pullback functions, which perform the forward and reverse pass respectively. You
-/// can think of VJPs as functions that "differentiate" an original function and Pullbacks as the calculated
-/// "derivative" of the original function.
+/// For straight-line tapes, reuse the general closure specializer after VJP
+/// inlining exposes the captured closures. With control flow, the tape is a
+/// branch-tracing enum whose cases hold `(predecessor, saved values...)` tuples:
 ///
-/// VJPs always return a tuple of 2 values -- the original result and the Pullback. Pullbacks are essentially a chain
-/// of closures, where the closure-contexts are implicitly used as the so-called "tape" during the reverse
-/// differentiation process. It is this chain of closures contained within the Pullbacks that this optimization aims
-/// to optimize via closure specialization.
+/// 1. Validate the VJP, pullback, payload uses and callable correspondence.
+/// 2. Intern enum schemas that replace selected closure fields with captures.
+/// 3. Clone the pullback, remap its tape types and rewrite projected field uses.
+/// 4. Rewrite the VJP to construct the new payloads and capture the new tape.
 ///
-/// The code patterns that this optimization targets, look similar to the one below:
-/// ``` swift
-///
-/// // Since `foo` is marked with the `differentiable(reverse)` attribute the compiler
-/// // will generate corresponding VJP and Pullback functions in SIL. Let's assume that
-/// // these functions are called `vjp_foo` and `pb_foo` respectively.
-/// @differentiable(reverse)
-/// func foo(_ x: Float) -> Float {
-///   return sin(x)
-/// }
-///
-/// //============== Before closure specialization ==============//
-/// // VJP of `foo`. Returns the original result and the Pullback of `foo`.
-/// sil @vjp_foo: $(Float) -> (originalResult: Float, pullback: (Float) -> Float) {
-/// bb0(%0: $Float):
-///   // __Inlined__ `vjp_sin`: It is important for all intermediate VJPs to have
-///   // been inlined in `vjp_foo`, otherwise `vjp_foo` will not be able to determine
-///   // that `pb_foo` is closing over other closures and no specialization will happen.
-///                                                                               \
-///   %originalResult = apply @sin(%0): $(Float) -> Float                          \__ Inlined `vjp_sin`
-///   %partially_applied_pb_sin = partial_apply pb_sin(%0): $(Float) -> Float      /
-///                                                                               /
-///
-///   %pb_foo = function_ref @pb_foo: $@convention(thin) (Float, (Float) -> Float) -> Float
-///   %partially_applied_pb_foo = partial_apply %pb_foo(%partially_applied_pb_sin): $(Float, (Float) -> Float) -> Float
-///
-///   return (%originalResult, %partially_applied_pb_foo)
-/// }
-///
-/// // Pullback of `foo`.
-/// //
-/// // It receives what are called as intermediate closures that represent
-/// // the calculations that the Pullback needs to perform to calculate a function's
-/// // derivative.
-/// //
-/// // The intermediate closures may themselves contain intermediate closures and
-/// // that is why the Pullback for a function differentiated at the "top" level
-/// // may end up being a "chain" of closures.
-/// sil @pb_foo: $(Float, (Float) -> Float) -> Float {
-/// bb0(%0: $Float, %pb_sin: $(Float) -> Float):
-///   %derivative_of_sin = apply %pb_sin(%0): $(Float) -> Float
-///   return %derivative_of_sin: Float
-/// }
-///
-/// //============== After closure specialization ==============//
-/// sil @vjp_foo: $(Float) -> (originalResult: Float, pullback: (Float) -> Float) {
-/// bb0(%0: $Float):
-///   %originalResult = apply @sin(%0): $(Float) -> Float
-///
-///   // Before the optimization, pullback of `foo` used to take a closure for computing
-///   // pullback of `sin`. Now, the specialized pullback of `foo` takes the arguments that
-///   // pullback of `sin` used to close over and pullback of `sin` is instead copied over
-///   // inside pullback of `foo`.
-///   %specialized_pb_foo = function_ref @specialized_pb_foo: $@convention(thin) (Float, Float) -> Float
-///   %partially_applied_pb_foo = partial_apply %specialized_pb_foo(%0): $(Float, Float) -> Float
-///
-///   return (%originalResult, %partially_applied_pb_foo)
-/// }
-///
-/// sil @specialized_pb_foo: $(Float, Float) -> Float {
-/// bb0(%0: $Float, %1: $Float):
-///   %2 = partial_apply @pb_sin(%1): $(Float) -> Float
-///   %3 = apply %2(): $() -> Float
-///   return %3: $Float
-/// }
-/// ```
-///
+/// Validation precedes enum synthesis and function mutation. Loop tapes and
+/// unexpected payload-use shapes are declined rather than partially rewritten.
 let autodiffClosureSpecialization = FunctionPass(name: "autodiff-closure-specialization") {
   (function: Function, context: FunctionPassContext) in
 
