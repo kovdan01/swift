@@ -1,0 +1,50 @@
+// REQUIRES: executable_test
+
+// RUN: %empty-directory(%t)
+// RUN: %target-build-swift %s -Onone -o %t/none.out
+// RUN: %target-build-swift %s -O -o %t/opt.out
+// RUN: %target-codesign %t/none.out
+// RUN: %target-codesign %t/opt.out
+// RUN: %target-run %t/none.out
+// RUN: %target-run %t/opt.out
+
+import _Differentiation
+
+// Keep the iteration count dynamic during optimization.
+public var iterationCount = 3
+
+@differentiable(reverse)
+@inline(never)
+public func square(_ x: Float) -> Float { x * x }
+
+@differentiable(reverse)
+public func loop(_ x: Float) -> Float {
+  var result = x
+  for _ in 0..<iterationCount {
+    result = square(result)
+  }
+  return result
+}
+
+public func caller(_ x: Float) -> Float {
+  gradient(at: x, of: loop)
+}
+
+#if !DEFINITIONS_ONLY
+import DifferentiationUnittest
+import StdlibUnittest
+
+var tests = TestSuite("LoopVJPInlining")
+tests.testWithLeakChecking("RuntimeTape") {
+  let cases: [(Int, Float, Float)] = [(0, 2, 1), (1, 4, 4), (3, 256, 1024)]
+  for (count, value, derivative) in cases {
+    iterationCount = count
+    let result = valueWithPullback(at: Float(2), of: loop)
+    expectEqual(value, result.value)
+    expectEqual(derivative, result.pullback(1))
+    expectEqual(derivative, result.pullback(1))
+    expectEqual(derivative, caller(2))
+  }
+}
+runAllTests()
+#endif
