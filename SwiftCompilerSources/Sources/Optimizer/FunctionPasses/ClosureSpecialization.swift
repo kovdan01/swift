@@ -554,7 +554,6 @@ private enum PayloadUseShape {
   case uncheckedEnumData(UncheckedEnumDataInst)
   case beginBorrow(BeginBorrowInst)
   case switchEnum(SwitchEnumInst)
-  case tupleExtract(TupleExtractInst)
 }
 
 private enum ClosurePayloadUseShape {
@@ -754,8 +753,6 @@ private func classifyPayloadUse(_ use: Operand) -> PayloadUseShape? {
       : .beginBorrow(bbi)
   case let sei as SwitchEnumInst:
     return .switchEnum(sei)
-  case let tei as TupleExtractInst:
-    return .tupleExtract(tei)
   default:
     return nil
   }
@@ -864,8 +861,6 @@ func checkIfCanRunForPayloadValues(
           return false
         }
       case .switchEnum:
-        ()
-      case .tupleExtract:
         ()
       }
     }
@@ -1495,11 +1490,6 @@ private func rewriteUsesOfPayloadItem(
     rewriteDestroyValueUse(
       dvi: dvi, resultIdx: resultIdx,
       result: result, rewriteCtx: rewriteCtx, context)
-
-  case .tupleExtract(let tei):
-    let builder = Builder(before: tei, context)
-    let newTei = builder.createTupleExtract(tuple: tei.tuple, elementIndex: tei.fieldIndex)
-    tei.replace(with: newTei, context)
 
   case .uncheckedEnumData(let uedi):
     let builder = Builder(before: uedi, context)
