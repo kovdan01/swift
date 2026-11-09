@@ -971,12 +971,8 @@ private func insertLifetimeEndIfNeeded(
     }
   }
   let builder = Builder(before: insertionPoint, context)
-  if value.parentFunction.hasOwnership {
-    builder.createDestroyValue(operand: value)
-  } else {
-    // TODO: we are OSSA-only? So delete this?
-    builder.createReleaseValue(operand: value)
-  }
+  assert(value.parentFunction.hasOwnership)
+  builder.createDestroyValue(operand: value)
 }
 
 private func extractTupleElements(
@@ -1171,12 +1167,8 @@ private func rewriteDestroyValueUse(
   let isClosurePayload = rewriteCtx.closureInfoArray.contains { $0.indexInPayload == resultIdx }
   if !isClosurePayload {
     let builder = Builder(before: dvi, context)
-    if dvi.parentFunction.hasOwnership {
-      builder.createDestroyValue(operand: result)
-    } else {
-      // TODO: we are OSSA-only? So delete this?
-      builder.createReleaseValue(operand: result)
-    }
+    assert(dvi.parentFunction.hasOwnership)
+    builder.createDestroyValue(operand: result)
   }
   context.erase(instruction: dvi)
 }
