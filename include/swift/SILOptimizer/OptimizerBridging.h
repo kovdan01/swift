@@ -252,9 +252,6 @@ struct BridgedPassContext {
   BridgedOwnedString mangleWithExplodedPackArgs(BridgedArrayRef bridgedPackArgs,
                                                 BridgedFunction applySiteCallee) const;
   BridgedOwnedString mangleWithChangedRepresentation(BridgedFunction applySiteCallee) const;
-  BridgedOwnedString
-  mangleWithAutoDiffBranchTracingEnum(BridgedValue arg, SwiftInt argIdx,
-                                      BridgedFunction pullback) const;
   struct AutoDiffClosureMangling {
     BridgedType enumType;
     SwiftInt caseIndex;

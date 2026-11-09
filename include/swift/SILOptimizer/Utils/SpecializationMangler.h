@@ -127,8 +127,6 @@ public:
 
   void setArgumentClosureProp(unsigned OrigArgIdx, SILInstruction *closure);
   void setArgumentClosurePropPreviousArg(unsigned OrigArgIdx, unsigned otherArgIdx);
-  void setArgumentAutoDiffBranchTracingEnum(unsigned OrigArgIdx,
-                                            ValueBase *Arg);
   void setArgumentAutoDiffBranchTracingEnum(
       unsigned OrigArgIdx, SILType specializedEnumType,
       ArrayRef<AutoDiffClosureSpecializationDescriptor> closures);

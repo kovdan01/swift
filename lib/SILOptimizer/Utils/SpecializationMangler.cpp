@@ -67,11 +67,6 @@ void FunctionSignatureSpecializationMangler::setArgumentClosurePropPreviousArg(
   Info.otherArgIdx = otherArgIdx;
 }
 
-void FunctionSignatureSpecializationMangler::
-    setArgumentAutoDiffBranchTracingEnum(unsigned OrigArgIdx, ValueBase *Arg) {
-  setArgumentAutoDiffBranchTracingEnum(OrigArgIdx, Arg->getType(), {});
-}
-
 void FunctionSignatureSpecializationMangler::setArgumentAutoDiffBranchTracingEnum(
     unsigned OrigArgIdx, SILType specializedEnumType,
     ArrayRef<AutoDiffClosureSpecializationDescriptor> closures) {
