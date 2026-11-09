@@ -20,9 +20,9 @@
 // CHECK-NEXT: } // end sil function
 
 // CHECK-LABEL: // specialized pullback of genericSubset<A>
-// CHECK: %[[ADAPTER:[0-9]+]] = function_ref @$sS2fxIegydr_TJSpSSpSrSUP
-// CHECK: %[[ROOT:[0-9]+]] = function_ref @{{.*}}vjpMixed{{.*}} : $@convention(thin) <
-// CHECK: %[[CLOSURE:[0-9]+]] = partial_apply [callee_guaranteed] %[[ROOT]]<{{.*}}>()
+// CHECK-DAG: %[[ADAPTER:[0-9]+]] = function_ref @$sS2fxIegydr_TJSpSSpSrSUP
+// CHECK-DAG: %[[ROOT:[0-9]+]] = function_ref @{{.*}}vjpMixed{{.*}} : $@convention(thin) <
+// CHECK-DAG: %[[CLOSURE:[0-9]+]] = partial_apply [callee_guaranteed] %[[ROOT]]<{{.*}}>()
 // CHECK: apply %[[ADAPTER]]<{{.*}}>(%{{[0-9]+}}, %[[CLOSURE]])
 // CHECK-NOT: apply {{.*}} : $@callee_guaranteed
 // CHECK: } // end sil function

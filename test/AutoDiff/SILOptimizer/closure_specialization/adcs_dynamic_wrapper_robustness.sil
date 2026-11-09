@@ -1,22 +1,16 @@
-// RUN: %target-sil-opt -sil-print-types -enable-sil-verify-all -autodiff-closure-specialization %s -o - | %FileCheck %s
+// RUN: %target-sil-opt -sil-print-types -enable-sil-verify-all -autodiff-closure-specialization %s -o - | %FileCheck %s --implicit-check-not='_AD__{{.*}}_spec'
 
-// Supplemental reduced SIL robustness case. The corresponding source-derived
-// coverage is adcs_runtime_wrapper.{swift,sil}. A source closure expression
-// captures the runtime wrapper in a static closure entry point. The unusual
-// runtime-callee partial_apply below is valid SIL but is not emitted for that
-// source construct. Specialization must preserve the runtime callee while
-// eliminating the outer tape field containing the wrapped closure.
+// Reduced unsupported-SIL boundary. In adcs_runtime_wrapper.{swift,sil}, the
+// source closure captures the runtime function in a static closure entry point.
+// The runtime-callee partial_apply below is not that source shape. Reject the
+// adapter before synthesizing specialized enum declarations.
 
-// The replacement payload preserves both the existing root closure context
-// and the runtime wrapper callee. It does not allocate another inner closure.
-// CHECK: enum {{.*}}_spec
-// CHECK: tuple (%{{[0-9]+}} : $@callee_guaranteed (Float) -> Float, %{{[0-9]+}} : $@callee_guaranteed (Float, @guaranteed @callee_guaranteed (Float) -> Float) -> Float)
-// CHECK-LABEL: // specialized pullback of
-// CHECK-NOT: = partial_apply
-// CHECK: apply %{{[0-9]+}}(%{{[0-9]+}}, %{{[0-9]+}}) : $@callee_guaranteed (Float, @guaranteed @callee_guaranteed (Float) -> Float) -> Float
-// CHECK-NOT: = partial_apply
-// CHECK: apply %{{[0-9]+}}(%{{[0-9]+}}, %{{[0-9]+}}) : $@callee_guaranteed (Float, @guaranteed @callee_guaranteed (Float) -> Float) -> Float
-// CHECK-NOT: = partial_apply
+// CHECK-LABEL: sil [ossa] @$s3outyycfU6_7myfoo08L_yS2f_SftFTJrSUpSr
+// CHECK: partial_apply [callee_guaranteed] %{{[0-9]+}}(%{{[0-9]+}}) : $@callee_guaranteed (Float, @guaranteed @callee_guaranteed (Float) -> Float) -> Float
+// CHECK: } // end sil function
+// CHECK-LABEL: sil [ossa] @$s3outyycfU6_7myfoo08L_yS2f_SftFTJpSUpSr
+// CHECK: apply {{.*}} : $@callee_guaranteed (Float) -> Float
+// CHECK: apply {{.*}} : $@callee_guaranteed (Float) -> Float
 // CHECK: } // end sil function
 
 sil_stage canonical
