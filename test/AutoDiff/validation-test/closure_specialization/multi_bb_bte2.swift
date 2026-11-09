@@ -1201,7 +1201,7 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test16") {
 
   // CHECK16-ENUM3-LABEL: {{^}}enum _AD__$s3outyycfU12_7myfoo16L_4from2atSdSgSDySSSdG_SStF_bb3__Pred__src_0_wrt_0_spec_bb1_1{{_([0-9a-f]{32})}} {
   // CHECK16-ENUM3-NEXT:    case bb2((predecessor: _AD__$s3outyycfU12_7myfoo16L_4from2atSdSgSDySSSdG_SStF_bb2__Pred__src_0_wrt_0_spec{{_([0-9a-f]{32})}}))
-  // CHECK16-ENUM3-NEXT:    case bb1((predecessor: _AD__$s3outyycfU12_7myfoo16L_4from2atSdSgSDySSSdG_SStF_bb1__Pred__src_0_wrt_0_spec{{_([0-9a-f]{32})}}, (_: String)))
+  // CHECK16-ENUM3-NEXT:    case bb1((predecessor: _AD__$s3outyycfU12_7myfoo16L_4from2atSdSgSDySSSdG_SStF_bb1__Pred__src_0_wrt_0_spec{{_([0-9a-f]{32})}}, (_: @callee_guaranteed (@in_guaranteed Optional<Double>.TangentVector) -> @owned Dictionary<String, Double>)))
   // CHECK16-ENUM3-NEXT:  }
 
   // CHECK16-LABEL: {{^}}// reverse-mode derivative of myfoo16
@@ -1215,6 +1215,12 @@ AutoDiffClosureSpecializationTests.testWithLeakChecking("Test16") {
 
   // CHECK16-LABEL: {{^}}// specialized pullback of myfoo16
   // CHECK16:       sil private @{{[^ ]+}} : $@convention(thin) (Optional<Double>.TangentVector, @owned _AD__$s3outyycfU12_7myfoo16L_4from2atSdSgSDySSSdG_SStF_bb3__Pred__src_0_wrt_0_spec_bb1_1{{_([0-9a-f]{32})}}) -> @owned Dictionary<String, Double> {
+  // Generic specialization adds an ABI adapter classified as an ordinary
+  // thunk. The shared thunk predicate stops there, preserving the inner
+  // callback as capture data instead of traversing an arbitrary thunk body.
+  // CHECK16:         %[[CAPTURES:[0-9]+]] = tuple_extract %{{[0-9]+}}, 1
+  // CHECK16:         %[[CALLBACK:[0-9]+]] = tuple_extract %[[CAPTURES]], 0
+  // CHECK16:         apply %[[CALLBACK]]({{.*}}) : $@callee_guaranteed (@in_guaranteed Optional<Double>.TangentVector) -> @owned Dictionary<String, Double>
 
   func myfoo16(from newValues: [String: Double], at key: String) -> Double? {
     if newValues.keys.contains(key) {
