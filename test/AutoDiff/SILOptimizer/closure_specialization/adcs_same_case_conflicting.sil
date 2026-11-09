@@ -1,13 +1,13 @@
 // RUN: %target-sil-opt -enable-sil-verify-all -autodiff-closure-specialization %s -o - | %FileCheck %s
 //
-// Supplemental accepted-SIL coverage, derived by changing the generated
-// branch<T> VJP so both paths construct the same bb1 case. An ordinary Swift
-// source trigger for this exact constructor shape has not been established;
+// Supplemental rejection coverage, derived by changing the generated branch<T>
+// VJP so distinct payload tuples construct the same bb1 case. An ordinary Swift
+// source trigger for this constructor shape has not been established. Decline
+// before enum synthesis instead of adding support for the unexpected shape.
 // adcs_generic_bte_context.swift covers the source-level nominal identity case.
 //
-// The same bound case stores different callable plans on its two constructor
-// paths. Retain the closure field and its dynamic call instead of asserting or
-// selecting an arbitrary constructor's code/layout.
+// The closures have different callable plans; selecting either tuple for
+// rewriting the shared pullback case would change the other path's behavior.
 // CHECK-NOT: _AD__{{.*}}_spec
 // CHECK: case bb1((predecessor: {{.*}}, (Float) -> (Float, Float)))
 // CHECK-NOT: _AD__{{.*}}_spec

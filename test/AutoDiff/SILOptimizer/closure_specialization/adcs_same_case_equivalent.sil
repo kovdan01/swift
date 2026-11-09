@@ -1,16 +1,19 @@
 // RUN: %target-sil-opt -enable-sil-verify-all -autodiff-closure-specialization %s -o - | %FileCheck %s
 //
-// Supplemental accepted-SIL coverage, derived by changing the generated
-// branch<T> VJP so both paths construct the same bb1 case. An ordinary Swift
-// source trigger for this exact constructor shape has not been established;
+// Supplemental rejection coverage, derived by changing the generated branch<T>
+// VJP so distinct payload tuples construct the same bb1 case. An ordinary Swift
+// source trigger for this constructor shape has not been established. Decline
+// before enum synthesis instead of adding support for the unexpected shape.
 // adcs_generic_bte_context.swift covers the source-level nominal identity case.
 //
-// Two constructors of the same bound enum case use distinct partial_apply
-// instructions for the same callable and layout. Their capture data differs.
-// CHECK: enum _AD__{{.*}}bb3{{.*}}_spec_bb1_1_{{[0-9a-f]+}} {
-// CHECK: case bb1((predecessor: {{.*}}, (Float, Float)))
-// CHECK-LABEL: // specialized pullback of branch
-// CHECK: function_ref @$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_
+// The closures have equal callable plans but distinct capture data. This
+// remains outside the one-payload-tuple-per-bound-case invariant.
+// CHECK-NOT: _AD__{{.*}}_spec
+// CHECK: case bb1((predecessor: {{.*}}, (Float) -> (Float, Float)))
+// CHECK-NOT: _AD__{{.*}}_spec
+// CHECK: sil private {{.*}} (Float, @owned {{.*}}<Int>) -> Float {
+// CHECK: apply {{.*}} : $@callee_guaranteed (Float) -> (Float, Float)
+// CHECK-NOT: _AD__{{.*}}_spec
 
 sil_stage canonical
 
