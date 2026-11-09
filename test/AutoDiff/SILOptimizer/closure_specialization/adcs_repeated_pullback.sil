@@ -1,4 +1,5 @@
 // RUN: %target-sil-opt -enable-sil-verify-all -autodiff-closure-specialization %s -o - | %FileCheck %s
+// RUN: %target-sil-opt -enable-sil-verify-all -autodiff-closure-specialization %s -o - | %FileCheck %s --check-prefix=ROOT
 
 // Reduced mechanically from validation-test/closure_specialization/adcs_repeated_pullback.swift
 // with -O -D DEFINITIONS_ONLY -module-name adcs_repeated_pullback, immediately before
@@ -30,6 +31,18 @@ import _Differentiation
 // CHECK-NOT: = partial_apply
 // CHECK-NOT: apply {{.*}} : $@callee_guaranteed
 // CHECK: } // end sil function
+
+// The ordinary outer closure is a root, not a transparent reabstraction thunk.
+// Its inner function stays in the payload as capture data, and the specialized
+// pullback calls the outer closure's static entry point with that function.
+// ROOT: case bb1((predecessor: {{.*}}_spec{{.*}}, (_: @callee_guaranteed (Float) -> Float)))
+// ROOT-LABEL: // reverse-mode derivative of branchTwice
+// ROOT: %[[INNER_REF:[0-9]+]] = function_ref @$s22adcs_repeated_pullback10vjpLabeledySf5value_S2fc0C0tSf_SStFS2fcfU_
+// ROOT: %[[INNER:[0-9]+]] = partial_apply {{.*}} %[[INNER_REF]](
+// ROOT: tuple (%[[INNER]])
+// ROOT-LABEL: // specialized pullback of branchTwice
+// ROOT: %[[OUTER:[0-9]+]] = function_ref @$s22adcs_repeated_pullback8vjpTwiceySf5value_S2fc0C0tSf_SStFS2fcfU_
+// ROOT: apply %[[OUTER]](
 
 enum _AD__$s22adcs_repeated_pullback11branchTwiceyS2f_SSSbtF_bb0__Pred__src_0_wrt_0 {
 }
