@@ -347,7 +347,22 @@ private func validateVJPBlockBTEArgs(vjp: Function, prefixFail: String) -> Bool 
 
 private func validatePullbackPayloadBlocks(pb: Function, vjp: Function, prefixFail: String) -> Bool {
   for pbBB in pb.blocks {
-    guard let (argOfPbBB, _, _) = getBTEPayloadArgOfPbBBInfo(pbBB, vjp: vjp) else {
+    var unwrappedPayloadCount = 0
+    for arg in pbBB.arguments {
+      if let incoming = getUnwrappedPayloadIncoming(arg) {
+        unwrappedPayloadCount += 1
+        guard validateUnwrappedPayloadPhi(arg, incoming: incoming, vjp: vjp),
+              checkIfCanRunForPayloadValues(
+                results: [arg], prefixFail: prefixFail, pb: pb, pbBB: pbBB)
+        else { return false }
+      }
+    }
+    let payloadInfo = getBTEPayloadArgOfPbBBInfo(pbBB, vjp: vjp)
+    // Payload rewriting handles one payload tuple per basic block.
+    if unwrappedPayloadCount > 1 || (unwrappedPayloadCount == 1 && payloadInfo != nil) {
+      return false
+    }
+    guard let (argOfPbBB, _, _) = payloadInfo else {
       continue
     }
     let payloadValues = getPayloadValues(payload: argOfPbBB, vjp: vjp)
@@ -536,15 +551,124 @@ private enum ClosurePayloadUseShape {
   case convertFunction(beginBorrowUse: Operand, destroyValueUse: Operand)
 }
 
+// Phi simplification can hoist the projection of a singleton BTE payload tuple
+// into its predecessors. Restore that tuple in the cloned pullback so the BTE
+// specialization below can keep handling payloads as tuples.
+private struct UnwrappedPayloadIncoming {
+  let operand: Operand
+  let projection: Instruction
+  let enumData: UncheckedEnumDataInst
+}
+
+private func getUnwrappedPayloadIncoming(_ arg: Argument) -> [UnwrappedPayloadIncoming]? {
+  guard !arg.isReborrow else { return nil }
+  var incoming = [UnwrappedPayloadIncoming]()
+  var payloadType: Type? = nil
+  for pred in arg.parentBlock.predecessors {
+    guard let br = pred.terminator as? BranchInst else { return nil }
+    let operand = br.operands[arg.index]
+    guard let projection = operand.value.definingInstruction,
+          operand.value.uses.singleUse == operand
+    else { return nil }
+
+    let tuple: Value
+    if let dti = projection as? DestructureTupleInst, dti.results.count == 1 {
+      tuple = dti.tuple
+    } else if let tei = projection as? TupleExtractInst, tei.fieldIndex == 0,
+              tei.tuple.type.isTrivial(in: arg.parentFunction) {
+      tuple = tei.tuple
+    } else {
+      return nil
+    }
+    guard tuple.type.tupleElements.count == 1,
+          let uedi = tuple.definingInstruction as? UncheckedEnumDataInst,
+          uedi.uses.singleUse?.instruction == projection,
+          payloadType == nil || payloadType == uedi.type
+    else { return nil }
+    payloadType = uedi.type
+    incoming.append(UnwrappedPayloadIncoming(operand: operand, projection: projection, enumData: uedi))
+  }
+  return incoming.isEmpty ? nil : incoming
+}
+
+private func validateUnwrappedPayloadPhi(
+  _ arg: Argument, incoming: [UnwrappedPayloadIncoming], vjp: Function
+) -> Bool {
+  guard incoming.allSatisfy({ $0.enumData.enum.type.isBranchTracingEnum(in: vjp) }) else {
+    return false
+  }
+  if arg.type.isBranchTracingEnum(in: vjp) {
+    return !arg.uses.isAtLeastTwo
+  }
+  guard arg.type.isLoweredFunction else { return false }
+
+  // A closure phi must represent the same closure on every edge, since the
+  // existing payload specialization selects one VJP payload to rebuild its uses.
+  let enumToPayload = findEnumsAndPayloadsInVjp(vjp: vjp)
+  var closure: Value? = nil
+  for edge in incoming {
+    var foundPayload = false
+    for (enumInst, payload) in enumToPayload
+      where enumInst.type == edge.enumData.enum.type && enumInst.caseIndex == edge.enumData.caseIndex
+    {
+      guard payload.operands.count == 1 else { return false }
+      let value = payload.operands[0].value
+      if let closure, closure != value { return false }
+      closure = value
+      foundPayload = true
+    }
+    if !foundPayload { return false }
+  }
+  return true
+}
+
+private func restoreUnwrappedPayloadPhis(in pullback: Function, vjp: Function, _ context: FunctionPassContext) {
+  for bb in pullback.blocks {
+    for arg in Array(bb.arguments) {
+      guard let incoming = getUnwrappedPayloadIncoming(arg),
+            incoming.allSatisfy({ $0.enumData.enum.type.isBranchTracingEnum(in: vjp) })
+      else { continue }
+      let newArg = bb.insertPhiArgument(
+        atPosition: arg.index, type: incoming[0].enumData.type, ownership: arg.ownership, context)
+      let builder = Builder(atBeginOf: bb, context)
+      let replacement: Value
+      if incoming[0].projection is DestructureTupleInst {
+        replacement = builder.createDestructureTuple(tuple: newArg).results[0]
+      } else {
+        replacement = builder.createTupleExtract(tuple: newArg, elementIndex: 0)
+      }
+      arg.uses.replaceAll(with: replacement, context)
+      bb.eraseArgument(at: arg.index, context)
+      for edge in incoming {
+        edge.operand.set(to: edge.enumData, context)
+        context.erase(instruction: edge.projection)
+      }
+    }
+  }
+}
+
 private func classifyUncheckedEnumDataPayloadUse(_ uedi: UncheckedEnumDataInst) -> Operand? {
   if uedi.uses.isAtLeastTwo {
     return nil
   }
   if let singleUse = uedi.uses.singleUse {
-    guard singleUse.instruction as? BranchInst != nil else {
-      return nil
+    if singleUse.instruction is BranchInst {
+      return singleUse
     }
-    return singleUse
+    if let projection = singleUse.instruction as? DestructureTupleInst,
+       let result = projection.results.singleElement,
+       let branchUse = result.uses.singleUse,
+       let phi = Phi(using: branchUse),
+       getUnwrappedPayloadIncoming(phi.value) != nil {
+      return singleUse
+    }
+    if let projection = singleUse.instruction as? TupleExtractInst,
+       let branchUse = projection.uses.singleUse,
+       let phi = Phi(using: branchUse),
+       getUnwrappedPayloadIncoming(phi.value) != nil {
+      return singleUse
+    }
+    return nil
   }
   return nil
 }
@@ -2928,8 +3052,9 @@ private struct PullbackSpecializationAgainstBTE {
       from: autodiffSpecializationInfo.pullback,
       entryBlockArguments: Array(cloner.targetFunction.entryBlock.arguments))
 
-    let bbQueue = computeTopologicalBlockOrder(of: cloner.targetFunction)
     let vjp = autodiffSpecializationInfo.paiOfPullback.parentFunction
+    restoreUnwrappedPayloadPhis(in: cloner.targetFunction, vjp: vjp, cloner.context)
+    let bbQueue = computeTopologicalBlockOrder(of: cloner.targetFunction)
     let enumToPayload = findEnumsAndPayloadsInVjp(vjp: vjp)
 
     for bb in bbQueue {
