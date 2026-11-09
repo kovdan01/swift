@@ -465,7 +465,7 @@ private func ensureEnumPayloadsAreTupleInst(vjp: Function) -> Bool {
   return true
 }
 
-enum PayloadValues {
+private enum PayloadValues {
   case destructureTuple([Value])
   case tupleExtract([Value])
   case zeroUses
@@ -664,17 +664,15 @@ private func classifyPayloadUse(_ use: Operand) -> PayloadUseShape? {
   case let dvi as DestroyValueInst:
     return .destroyValue(dvi)
   case let uedi as UncheckedEnumDataInst:
-    return classifyUncheckedEnumDataPayloadUse(uedi) == nil && uedi.uses.singleUse != nil
-      ? nil
-      : .uncheckedEnumData(uedi)
+    guard uedi.uses.isEmpty || classifyUncheckedEnumDataPayloadUse(uedi) != nil else { return nil }
+    return .uncheckedEnumData(uedi)
   case is ConvertFunctionInst:
     // Generated taped callbacks are invoked with their stored function type.
     // Do not synthesize conversions for an unexpected payload callable.
     return nil
   case let bbi as BeginBorrowInst:
-    return classifyBeginBorrowPayloadUse(bbi) == nil && !bbi.uses.isEmpty
-      ? nil
-      : .beginBorrow(bbi)
+    guard classifyBeginBorrowPayloadUse(bbi) != nil else { return nil }
+    return .beginBorrow(bbi)
   case let sei as SwitchEnumInst:
     return .switchEnum(sei)
   default:
@@ -682,7 +680,7 @@ private func classifyPayloadUse(_ use: Operand) -> PayloadUseShape? {
   }
 }
 
-func getPayloadValues(payload: Argument, vjp: Function) -> PayloadValues {
+private func getPayloadValues(payload: Argument, vjp: Function) -> PayloadValues {
   if payload.uses.isEmpty {
     return PayloadValues.zeroUses
   }
@@ -723,24 +721,6 @@ func getPayloadValues(payload: Argument, vjp: Function) -> PayloadValues {
   return PayloadValues.tupleExtract(results)
 }
 
-private func validateUncheckedEnumDataPayloadUse(uedi: UncheckedEnumDataInst, prefixFail: String)
-  -> Bool
-{
-  classifyUncheckedEnumDataPayloadUse(uedi) != nil || uedi.uses.isEmpty
-}
-
-private func validateBeginBorrowPayloadUse(bbi: BeginBorrowInst, prefixFail: String) -> Bool {
-  if classifyBeginBorrowPayloadUse(bbi) != nil {
-    return true
-  }
-  if !bbi.uses.isExactlyTwo {
-    for (idx, bbiUse) in bbi.uses.enumerated() {
-      log("use \(idx): \(bbiUse)")
-    }
-  }
-  return false
-}
-
 // PullbackCloner emits one invocation per active source apply. Multiple uses
 // exposed by inlining custom derivatives belong to nested capture tuples, not
 // to these directly taped function fields.
@@ -754,7 +734,7 @@ private func hasSingleTapedInvocation(_ value: Value) -> Bool {
   return invocationCount == 1
 }
 
-func checkIfCanRunForPayloadValues(
+private func checkIfCanRunForPayloadValues(
   results: [Value], prefixFail: String, pb: Function, pbBB: BasicBlock
 ) -> Bool {
   for result in results {
@@ -762,7 +742,7 @@ func checkIfCanRunForPayloadValues(
       return false
     }
     for use in result.uses {
-      guard let payloadUseShape = classifyPayloadUse(use) else {
+      guard classifyPayloadUse(use) != nil else {
         log(
           prefixFail + "unexpected use of an element of the tuple being argument of pullback "
             + pb.name.string + " basic block " + pbBB.shortDescription)
@@ -771,22 +751,7 @@ func checkIfCanRunForPayloadValues(
         return false
       }
 
-      switch payloadUseShape {
-      case .apply:
-        ()
-      case .destroyValue:
-        ()
-      case .uncheckedEnumData(let uedi):
-        if !validateUncheckedEnumDataPayloadUse(uedi: uedi, prefixFail: prefixFail) {
-          return false
-        }
-      case .beginBorrow(let bbi):
-        if !validateBeginBorrowPayloadUse(bbi: bbi, prefixFail: prefixFail) {
-          return false
-        }
-      case .switchEnum:
-        ()
-      }
+
     }
   }
   return true
