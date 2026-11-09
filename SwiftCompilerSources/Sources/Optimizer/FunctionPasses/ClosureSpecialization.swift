@@ -883,7 +883,7 @@ private func numberOfIsolatedParameters(_ params: [ParameterInfo]) -> Int {
   return count
 }
 
-private extension PartialApplyInst {
+extension PartialApplyInst {
   var isPartialApplyOfThunk: Bool {
     if self.numArguments == 1,
       let fun = self.referencedFunction,
@@ -895,7 +895,9 @@ private extension PartialApplyInst {
     }
     return false
   }
+}
 
+private extension PartialApplyInst {
   var hasOnlySupportedIndirectArguments: Bool {
     self.argumentOperands
       .filter { !$0.value.type.isObject }

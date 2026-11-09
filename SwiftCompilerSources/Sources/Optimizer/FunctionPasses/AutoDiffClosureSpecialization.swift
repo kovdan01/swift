@@ -1542,17 +1542,11 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
       break
     }
 
-    guard pai.numArguments == 1,
-      pai.arguments[0].type.isLoweredFunction,
-      pai.arguments[0].type.isReferenceCounted(in: pai.parentFunction)
-        || pai.callee.type.isThickFunction
-    else {
-      break
-    }
-
-    // Source closure expressions and subset/reabstraction thunks have static
-    // entry points. Decline an unknown adapter before any enum is synthesized.
+    // Decline an unknown callee before any enum is synthesized. Only actual
+    // reabstraction/subset thunks are transparent; an ordinary closure remains
+    // a root even when its only capture is another function.
     guard pai.callee is FunctionRefInst else { return nil }
+    guard pai.isPartialApplyOfThunk else { break }
 
     currentClosure = pai
     reabstractions.append(pai)
