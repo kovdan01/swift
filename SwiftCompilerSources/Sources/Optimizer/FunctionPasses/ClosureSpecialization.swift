@@ -663,37 +663,20 @@ private struct SpecializationInfo {
 }
 
 private func isClosureApplied(_ closure: Value) -> Bool {
-  // Values can belong to different functions, so a function-local ValueSet
-  // cannot represent this interprocedural traversal. Track each argument
-  // separately: recursion may forward a closure into another parameter of the
-  // same function before that parameter is applied.
-  var visited = Set<HashableValue>()
-  var remainingWork = 4096
-  return checkRecursivelyIfClosureIsApplied(
-    closure, visited: &visited, remainingDepth: 256, remainingWork: &remainingWork)
+  var handledFuncs: Set<Function> = []
+  return checkRecursivelyIfClosureIsApplied(closure, &handledFuncs)
 }
 
-private func checkRecursivelyIfClosureIsApplied(
-  _ closure: Value, visited: inout Set<HashableValue>,
-  remainingDepth: Int, remainingWork: inout Int
-) -> Bool {
-  guard remainingDepth > 0, remainingWork > 0,
-        visited.insert(closure.hashable).inserted
-  else { return false }
-  remainingWork -= 1
-
+private func checkRecursivelyIfClosureIsApplied(_ closure: Value, _ handledFuncs: inout Set<Function>) -> Bool {
+  let recursionBudget = 8
   for use in closure.uses {
-    guard remainingWork > 0 else { return false }
-    remainingWork -= 1
     switch use.instruction {
 
     case is ConvertFunctionInst,
          is ConvertEscapeToNoEscapeInst,
          is MoveValueInst,
          is CopyValueInst:
-      if checkRecursivelyIfClosureIsApplied(
-        use.instruction as! SingleValueInstruction, visited: &visited,
-        remainingDepth: remainingDepth - 1, remainingWork: &remainingWork) {
+      if checkRecursivelyIfClosureIsApplied(use.instruction as! SingleValueInstruction, &handledFuncs) {
         return true
       }
 
@@ -702,24 +685,20 @@ private func checkRecursivelyIfClosureIsApplied(
         // `pai.isPartialApplyOfThunk` implies that the captured closure (`closure` here) is applied in the thunk.
         // If the thunk closure (`pai` here) is applied by itself as well, the closure captured by
         // the thunk closure also becomes effectively applied transitively.
-        if checkRecursivelyIfClosureIsApplied(
-          pai, visited: &visited, remainingDepth: remainingDepth - 1,
-          remainingWork: &remainingWork) {
-          return true
-        }
+        return checkRecursivelyIfClosureIsApplied(pai, &handledFuncs)
       }
 
       guard let callee = pai.referencedFunction,
             callee.isDefinition,
+            handledFuncs.insert(callee).inserted,
+            handledFuncs.count <= recursionBudget,
             let calleeArg = pai.calleeArgument(of: use, in: callee)
       else {
         continue
       }
 
       // Check if the captured closure (`closure` here) is applied in context of wrapper closure (`pai` here).
-      if checkRecursivelyIfClosureIsApplied(
-        calleeArg, visited: &visited, remainingDepth: remainingDepth - 1,
-        remainingWork: &remainingWork) {
+      if checkRecursivelyIfClosureIsApplied(calleeArg, &handledFuncs) {
         // If the wrapper closure (`pai` here) is applied by itself complementary to the captured closure applied
         // in context of wrapper closure, the captured closure also becomes effectively applied transitively.
         // For example, treat `%closure1` as applied in `@foo`:
@@ -728,11 +707,7 @@ private func checkRecursivelyIfClosureIsApplied(
         //     %closure2 = partial_apply @wrapper(%closure1)
         //     apply %closure2(%arg1, %arg2)
         //   }
-        if checkRecursivelyIfClosureIsApplied(
-          pai, visited: &visited, remainingDepth: remainingDepth - 1,
-          remainingWork: &remainingWork) {
-          return true
-        }
+        return checkRecursivelyIfClosureIsApplied(pai, &handledFuncs)
       }
 
     case let apply as FullApplySite:
@@ -743,17 +718,17 @@ private func checkRecursivelyIfClosureIsApplied(
       // Recurse into called function
       if let callee = apply.referencedFunction,
          callee.isDefinition,
+         handledFuncs.insert(callee).inserted,
+         handledFuncs.count <= recursionBudget,
          let calleeArg = apply.calleeArgument(of: use, in: callee)
       {
-        if checkRecursivelyIfClosureIsApplied(
-          calleeArg, visited: &visited, remainingDepth: remainingDepth - 1,
-          remainingWork: &remainingWork) {
+        if checkRecursivelyIfClosureIsApplied(calleeArg, &handledFuncs) {
           return true
         }
       }
 
     default:
-      continue
+      break
     }
   }
 

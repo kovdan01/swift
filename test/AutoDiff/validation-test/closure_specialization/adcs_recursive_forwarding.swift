@@ -5,9 +5,9 @@
 // RUN: %target-run %t/none.out
 // RUN: %target-run %t/opt.out
 //
-// Recursive forwarding of a closure does not imply that the closure is called.
-// The applied-use analysis must terminate for forwardUnused and still follow
-// the separate closure parameters of appliedAfterRotation.
+// BTE specialization must preserve the existing closure analysis's termination
+// for unused recursive forwarding. Parameter rotation is a positive control:
+// ordinary specialization rounds can handle all three statically known closures.
 // The SILOptimizer companion is reduced from these generated pullback bodies.
 
 import _Differentiation
