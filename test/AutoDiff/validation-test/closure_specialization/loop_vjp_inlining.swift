@@ -30,6 +30,19 @@ public func caller(_ x: Float) -> Float {
   gradient(at: x, of: loop)
 }
 
+// Keep the outer branch tape separate from the callee's runtime loop tape.
+// Inlining the loop VJP before BTE specialization would make this otherwise
+// loop-free VJP ineligible for specialization as well.
+@differentiable(reverse, wrt: x)
+public func branchingLoop(_ x: Float, _ flag: Bool) -> Float {
+  if flag { return loop(x) }
+  return x * x
+}
+
+public func branchingCaller(_ x: Float, _ flag: Bool) -> Float {
+  gradient(at: x, of: { branchingLoop($0, flag) })
+}
+
 #if !DEFINITIONS_ONLY
 import DifferentiationUnittest
 import StdlibUnittest
@@ -44,6 +57,14 @@ tests.testWithLeakChecking("RuntimeTape") {
     expectEqual(derivative, result.pullback(1))
     expectEqual(derivative, result.pullback(1))
     expectEqual(derivative, caller(2))
+    for flag in [false, true] {
+      let outer = valueWithPullback(at: Float(2), of: { branchingLoop($0, flag) })
+      let slope: Float = flag ? derivative : 4
+      expectEqual(flag ? value : 4, outer.value)
+      expectEqual(slope, outer.pullback(1))
+      expectEqual(2 * slope, outer.pullback(2))
+      expectEqual(slope, branchingCaller(2, flag))
+    }
   }
 }
 runAllTests()
