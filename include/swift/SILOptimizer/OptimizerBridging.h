@@ -258,6 +258,8 @@ struct BridgedPassContext {
       BridgedFunction pullback) const;
   BridgedOwnedString mangleAutoDiffBranchTracingEnum(
       BridgedStringRef prefix, BridgedASTType schema, BridgedFunction vjp) const;
+  OptionalBridgedDeclObj lookupAutoDiffSpecializedBranchTracingEnum(
+      BridgedStringRef name, BridgedFunction vjp) const;
 
   void inlineFunction(BridgedInstruction apply, bool mandatoryInline) const;
   void eraseFunction(BridgedFunction function) const;

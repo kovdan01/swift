@@ -249,13 +249,6 @@ final public class AssociatedTypeDecl: TypeDecl {}
 
 final public class ModuleDecl: TypeDecl, DeclContext {
   public var bridgedDeclContext: BridgedDeclContext { bridged.asModuleDecl() }
-
-  /// Looks up a uniquely named nominal type in this module, excluding imports.
-  public func lookupNominalType(name: String) -> NominalTypeDecl? {
-    name._withBridgedStringRef {
-      bridged.ModuleDecl_lookupNominalType($0).getAs(NominalTypeDecl.self)
-    }
-  }
 }
 
 public class AbstractStorageDecl: ValueDecl {

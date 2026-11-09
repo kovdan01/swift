@@ -532,6 +532,17 @@ BridgedOwnedString BridgedPassContext::mangleAutoDiffBranchTracingEnum(
       vjp.getFunction()->getGenericSignature().getCanonicalSignature()));
 }
 
+OptionalBridgedDeclObj
+BridgedPassContext::lookupAutoDiffSpecializedBranchTracingEnum(
+    BridgedStringRef name, BridgedFunction vjp) const {
+  auto *module = vjp.getFunction()->getModule().getSwiftModule();
+  SmallVector<ValueDecl *, 1> results;
+  module->lookupValue(module->getASTContext().getIdentifier(name.unbridged()),
+                      NLKind::QualifiedLookup, results);
+  assert(results.size() <= 1 && "specialized tape names must be unique");
+  return {results.empty() ? nullptr : cast<EnumDecl>(results.front())};
+}
+
 bool BridgedPassContext::enableSimplificationFor(BridgedInstruction inst) const {
   // Fast-path check.
   if (SimplifyInstructionTest.empty() && !SILPassManager::isAnyPassDisabled())
