@@ -920,11 +920,6 @@ private func eraseDeadSpecializedClosures(
   } while oldSetSize != closuresSet.count
 
   for allocStack in allocStacks {
-    // Runtime wrapper specialization deliberately retains the inner closure.
-    // Its original capture storage is still owned by that partial application.
-    if allocStack.uses.contains(where: { $0.instruction is PartialApplyInst }) {
-      continue
-    }
     assert(allocStack.uses.count == 2)
     for use in allocStack.uses {
       assert(use.instruction is DeallocStackInst || use.instruction is StoreInst)
@@ -1336,38 +1331,26 @@ private func rewriteApplyDirectClosure(
     return newAi
   }
 
-  let rootCaptureCount = closureInfo.numRootCapturesInPayload
-  var runtimeCallees = extractedElements.dropFirst(rootCaptureCount).makeIterator()
-  let wrapperCallees: [Value] = closureInfo.reabstractions.map { wrapper in
-    if let reference = wrapper.callee as? FunctionRefInst {
-      return builder.createFunctionRef(reference.referencedFunction)
-    }
-    // A runtime callee is part of the original closure context too. Its value
-    // comes from the specialized payload, never from the VJP's SSA graph.
-    return runtimeCallees.next()!
-  }
-  var rootCaptures = Array(extractedElements.prefix(rootCaptureCount))
+  var extractedElements = extractedElements
 
   let vjpFn = closureInfo.closure.asSupportedClosureFn!
   let newFri = builder.createFunctionRef(vjpFn)
   var indirectArgs = [(idx: Int, allocStack: AllocStackInst, store: StoreInst)]()
-  let rootClosure: Value
-  if !closureInfo.runtimeWrapperCallees.isEmpty {
-    rootClosure = rootCaptures[0]
-  } else if let pai = closureInfo.closure as? PartialApplyInst {
-    for idx in 0..<rootCaptures.count {
+  let rootClosure : SingleValueInstruction
+  if let pai = closureInfo.closure as? PartialApplyInst {
+    for idx in 0..<extractedElements.count {
       if pai.arguments[idx].type.isAddress && !pai.convention(of: pai.argumentOperands[idx])!.isInout {
-        let allocStack = builder.createAllocStack(rootCaptures[idx].type)
-        let store = builder.createStore(source: rootCaptures[idx], destination: allocStack, ownership: StoreInst.StoreOwnership.initialize)
+        let allocStack = builder.createAllocStack(extractedElements[idx].type)
+        let store = builder.createStore(source: extractedElements[idx], destination: allocStack, ownership: StoreInst.StoreOwnership.initialize)
         indirectArgs.append((idx: idx, allocStack: allocStack, store: store))
-        rootCaptures[idx] = allocStack
+        extractedElements[idx] = allocStack
       }
     }
 
     rootClosure = builder.createPartialApply(
       function: newFri,
       substitutionMap: pai.substitutionMap.substitute(with: ai.parentFunction.forwardingSubstitutionMap),
-      capturedArguments: rootCaptures,
+      capturedArguments: extractedElements,
       calleeConvention: pai.calleeConvention, 
       hasUnknownResultIsolation: pai.hasUnknownResultIsolation,
       isOnStack: pai.isOnStack,
@@ -1375,7 +1358,7 @@ private func rewriteApplyDirectClosure(
       executionSemantics: pai.executionSemantics)
 
     for (idx, allocStack, store) in indirectArgs.reversed() {
-      rootCaptures[idx] = store.source
+      extractedElements[idx] = store.source
       builder.createDeallocStack(allocStack)
     }
   } else {
@@ -1385,12 +1368,14 @@ private func rewriteApplyDirectClosure(
     rootClosure = builder.createThinToThickFunction(thinFunction: newFri, resultType: type)
   }
 
-  var allNewClosures: [Value] = [rootClosure]
+  var allNewClosures : [SingleValueInstruction] = [rootClosure]
 
   var currentClosure = rootClosure
-  for (index, reabstraction) in closureInfo.reabstractions.dropLast().enumerated() {
+  for reabstraction in closureInfo.reabstractions.dropLast() {
+    let reabstractionFn = reabstraction.asSupportedClosureFn!
+    let reabstractionFri = builder.createFunctionRef(reabstractionFn)
     let newReabstraction = builder.createPartialApply(
-      function: wrapperCallees[index],
+      function: reabstractionFri,
       substitutionMap: reabstraction.substitutionMap.substitute(with: ai.parentFunction.forwardingSubstitutionMap),
       capturedArguments: [currentClosure],
       calleeConvention: reabstraction.calleeConvention,
@@ -1404,8 +1389,10 @@ private func rewriteApplyDirectClosure(
 
   var newArgs = Array(ai.arguments)
   newArgs.append(currentClosure)
+  let fn = closureInfo.reabstractions.last!.asSupportedClosureFn!
+  let newFriForAi = builder.createFunctionRef(fn)
   let newAi = builder.createApply(
-    function: wrapperCallees.last!,
+    function: newFriForAi,
     closureInfo.reabstractions.last!.substitutionMap.substitute(with: ai.parentFunction.forwardingSubstitutionMap),
     arguments: newArgs)
   ai.replace(with: newAi, context)
@@ -2655,20 +2642,7 @@ private func getBTEPayloadArgOfPbBBInfo(_ bb: BasicBlock, vjp: Function)
 }
 
 extension ClosureInBTE {
-  var runtimeWrapperCallees: [Value] {
-    reabstractions.compactMap { $0.callee is FunctionRefInst ? nil : $0.callee }
-  }
-
-  var numRootCapturesInPayload: Int {
-    runtimeWrapperCallees.isEmpty ? (closure as? PartialApplyInst)?.numArguments ?? 0 : 1
-  }
-
   var capturedArgs : [Value] {
-    if !runtimeWrapperCallees.isEmpty {
-      // An unknown wrapper can retain or repeatedly invoke its argument. Keep
-      // the existing inner context rather than reallocating it for every call.
-      return [closure] + runtimeWrapperCallees
-    }
     if let pai = self.closure as? PartialApplyInst {
       var paiArgs = Array(pai.arguments)
       for idx in 0..<paiArgs.count {
@@ -2679,12 +2653,12 @@ extension ClosureInBTE {
           paiArgs[idx] = store.source
         }
       }
-      return paiArgs + runtimeWrapperCallees
+      return paiArgs
     }
     guard self.closure is ThinToThickFunctionInst else {
       fatalError("unexpected closure type")
     }
-    return runtimeWrapperCallees
+    return []
   }
 }
 
@@ -2795,7 +2769,7 @@ private extension Instruction {
 //   %bte31 = enum $_AD__$xxx, #_AD__$xxx.bbXXX!enumelt, %payload31
 //   %payload32 = tuple (..., %optionalWrapper, ...)
 //   %bte32 = enum $_AD__$xxx, #_AD__$xxx.bbXXX!enumelt, %payload32
-private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInBTE] {
+private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInBTE]? {
   log("findBTEUses: running for \(rootClosure)")
   let vjp = rootClosure.parentFunction
   var closuresInBTE = [ClosureInBTE]()
@@ -2815,6 +2789,10 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
     else {
       break
     }
+
+    // Source closure expressions and subset/reabstraction thunks have static
+    // entry points. Decline an unknown adapter before any enum is synthesized.
+    guard pai.callee is FunctionRefInst else { return nil }
 
     currentClosure = pai
     reabstractions.append(pai)
@@ -2858,7 +2836,7 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
   return closuresInBTE
 }
 
-private func findClosuresInBTE(paiOfPullback: PartialApplyInst) -> [ClosureInBTE] {
+private func findClosuresInBTE(paiOfPullback: PartialApplyInst) -> [ClosureInBTE]? {
   let vjp = paiOfPullback.parentFunction
   var reabstractions = Set<SingleValueInstruction>()
   var closuresInBTE = [ClosureInBTE]()
@@ -2870,7 +2848,7 @@ private func findClosuresInBTE(paiOfPullback: PartialApplyInst) -> [ClosureInBTE
       continue
     }
 
-    let currentClosuresInBTE = findBTEUses(for: rootClosure)
+    guard let currentClosuresInBTE = findBTEUses(for: rootClosure) else { return nil }
     closuresInBTE.append(contentsOf: currentClosuresInBTE)
     reabstractions.formUnion(currentClosuresInBTE.flatMap(\.reabstractions))
   }
@@ -2922,7 +2900,8 @@ private struct PullbackClosureAnalysis {
     }
 
     self.paiOfPullback = paiOfPullback
-    self.closuresInBTE = findClosuresInBTE(paiOfPullback: paiOfPullback)
+    guard let closuresInBTE = findClosuresInBTE(paiOfPullback: paiOfPullback) else { return nil }
+    self.closuresInBTE = closuresInBTE
   }
 }
 
