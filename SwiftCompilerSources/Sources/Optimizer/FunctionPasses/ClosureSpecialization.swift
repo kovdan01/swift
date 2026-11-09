@@ -1660,24 +1660,6 @@ private func specializeBTEBlockArgsInVJP(
   }
 }
 
-private func replacePullbackPartialApply(
-  pai: PartialApplyInst, specializedCallee: Function, context: FunctionPassContext
-) -> PartialApplyInst {
-  let builderSucc = Builder(
-    before: pai,
-    location: pai.parentBlock.instructions.last!.location, context)
-
-  let newFunctionRefInst = builderSucc.createFunctionRef(specializedCallee)
-  let newPai: PartialApplyInst = builderSucc.createPartialApply(
-    function: newFunctionRefInst, substitutionMap: pai.substitutionMap,
-    capturedArguments: Array(pai.arguments), calleeConvention: pai.calleeConvention,
-    hasUnknownResultIsolation: pai.hasUnknownResultIsolation, isOnStack: pai.isOnStack, isNested: pai.isNested,
-    executionSemantics: pai.executionSemantics)
-
-  pai.replace(with: newPai, context)
-  return newPai
-}
-
 private func buildReplacementElement(
   capturedArgs: [Value], isOptionalSome: Bool?,
   tupleType: Type, vjp: Function, builder: Builder
@@ -1797,9 +1779,8 @@ private func rewriteVJPForBTEPullbackSpecialization(
 
   specializeBTEBlockArgsInVJP(vjp: vjp, enumDict: enumDict, context: context)
 
-  let _ = replacePullbackPartialApply(
-    pai: autodiffSpecializationInfo.paiOfPullback, specializedCallee: specializedCallee,
-    context: context)
+  let pai = autodiffSpecializationInfo.paiOfPullback
+  pai.replace(withCallTo: specializedCallee, arguments: Array(pai.arguments), context)
 
   rewritePayloadTuplesInVJP(vjp: vjp, closureInfos: &closureInfos, context: context)
 
@@ -2046,9 +2027,7 @@ private func rewriteApplyUse(
       ai: ai, closureInfo: closureInfo, extractedElements: extractedElements,
       builder: builder, context)
   } else {
-    let newAi = builder.createApply(
-      function: result, ai.substitutionMap, arguments: Array(ai.arguments))
-    ai.replace(with: newAi, context)
+    ai.setOperand(at: ApplyOperandConventions.calleeIndex, to: result, context)
   }
 }
 
@@ -2057,12 +2036,11 @@ private func rewriteDestroyValueUse(
   result: Value, rewriteCtx: PayloadRewriteContext, _ context: FunctionPassContext
 ) {
   let isClosurePayload = rewriteCtx.closureInfoArray.contains { $0.indexInPayload == resultIdx }
-  if !isClosurePayload {
-    let builder = Builder(before: dvi, context)
-    assert(dvi.parentFunction.hasOwnership)
-    builder.createDestroyValue(operand: result)
+  if !isClosurePayload && !result.type.isTrivial(in: dvi.parentFunction) {
+    dvi.setOperand(at: 0, to: result, context)
+  } else {
+    context.erase(instruction: dvi)
   }
-  context.erase(instruction: dvi)
 }
 
 private func rewriteUsesOfPayloadItem(
