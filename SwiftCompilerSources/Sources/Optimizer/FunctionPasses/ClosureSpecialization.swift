@@ -1457,15 +1457,26 @@ private func getPayloadValues(payload: Argument, vjp: Function) -> PayloadValues
 // Capture extraction and cleanup are emitted at the callback application.
 // Require one direct application; unused or repeatedly applied fields would
 // need independent cleanup or per-call copies, which this rewrite does not emit.
+// Any destroys of an owned field must follow the application in the same block.
+// Decline discard-only paths instead of dropping their capture cleanup.
 private func hasSingleTapedInvocation(_ value: Value) -> Bool {
-  var invocationCount = 0
+  var invocation: ApplyInst? = nil
   for use in value.uses {
     if use.instruction is DestroyValueInst { continue }
-    guard let apply = use.instruction as? ApplyInst,
+    guard invocation == nil,
+          let apply = use.instruction as? ApplyInst,
           use == apply.operands[ApplyOperandConventions.calleeIndex] else { return false }
-    invocationCount += 1
+    invocation = apply
   }
-  return invocationCount == 1
+  guard let invocation else { return false }
+  if value.ownership == .owned {
+    for use in value.uses {
+      guard let destroy = use.instruction as? DestroyValueInst else { continue }
+      guard destroy.parentBlock == invocation.parentBlock,
+            invocation.strictlyDominatesInBlock(destroy) else { return false }
+    }
+  }
+  return true
 }
 
 private func checkIfCanRunForPayloadValues(
