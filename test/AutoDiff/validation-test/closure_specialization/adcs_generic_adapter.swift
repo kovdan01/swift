@@ -1,11 +1,17 @@
 // REQUIRES: executable_test
 // RUN: %target-run-simple-swift
 
-// Differentiating only x requires a generic subset-parameters adapter around
-// the full (Float, T) pullback. ADCS must remap the root closure substitutions
-// and the adapter substitutions into the cloned generic pullback environment.
+// The generic seed requires reabstraction when the derivative fixes it to
+// Float. Differentiating only x adds an outer subset-parameters thunk.
 
 import _Differentiation
+
+@inline(__always)
+func makePullback<Seed: BinaryFloatingPoint, T: AdditiveArithmetic>(
+  _: T.Type, _: Seed.Type
+) -> (Seed) -> (Float, T) {
+  { seed in (2 * Float(seed), T.zero) }
+}
 
 @differentiable(reverse, wrt: (x, y))
 @inline(never)
@@ -16,13 +22,21 @@ where T.TangentVector == T { 2 * x }
 @inline(__always)
 public func vjpMixed<T: Differentiable & AdditiveArithmetic>(_ x: Float, _ y: T)
   -> (value: Float, pullback: (Float) -> (Float, T)) where T.TangentVector == T {
-  (2 * x, { seed in (2 * seed, T.zero) })
+  (2 * x, makePullback(T.self, Float.self))
 }
 
 @differentiable(reverse, wrt: x)
 public func genericSubset<T: Differentiable & AdditiveArithmetic>(_ x: Float, _ y: T, _ flag: Bool) -> Float
 where T.TangentVector == T {
   if flag { return mixed(x, y) }
+  return x * x
+}
+
+// Addition's pullback has no captures. Differentiating only x still requires
+// the subset-parameters thunk.
+@differentiable(reverse, wrt: x)
+public func thinSubset(_ x: Float, _ y: Float, _ flag: Bool) -> Float {
+  if flag { return x + y }
   return x * x
 }
 
@@ -59,6 +73,10 @@ Tests.test("SubsetPullback") {
     expectEqual(flag ? 6 : 9, double.value)
     expectEqual(flag ? 2 : 6, double.pullback(1))
     expectEqual(flag ? 4 : 12, double.pullback(2))
+
+    let thin = valueWithPullback(at: Float(3), of: { thinSubset($0, 4, flag) })
+    expectEqual(flag ? 7 : 9, thin.value)
+    expectEqual(flag ? 2 : 12, thin.pullback(2))
   }
 }
 runAllTests()
