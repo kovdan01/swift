@@ -2,6 +2,7 @@
 // RUN: %FileCheck %s --check-prefix=INPUT < %t.passes
 // RUN: %FileCheck %s --check-prefix=EARLY < %t.passes
 // RUN: %FileCheck %s --check-prefix=LATE < %t.passes
+// RUN: %FileCheck %s --check-prefix=MIXED < %t.passes
 // RUN: %FileCheck %s --check-prefix=FINAL < %t.sil
 
 // Compile the exact validation source. Textual SIL cannot faithfully round-trip
@@ -79,6 +80,20 @@
 // LATE: tuple_extract %[[CAPTURES]], 0
 // LATE-NOT: apply {{.*}} : $@callee_guaranteed
 // LATE: } // end sil function
+
+// The same specialized pullback directly invokes the known multiplication
+// and retargets the opaque case's apply and destroy to its new tuple result.
+// MIXED-LABEL: *** New SIL function in {{.*}}stage HighLevel,Module+StackPromote, pass: AutodiffClosureSpecialization {{.*}}, Function: $s12payload_flow14mixedCallbacks{{.*}}TJp
+// MIXED-NEXT: // specialized pullback of mixedCallbacks(_:_:_:)
+// MIXED: // specialized pullback of mixedCallbacks(_:_:_:)
+// MIXED: bb{{[0-9]+}}(%{{[0-9]+}} : $(predecessor: {{.*}}, (Float, Float))):
+// MIXED: %[[MULTIPLY:[0-9]+]] = function_ref @{{.*}}_vjpMultiply
+// MIXED-NEXT: {{.*}} = apply %[[MULTIPLY]]({{.*}}) : $@convention(thin)
+// MIXED: bb{{[0-9]+}}(%[[OPAQUE_PAYLOAD:[0-9]+]] : @owned $(predecessor: {{.*}}, @callee_guaranteed (Float) -> Float)):
+// MIXED-NEXT: (%{{[0-9]+}}, %[[OPAQUE:[0-9]+]]) = destructure_tuple %[[OPAQUE_PAYLOAD]]
+// MIXED-NEXT: {{.*}} = apply %[[OPAQUE]]({{.*}}) : $@callee_guaranteed (Float) -> Float
+// MIXED-NEXT: destroy_value %[[OPAQUE]]
+// MIXED: } // end sil function
 
 // The final source-generated VJPs return specialized pullbacks. Their bodies
 // have no materialized closures or opaque callback applications.

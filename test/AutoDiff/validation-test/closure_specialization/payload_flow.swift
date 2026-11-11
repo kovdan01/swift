@@ -70,6 +70,18 @@ public func lateBranch(_ x: Float, _ flag: Bool) -> Float {
   return x
 }
 
+// Specialize the known multiplication pullback while keeping the callback
+// obtained from the caller's differentiable function in the other tape case.
+@inline(never)
+@differentiable(reverse, wrt: x)
+public func mixedCallbacks(
+  _ x: Float, _ useTransform: Bool,
+  _ transform: @differentiable(reverse) (Float) -> Float
+) -> Float {
+  if useTransform { return transform(x) }
+  return x * x
+}
+
 // Keep the derivative entry points alive in the source-only optimizer test.
 public func branchingGradient(_ x: Float, _ flag: Bool) -> Float {
   gradient(at: x, of: { branching($0, flag) })
@@ -114,6 +126,17 @@ tests.testWithLeakChecking("ProjectedAndWholePayloads") {
   expectEqual((0, -1), nestedGradient(-3, -2))
   expectEqual(2, genericGradient(3, Int.self))
   expectEqual(6, genericGradient(3, Float.self))
+}
+tests.testWithLeakChecking("MixedCallbacks") {
+  let transform: @differentiable(reverse) (Float) -> Float = { 3 * $0 }
+  for useTransform in [false, true] {
+    let result = valueWithPullback(at: Float(4), of: {
+      mixedCallbacks($0, useTransform, transform)
+    })
+    expectEqual(useTransform ? 12 : 16, result.value)
+    expectEqual(useTransform ? 3 : 8, result.pullback(1))
+    expectEqual(useTransform ? 6 : 16, result.pullback(2))
+  }
 }
 runAllTests()
 #endif
