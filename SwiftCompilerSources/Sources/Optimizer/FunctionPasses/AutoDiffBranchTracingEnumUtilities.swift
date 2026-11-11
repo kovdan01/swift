@@ -119,7 +119,7 @@ private func iterateOverBranchTracingEnumPreds(
 //   enum _AD__$xxx_bbD__Pred__xxx {
 //     case bbE((/* closure types */))
 //   }
-private func getBranchTracingEnumSpecializationQueue(topBTEType: Type, in vjp: Function) -> [Type]? {
+func getBranchTracingEnumSpecializationQueue(topBTEType: Type, in vjp: Function) -> [Type]? {
   var bteToPredsDict = [Type: Set<Type>]()
   guard iterateOverBranchTracingEnumPreds(
     bteToPredsDict: &bteToPredsDict,
@@ -367,13 +367,9 @@ private func autodiffSpecializeBranchTracingEnum(
 
 // Specialize all branch tracing enums which store control-flow graph info in topVJP.
 func autodiffSpecializeBranchTracingEnums(
-  topVJP: Function, topBTE: Type, closuresInBTE: [ClosureInBTE],
+  topVJP: Function, bteSpecializationQueue: [Type], closuresInBTE: [ClosureInBTE],
   context: FunctionPassContext
 ) -> [Type: Type]? {
-  guard let bteSpecializationQueue = getBranchTracingEnumSpecializationQueue(
-    topBTEType: remapBranchTracingEnumType(topBTE, into: topVJP), in: topVJP)
-  else { return nil }
-
   var closuresInBTEByBTE = [Type: [ClosureInBTE]]()
   for closureInBTE in closuresInBTE {
     let enumType = closureInBTE.enumCase.enumType(in: topVJP)
