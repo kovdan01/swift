@@ -70,6 +70,20 @@ public func lateBranch(_ x: Float, _ flag: Bool) -> Float {
   return x
 }
 
+// The identity/constant branch keeps a live trivial predecessor payload.
+// Its whole tuple uses tuple_extract before ADCS, including the late visit.
+@inline(never)
+@differentiable(reverse, wrt: x)
+public func lateIdentity(_ x: Float, _ first: Bool, _ second: Bool) -> Float {
+  let result: Float
+  if first {
+    if second { result = x } else { result = 3 }
+  } else {
+    result = delayedSquare(x)
+  }
+  return result
+}
+
 // Specialize the known multiplication pullback while keeping the callback
 // obtained from the caller's differentiable function in the other tape case.
 @inline(never)
@@ -95,6 +109,10 @@ public func genericGradient<T>(_ x: Float, _ metatype: T.Type) -> Float {
 
 public func lateGradient(_ x: Float, _ flag: Bool) -> Float {
   gradient(at: x, of: { lateBranch($0, flag) })
+}
+
+public func lateIdentityGradient(_ x: Float, _ first: Bool, _ second: Bool) -> Float {
+  gradient(at: x, of: { lateIdentity($0, first, second) })
 }
 
 #if !DEFINITIONS_ONLY
@@ -136,6 +154,20 @@ tests.testWithLeakChecking("MixedCallbacks") {
     expectEqual(useTransform ? 12 : 16, result.value)
     expectEqual(useTransform ? 3 : 8, result.pullback(1))
     expectEqual(useTransform ? 6 : 16, result.pullback(2))
+  }
+}
+tests.testWithLeakChecking("LateWholeTupleExtract") {
+  for first in [false, true] {
+    for second in [false, true] {
+      let result = valueWithPullback(at: Float(4), of: {
+        lateIdentity($0, first, second)
+      })
+      let slope: Float = first ? (second ? 1 : 0) : 8
+      expectEqual(first ? (second ? 4 : 3) : 16, result.value)
+      expectEqual(slope, result.pullback(1))
+      expectEqual(2 * slope, result.pullback(2))
+      expectEqual(slope, lateIdentityGradient(4, first, second))
+    }
   }
 }
 runAllTests()

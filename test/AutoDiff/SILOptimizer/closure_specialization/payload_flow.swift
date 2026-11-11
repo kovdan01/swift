@@ -1,8 +1,9 @@
-// RUN: %target-swift-frontend -O -sil-verify-all -emit-sil -D DEFINITIONS_ONLY -module-name payload_flow %S/../../validation-test/closure_specialization/payload_flow.swift -Xllvm -sil-print-around=autodiff-closure-specialization -o %t.sil 2> %t.passes
+// RUN: %target-swift-frontend -O -sil-verify-all -emit-sil -D DEFINITIONS_ONLY -module-name payload_flow %S/../../validation-test/closure_specialization/payload_flow.swift -Xllvm -sil-disable-skipping-passes -Xllvm -sil-print-around=autodiff-closure-specialization -o %t.sil 2> %t.passes
 // RUN: %FileCheck %s --check-prefix=INPUT < %t.passes
 // RUN: %FileCheck %s --check-prefix=EARLY < %t.passes
 // RUN: %FileCheck %s --check-prefix=LATE < %t.passes
 // RUN: %FileCheck %s --check-prefix=MIXED < %t.passes
+// RUN: %FileCheck %s --check-prefix=WHOLE < %t.passes
 // RUN: %FileCheck %s --check-prefix=FINAL < %t.sil
 
 // Compile the exact validation source. Textual SIL cannot faithfully round-trip
@@ -109,6 +110,40 @@
 // MIXED-NEXT: {{.*}} = apply %[[OPAQUE]]({{.*}}) : $@callee_guaranteed (Float) -> Float
 // MIXED-NEXT: destroy_value %[[OPAQUE]]
 // MIXED: } // end sil function
+
+// The original whole predecessor payload is trivial and already uses TEI at
+// the first invocation. The callback-containing whole payload still uses DTI.
+// Disable pass skipping above so the unchanged original PB is also printed
+// at the second invocation, after its VJP's late derivative has been exposed.
+// WHOLE-LABEL: // reverse-mode derivative of lateIdentity(_:_:_:)
+// WHOLE: // function_ref delayedSquareVJP(_:)
+// WHOLE-NOT: function_ref specialized pullback of lateIdentity
+// WHOLE: // function_ref pullback of lateIdentity
+// WHOLE-LABEL: // pullback of lateIdentity(_:_:_:)
+// WHOLE: bb{{[0-9]+}}(%[[OWNED:[0-9]+]] : @owned $(predecessor: {{.*}}, @callee_guaranteed (Float) -> Float)):
+// WHOLE-NEXT: (%{{[0-9]+}}, %{{[0-9]+}}) = destructure_tuple %[[OWNED]]
+// WHOLE: bb{{[0-9]+}}(%[[WHOLE:[0-9]+]] : $(predecessor: {{.*}})):
+// WHOLE-NEXT: %[[PRED:[0-9]+]] = tuple_extract %[[WHOLE]], 0
+// WHOLE: switch_enum %[[PRED]]
+
+// The second invocation creates a specialized PB and rebuilds its whole-tuple
+// extraction against the new predecessor type.
+// WHOLE: *** New SIL function in {{.*}}stage MidLevel,Function, pass: AutodiffClosureSpecialization {{.*}}, Function: $s12payload_flow12lateIdentity
+// WHOLE-NEXT: // specialized pullback of lateIdentity(_:_:_:)
+// WHOLE: // specialized pullback of lateIdentity(_:_:_:)
+// WHOLE: bb{{[0-9]+}}(%[[NEW_WHOLE:[0-9]+]] : $(predecessor: {{.*}}_spec{{[^)]+}})):
+// WHOLE-NEXT: %[[NEW_PRED:[0-9]+]] = tuple_extract %[[NEW_WHOLE]], 0
+// WHOLE: switch_enum %[[NEW_PRED]]
+// WHOLE: } // end sil function
+// WHOLE: // specialized pullback of lateIdentity(_:_:_:)
+// WHOLE: } // end sil function
+// WHOLE: *** SIL function before {{.*}}stage MidLevel,Function, pass {{[0-9]+}}: AutodiffClosureSpecialization
+// WHOLE-NEXT: // pullback of lateIdentity(_:_:_:)
+// WHOLE: bb{{[0-9]+}}(%[[STILL_OWNED:[0-9]+]] : @owned $(predecessor: {{.*}}, @callee_guaranteed (Float) -> Float)):
+// WHOLE-NEXT: (%{{[0-9]+}}, %{{[0-9]+}}) = destructure_tuple %[[STILL_OWNED]]
+// WHOLE: bb{{[0-9]+}}(%[[STILL_WHOLE:[0-9]+]] : $(predecessor: {{.*}})):
+// WHOLE-NEXT: %[[STILL_PRED:[0-9]+]] = tuple_extract %[[STILL_WHOLE]], 0
+// WHOLE: switch_enum %[[STILL_PRED]]
 
 // The final source-generated VJPs return specialized pullbacks. Their bodies
 // have no materialized closures or opaque callback applications.
