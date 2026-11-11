@@ -29,6 +29,24 @@ public func recoveringSquare(_ x: Float, _ flag: Bool) -> Float {
   return 2
 }
 
+// Selecting the constant second result leaves a pullback that only destroys
+// its tape. ADCS can still replace its saved optional callback with captures.
+@differentiable(reverse, wrt: (x, y))
+@inline(never)
+public func tupleRecovery(_ x: Float, _ y: Float, _ flag: Bool) -> (Float, Float) {
+  if flag {
+    do { return (try positiveSquare(y), 1) }
+    catch { return (x, 1) }
+  }
+  return (y * y, 6)
+}
+
+@differentiable(reverse, wrt: (x, y))
+@inline(never)
+public func recoverySecond(_ x: Float, _ y: Float, _ flag: Bool) -> Float {
+  tupleRecovery(x, y, flag).1
+}
+
 #if !DEFINITIONS_ONLY
 import DifferentiationUnittest
 import StdlibUnittest
@@ -42,6 +60,20 @@ tests.testWithLeakChecking("NormalAndError") {
   let error = valueWithPullback(at: Float(-3), of: { recoveringSquare($0, true) })
   expectEqual(-3, error.value)
   expectEqual(2, error.pullback(2))
+}
+tests.testWithLeakChecking("OptionalCaptureWithUnusedTape") {
+  for (y, flag, first, second): (Float, Bool, Float, Float) in [
+    (2, true, 4, 1), (-2, true, 3, 1), (2, false, 4, 6)
+  ] {
+    let pair = tupleRecovery(3, y, flag)
+    expectEqual((first, second), pair)
+    let result = valueWithPullback(at: Float(3), y, of: {
+      recoverySecond($0, $1, flag)
+    })
+    expectEqual(second, result.value)
+    expectEqual((0, 0), result.pullback(1))
+    expectEqual((0, 0), result.pullback(2))
+  }
 }
 runAllTests()
 #endif
