@@ -50,6 +50,18 @@ public func branchingCaller(_ x: Float, _ flag: Bool) -> Float {
   gradient(at: x, of: { throughBranchingLoop($0, flag) })
 }
 
+@differentiable(reverse)
+public func scaleLoop(_ x: Float) -> Float { 2 * loop(x) }
+
+@differentiable(reverse, wrt: x)
+public func loopOverBranch(_ x: Float, _ flag: Bool) -> Float {
+  var result = x
+  for _ in 0..<iterationCount {
+    result = branchingLoop(result, flag)
+  }
+  return result
+}
+
 #if !DEFINITIONS_ONLY
 import DifferentiationUnittest
 import StdlibUnittest
@@ -63,6 +75,15 @@ tests.testWithLeakChecking("RuntimeTape") {
     expectEqual(value, result.value)
     expectEqual(derivative, result.pullback(1))
     expectEqual(derivative, caller(2))
+
+    let scaled = valueWithPullback(at: Float(2), of: scaleLoop)
+    expectEqual(2 * value, scaled.value)
+    expectEqual(2 * derivative, scaled.pullback(1))
+
+    let wrapped = valueWithPullback(at: Float(2), of: { loopOverBranch($0, false) })
+    expectEqual(value, wrapped.value)
+    expectEqual(derivative, wrapped.pullback(1))
+
     for flag in [false, true] {
       let outer = valueWithPullback(at: Float(2), of: { branchingLoop($0, flag) })
       let slope: Float = flag ? derivative : 4

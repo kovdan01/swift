@@ -4,7 +4,7 @@
 // the loop callee profitable, so the AutoDiff policy must preserve the outer
 // branch tape until BTE specialization has finished. The loop itself remains
 // supported by the existing runtime tape, independently of BTE specialization.
-// RUN: %target-swift-frontend -O -sil-verify-all -emit-sil -D DEFINITIONS_ONLY -module-name loop_vjp_inlining -Xllvm -sil-inline-removed-call-benefit=100 -Xllvm -sil-print-around=autodiff-closure-specialization -Xllvm '-sil-print-function=$s17loop_vjp_inlining13branchingLoopyS2f_SbtFTJrSUpSr,$s17loop_vjp_inlining20throughBranchingLoopyS2f_SbtFTJrSUpSr' %S/../validation-test/closure_specialization/loop_vjp_inlining.swift -o %t.sil 2> %t.log
+// RUN: %target-swift-frontend -O -sil-verify-all -emit-sil -D DEFINITIONS_ONLY -module-name loop_vjp_inlining -Xllvm -sil-inline-removed-call-benefit=100 -Xllvm -sil-print-around=autodiff-closure-specialization -Xllvm '-sil-print-function=$s17loop_vjp_inlining13branchingLoopyS2f_SbtFTJrSUpSr,$s17loop_vjp_inlining20throughBranchingLoopyS2f_SbtFTJrSUpSr,$s17loop_vjp_inlining9scaleLoopyS2fFTJrSpSr,$s17loop_vjp_inlining0A10OverBranchyS2f_SbtFTJrSUpSr' %S/../validation-test/closure_specialization/loop_vjp_inlining.swift -o %t.sil 2> %t.log
 // RUN: %FileCheck %s --check-prefix=PHASE < %t.log
 // RUN: %FileCheck %s --check-prefix=FINAL < %t.sil
 
@@ -35,6 +35,34 @@
 // PHASE: // function_ref reverse-mode derivative of branchingLoop(_:_:)
 // PHASE-NEXT: %[[BRANCH_VJP:[0-9]+]] = function_ref
 // PHASE-NEXT: %{{[0-9]+}} = apply %[[BRANCH_VJP]]
+// PHASE: } // end sil function
+
+// A caller without its own tape can inline the runtime-only loop VJP when
+// it captures the callee's pullback directly in its own returned pullback.
+// Ordinary closure specialization still runs on the resulting loop VJP.
+// PHASE: *** SIL function before {{.*}}stage HighLevel,Module+StackPromote, pass {{[0-9]+}}: AutodiffClosureSpecialization
+// PHASE-NEXT: // reverse-mode derivative of scaleLoop(_:)
+// PHASE-NOT: function_ref reverse-mode derivative of loop
+// PHASE: builtin "autoDiffProjectTopLevelSubcontext"
+// PHASE-NOT: function_ref reverse-mode derivative of loop
+// PHASE: } // end sil function
+// PHASE: *** SIL function after {{.*}}stage HighLevel,Module+StackPromote, pass {{[0-9]+}}: AutodiffClosureSpecialization
+// PHASE-NEXT: // reverse-mode derivative of scaleLoop(_:)
+// PHASE-NOT: } // end sil function
+// PHASE: // function_ref specialized pullback of scaleLoop(_:)
+// PHASE-NEXT: {{.*}} : $@convention(thin) (Float, @owned Builtin.NativeObject, Float, Float) -> Float
+// PHASE: } // end sil function
+
+// A caller with a runtime loop tape must keep the branching callee separate
+// so the callee still gets its own branch-tape specialization.
+// PHASE: *** SIL function before {{.*}}stage HighLevel,Module+StackPromote, pass {{[0-9]+}}: AutodiffClosureSpecialization
+// PHASE-NEXT: // reverse-mode derivative of loopOverBranch(_:_:)
+// PHASE-NOT: } // end sil function
+// PHASE: // function_ref reverse-mode derivative of branchingLoop(_:_:)
+// PHASE-NEXT: %[[INNER_VJP:[0-9]+]] = function_ref
+// PHASE: {{.*}} = apply %[[INNER_VJP]]
+// PHASE-NOT: } // end sil function
+// PHASE: builtin "autoDiffProjectTopLevelSubcontext"
 // PHASE: } // end sil function
 
 // The final pullback keeps the branch specialization; it does not construct
