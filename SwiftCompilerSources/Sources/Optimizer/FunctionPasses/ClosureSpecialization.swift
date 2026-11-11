@@ -1545,9 +1545,6 @@ private func eraseDeadSpecializedClosures(
         guard op.value.type.isAddress else {
           continue
         }
-        guard !pai.convention(of: op)!.isInout else {
-          continue
-        }
         // These invariants hold due to prior checks in Instruction.asSupportedClosure
         let allocStack = op.value as! AllocStackInst
         assert(allocStack.uses.count == 3)
@@ -1895,16 +1892,15 @@ private func rewriteApplyDirectClosure(
 ) {
   if closureInfo.reabstractions.isEmpty {
     var capturedArguments = extractedElements
-    var indirectCaptures = [(allocation: AllocStackInst, convention: ArgumentConvention, isTrivial: Bool)]()
+    var indirectCaptures = [(allocation: AllocStackInst, isTrivial: Bool)]()
     if let partialApply = closureInfo.closure as? PartialApplyInst {
       for (index, operand) in partialApply.argumentOperands.enumerated() {
-        let convention = partialApply.convention(of: operand)!
-        if operand.value.type.isAddress && !convention.isInout {
+        if operand.value.type.isAddress {
           let capture = capturedArguments[index]
           let allocation = builder.createAllocStack(capture.type)
           builder.createStore(source: capture, destination: allocation, ownership: .initialize)
           capturedArguments[index] = allocation
-          indirectCaptures.append((allocation, convention, capture.type.isTrivial(in: ai.parentFunction)))
+          indirectCaptures.append((allocation, capture.type.isTrivial(in: ai.parentFunction)))
         }
       }
     }
@@ -1919,10 +1915,9 @@ private func rewriteApplyDirectClosure(
       function: newFri, substitutions.substitute(with: ai.parentFunction.forwardingSubstitutionMap),
       arguments: newArgs)
     // An indirect capture is part of the closure context, but a direct call
-    // needs address storage lasting through the call itself. Only consuming
-    // conventions transfer destruction of the stored capture to the callee.
+    // needs address storage lasting through the guaranteed-indirect call.
     for capture in indirectCaptures.reversed() {
-      if !capture.convention.isConsumed && !capture.isTrivial {
+      if !capture.isTrivial {
         builder.createDestroyAddr(address: capture.allocation)
       }
       builder.createDeallocStack(capture.allocation)
@@ -1945,7 +1940,7 @@ private func rewriteApplyDirectClosure(
   let rootClosure : SingleValueInstruction
   if let pai = closureInfo.closure as? PartialApplyInst {
     for idx in 0..<extractedElements.count {
-      if pai.arguments[idx].type.isAddress && !pai.convention(of: pai.argumentOperands[idx])!.isInout {
+      if pai.arguments[idx].type.isAddress {
         let allocStack = builder.createAllocStack(extractedElements[idx].type)
         let store = builder.createStore(source: extractedElements[idx], destination: allocStack, ownership: StoreInst.StoreOwnership.initialize)
         indirectArgs.append((idx: idx, allocStack: allocStack, store: store))
@@ -2294,8 +2289,7 @@ extension ClosureInBTE {
     if let pai = self.closure as? PartialApplyInst {
       var paiArgs = Array(pai.arguments)
       for idx in 0..<paiArgs.count {
-        // TODO: preliminary check; also check that store is init
-        if paiArgs[idx].type.isAddress && !pai.convention(of: pai.argumentOperands[idx])!.isInout {
+        if paiArgs[idx].type.isAddress {
           assert(paiArgs[idx].uses.count == 3)
           let store = paiArgs[idx].uses.filter { $0.instruction is StoreInst }.map{ $0.instruction as! StoreInst }.singleElement!
           paiArgs[idx] = store.source
@@ -2315,19 +2309,16 @@ private extension Instruction {
     switch self {
     case let tttf as ThinToThickFunctionInst where tttf.callee is FunctionRefInst:
       return tttf
-    // TODO: figure out what to do with non-inout indirect arguments
-    // https://forums.swift.org/t/non-inout-indirect-types-not-supported-in-closure-specialization-optimization/70826
     case let pai as PartialApplyInst
     where pai.callee is FunctionRefInst:
-      // BTE specialization loads and removes non-inout captures, so it requires
+      // BTE specialization loads and removes indirect captures, so it requires
       // a dedicated stack allocation even for conventions supported by the general pass.
       for op in pai.argumentOperands {
         guard op.value.type.isAddress else {
           continue
         }
-        guard !pai.convention(of: op)!.isInout else {
-          continue
-        }
+        // Reconstruct address captures for guaranteed-indirect calls.
+        guard pai.convention(of: op) == .indirectInGuaranteed else { return nil }
         guard let allocStack = op.value as? AllocStackInst else {
           return nil
         }
