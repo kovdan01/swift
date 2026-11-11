@@ -7,8 +7,10 @@
 // ADCS the Int and String instantiations must have distinct nominal tapes.
 // BOUND-LABEL: sil shared {{.*}}@$s8Identity6branchyS2f_xmtlFlTJrSUpSrSi_Tt0g5
 // BOUND: enum ${{_AD__[^, ]+}}<Int>,
+// BOUND: function_ref @[[ORIGINAL_PB:[^ ]+]] : $@convention(thin) (Float, @owned {{_AD__[^ )]+}}<Int>) -> Float
 // BOUND-LABEL: sil shared {{.*}}@$s8Identity6branchyS2f_xmtlFlTJrSUpSrSi_Tt0g5
 // BOUND: enum $[[INT_TAPE:_AD__[^, ]+_spec[^, ]+]],
+// BOUND: function_ref @[[DROPPED_PB:[^ ]+]] : $@convention(thin) (Float, @owned [[INT_TOP_TAPE:_AD__[^ )]+_spec[^ )]+]]) -> Float
 // BOUND: } // end sil function
 // BOUND-LABEL: sil shared {{.*}}@$s8Identity6branchyS2f_xmtlFlTJrSUpSrSS_Tt0g5
 // BOUND: enum ${{_AD__[^, ]+}}<String>,
@@ -18,9 +20,13 @@
 // BOUND-NOT: [[INT_TAPE]]
 // BOUND: } // end sil function
 
-// The metadata-preserving Int VJP shares its layout with the metadata-dropping
-// variant above. Giving each VJP its own nominal duplicates emitted metadata.
+// Both Int VJPs use the same original pullback and specialize to a shared tape
+// declaration. Their specialized pullbacks have separate VJP-scoped identities.
 // BOUND-LABEL: sil shared {{.*}}@$s8Identity6branchyS2f_xmtlFlTJrSUpSrSi_Tg5
 // BOUND: enum ${{_AD__[^, ]+}}<Int>,
+// BOUND: function_ref @[[ORIGINAL_PB]] : $@convention(thin)
 // BOUND-LABEL: sil shared {{.*}}@$s8Identity6branchyS2f_xmtlFlTJrSUpSrSi_Tg5
 // BOUND: enum $[[INT_TAPE]],
+// BOUND-NOT: function_ref @[[DROPPED_PB]]
+// BOUND: : $@convention(thin) (Float, @owned [[INT_TOP_TAPE]]) -> Float
+// BOUND: } // end sil function
