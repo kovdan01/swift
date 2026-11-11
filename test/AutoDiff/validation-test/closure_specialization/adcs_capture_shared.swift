@@ -28,6 +28,14 @@ public func stringShared(_ x: Float, _ name: String, _ flag: Bool) -> Float {
   return y + z
 }
 
+// Differentiate with respect to both inputs so the saved closure has no
+// subset thunk. The direct pullback call still needs its indirect String.
+@differentiable(reverse, wrt: (x, y))
+public func stringDirect(_ x: Float, _ y: Float, _ name: String, _ flag: Bool) -> Float {
+  if flag { return labeled(x, y, name) }
+  return x * y
+}
+
 // CHECK-LABEL: // reverse-mode derivative of stringShared
 // CHECK-NOT: } // end sil function
 // CHECK: // function_ref specialized pullback of stringShared
@@ -57,5 +65,21 @@ tests.testWithLeakChecking("SharedIndirectString") {
   })
   expectEqual(18, sum.value)
   expectEqual(40, sum.pullback(5))
+}
+
+tests.testWithLeakChecking("DirectIndirectString") {
+  let name = String(repeating: "captured label", count: 7)
+  let linear = valueWithPullback(at: Float(3), Float(4), of: {
+    stringDirect($0, $1, name, true)
+  })
+  expectEqual(18, linear.value)
+  expectEqual((10, 15), linear.pullback(5))
+  expectEqual((4, 6), linear.pullback(2))
+
+  let product = valueWithPullback(at: Float(3), Float(4), of: {
+    stringDirect($0, $1, name, false)
+  })
+  expectEqual(12, product.value)
+  expectEqual((20, 15), product.pullback(5))
 }
 runAllTests()
