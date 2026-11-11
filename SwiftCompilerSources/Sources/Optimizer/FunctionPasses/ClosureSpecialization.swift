@@ -2186,7 +2186,7 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
 // exact same names for branch tracing enum cases used for payload tuples in both cases (bbK in the example above).
 private func findOptionalNoneMatchingOptionalSome(
   in vjp: Function, closuresInBTE: [ClosureInBTE], bteTypes: Set<Type>
-) -> [ClosureInBTE] {
+) -> [ClosureInBTE]? {
   let branchTracingEnumInstructions: [EnumInst] = vjp.instructions.filter { $0 is EnumInst }.map {
     $0 as! EnumInst
   }.filter {
@@ -2209,22 +2209,33 @@ private func findOptionalNoneMatchingOptionalSome(
     let bteWithNoneArr = branchTracingEnumInstructions.filter {
       $0.caseName == enumCase.name && $0.type != enumCase.enumType(in: vjp)
     }
-    guard let bteWithNone = bteWithNoneArr.singleElement else {
-      assert(bteWithNoneArr.isEmpty)
-      continue
+    guard let first = bteWithNoneArr.first else { continue }
+    let noneType = remapBranchTracingEnumType(first.type, into: vjp)
+    // CFG duplication can produce several constructors of the same bound
+    // case. Their payload values have already been checked for equality.
+    // Different counterpart cases are ambiguous and remain unsupported.
+    guard bteWithNoneArr.allSatisfy({
+      remapBranchTracingEnumType($0.type, into: vjp) == noneType
+        && $0.caseIndex == first.caseIndex
+    }) else { return nil }
+
+    for bteWithNone in bteWithNoneArr {
+      let payloadTuple = bteWithNone.operands.singleElement!.value as! TupleInst
+      let optionalNone = payloadTuple.operands.last!.value as! EnumInst
+      assert(optionalNone.isOptionalNone)
+
+      let info = ClosureInBTE(
+        closure: closureInBTE.closure,
+        reabstractions: closureInBTE.reabstractions,
+        optionalWrapper: optionalNone,
+        useInPayload: payloadTuple.operands.last!,
+        enumCase: bteWithNone.type.getEnumCases(in: vjp)![bteWithNone.caseIndex]!
+      )
+      // Several constructors can share one payload tuple.
+      if !closuresInBTEForOptionalNone.contains(info) {
+        closuresInBTEForOptionalNone.append(info)
+      }
     }
-
-    let payloadTuple = bteWithNone.operands.singleElement!.value as! TupleInst
-    let optionalNone = payloadTuple.operands.last!.value as! EnumInst
-    assert(optionalNone.isOptionalNone)
-
-    closuresInBTEForOptionalNone.append(ClosureInBTE(
-      closure: closureInBTE.closure,
-      reabstractions: closureInBTE.reabstractions,
-      optionalWrapper: optionalNone,
-      useInPayload: payloadTuple.operands.last!,
-      enumCase: bteWithNone.type.getEnumCases(in: vjp)![bteWithNone.caseIndex]!
-    ))
   }
 
   return closuresInBTEForOptionalNone
@@ -2449,8 +2460,9 @@ private func findClosuresInBTE(paiOfPullback: PartialApplyInst, bteTypes: Set<Ty
     }
   }
 
-  closuresInBTE.append(contentsOf:
-    findOptionalNoneMatchingOptionalSome(in: vjp, closuresInBTE: closuresInBTE, bteTypes: bteTypes))
+  guard let optionalNoneClosures = findOptionalNoneMatchingOptionalSome(
+    in: vjp, closuresInBTE: closuresInBTE, bteTypes: bteTypes) else { return nil }
+  closuresInBTE.append(contentsOf: optionalNoneClosures)
 
   return closuresInBTE
 }
