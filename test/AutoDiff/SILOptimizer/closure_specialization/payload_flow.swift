@@ -43,7 +43,11 @@
 // INPUT: %[[PREDPAYLOAD2:[0-9]+]] = unchecked_enum_data
 // INPUT-NEXT: %[[PRED2:[0-9]+]] = tuple_extract %[[PREDPAYLOAD2]], 0
 // INPUT-NEXT: br [[PREDJOIN]](%{{[0-9]+}}, %[[PRED2]])
-// INPUT: [[PREDJOIN]](%{{[0-9]+}} : $Float, %{{[0-9]+}} : $_AD__{{[^,]+}}):
+// INPUT: [[PREDJOIN]](%{{[0-9]+}} : $Float, %[[PRED:[0-9]+]] : $_AD__{{[^,]+}}):
+// INPUT: switch_enum %[[PRED]], case {{[^:]+}}: [[UNUSED:bb[0-9]+]]
+// INPUT: [[UNUSED]](%[[UNUSED_PAYLOAD:[0-9]+]] : $(predecessor: {{_AD__[^)]+}})):
+// INPUT-NOT: %[[UNUSED_PAYLOAD]]
+// INPUT: br bb{{[0-9]+}} //
 
 // Creating this specialized pullback during the high-level invocation proves
 // the first phase rewrote the projected phi. Its subsequent pass input has a
@@ -59,6 +63,17 @@
 // EARLY: bb{{[0-9]+}}(%{{[0-9]+}} : $Builtin.FPIEEE32, %{{[0-9]+}} : $(Float, Float), %{{[0-9]+}} : $Builtin.FPIEEE32):
 // EARLY-NOT: apply {{.*}} : $@callee_guaranteed
 // EARLY: } // end sil function
+
+// The nested dispatch supplies an unused whole payload. Its argument still
+// gets the new predecessor enum type, although it has no projections to rewrite.
+// EARLY: *** New SIL function in {{.*}}stage HighLevel,Module+StackPromote, pass: AutodiffClosureSpecialization {{.*}}, Function: $s12payload_flow7generic
+// EARLY-NEXT: // specialized pullback of generic<A>(_:_:)
+// EARLY: // specialized pullback of generic<A>(_:_:)
+// EARLY: bb{{[0-9]+}}(%{{[0-9]+}} : $Float, %[[NEW_PRED:[0-9]+]] : $_AD__{{[^,]+_spec[^,]+}}): // Preds:
+// EARLY: switch_enum %[[NEW_PRED]], case {{[^:]+}}: [[NEW_UNUSED:bb[0-9]+]]
+// EARLY: [[NEW_UNUSED]](%[[NEW_UNUSED_PAYLOAD:[0-9]+]] : $(predecessor: {{_AD__[^)]+_spec[^)]+}})):
+// EARLY-NOT: %[[NEW_UNUSED_PAYLOAD]]
+// EARLY: br bb{{[0-9]+}} //
 
 // The first invocation leaves the custom derivative call and the original
 // pullback in place. The second invocation sees a known captured closure and
