@@ -1335,10 +1335,6 @@ private struct PayloadFlow {
   let forwardedPayloads: [UncheckedEnumDataInst]
   var closureInfos = [ClosureInBTE]()
 
-  var throwingSuccessor: BasicBlock? {
-    fieldIndex == nil ? getSuccessorForOptionalSome(arg: argument) : nil
-  }
-
   init?(_ argument: Argument, vjp: Function) {
     guard !argument.isReborrow else { return nil }
     var origins = [EnumCase]()
@@ -1833,7 +1829,6 @@ private func getEnumCasesForSwitchEnumInst(_ sei: SwitchEnumInst) -> [(Int, Basi
 
 private struct PayloadRewriteContext {
   let closureInfoArray: [ClosureInBTE]
-  let throwingSuccessor: BasicBlock?
 }
 
 private func findMatchingClosureInfo(
@@ -2070,16 +2065,6 @@ private func rewriteUsesOfPayloadItem(
     builder.createSwitchEnum(
       enum: result, cases: getEnumCasesForSwitchEnumInst(sei))
     context.erase(instruction: sei)
-
-    if let successor = rewriteCtx.throwingSuccessor {
-      let arg = successor.arguments.singleElement!
-      let argUses = Array(arg.uses)
-      for argUse in argUses {
-        rewriteUsesOfPayloadItem(
-          use: argUse, resultIdx: resultIdx,
-          result: arg, rewriteCtx: rewriteCtx, context)
-      }
-    }
   }
 }
 
@@ -2227,58 +2212,14 @@ private func findOptionalNoneMatchingOptionalSome(in vjp: Function, closuresInBT
   return closuresInBTEForOptionalNone
 }
 
-typealias BTEPayloadArgOfPbBBInfo = (arg: Argument, enumCase: EnumCase, throwingSuccessor: BasicBlock?)
-
-// Consider a basic block argument which is a payload tuple of a branch tracing enum payload case.
-// The last element type of this tuple might be not a closure type, but an optional of a closure type.
-// Such optionals are unwrapped with switch_enum instruction. This function finds the successor basic
-// block for 'some' case of the switch_enum accepting this optional closure (given that the optional
-// closure comes from the last element of branch tracing enum payload tuple BB argument).
-//
-// For the example below, find bbM successor when given %arg argument:
-//
-//   bbN(..., %arg : $(predecessor: _AD__$xxx_bbA__Pred__xxx, ClosureType1, ..., Optional<ClosureTypeNum>)):
-//     // ...
-//     %last_closure = tuple_extract %arg, num
-//     // Alternatively, we might have (..., %last_closure) = destructure_tuple %arg
-//     switch_enum %last_closure, case #Optional.some!enumelt: bbM, case #Optional.none!enumelt: bbK
-//
-//   bbM(%closure: ClosureTypeNum):
-//     // ...
-private func getSuccessorForOptionalSome(arg: Argument) -> BasicBlock? {
-  let bb = arg.parentBlock
-  guard let sei = bb.terminator as? SwitchEnumInst,
-        sei.enumOp.type.isOptional
-  else {
-    return nil
-  }
-  assert(bb.successors.count == 2)
-
-  if let tei = sei.enumOp.definingInstruction as? TupleExtractInst {
-    if tei.tuple != arg {
-      return nil
-    }
-    assert(tei.fieldIndex + 1 == arg.type.tupleElements.count)
-  } else if let dti = sei.enumOp.definingInstruction as? DestructureTupleInst {
-    if dti.tuple != arg {
-      return nil
-    }
-    assert(dti.results.last! == sei.enumOp)
-  } else {
-    return nil
-  }
-
-  return sei.getUniqueSuccessor(forCaseIndex: Builder.optionalSomeCaseIndex)!
-}
-
 // Function-test hooks for whole-tuple payloads use the same origin analysis as
 // projected fields. Production rewriting consumes the complete flow plan.
 private func getBTEPayloadArgOfPbBBInfo(_ bb: BasicBlock, vjp: Function)
-  -> BTEPayloadArgOfPbBBInfo?
+  -> (arg: Argument, enumCase: EnumCase)?
 {
   for argument in bb.arguments {
     if let flow = PayloadFlow(argument, vjp: vjp), flow.fieldIndex == nil {
-      return (argument, flow.origins[0], flow.throwingSuccessor)
+      return (argument, flow.origins[0])
     }
   }
   return nil
@@ -2536,6 +2477,10 @@ private struct PullbackClosureAnalysis {
 
     self.paiOfPullback = paiOfPullback
     guard let closuresInBTE = findClosuresInBTE(paiOfPullback: paiOfPullback) else { return nil }
+    // Optional callbacks are supported when the pullback only destroys the
+    // tape. Live optional payloads require a separate successor rewrite.
+    guard paiOfPullback.referencedFunction!.blocks.singleElement != nil
+            || closuresInBTE.allSatisfy({ $0.optionalWrapper == nil }) else { return nil }
     self.closuresInBTE = closuresInBTE
     self.validatedPayloadFlows = closuresInBTE.isEmpty ? [] : analyzePayloadFlows(
       in: paiOfPullback.referencedFunction!, vjp: vjp,
@@ -2643,13 +2588,6 @@ private func analyzePayloadFlows(
       case .unsupported: return nil
       case .destructureTuple(let results), .tupleExtract(let results): values = results
       }
-    }
-    if let successor = flow.throwingSuccessor {
-      guard let callback = successor.arguments.singleElement,
-            callback.type.isLoweredFunction,
-            checkIfCanRunForPayloadValues(
-              results: [callback], forwardedPayloads: forwardedPayloads,
-              prefixFail: "", pb: pullback, pbBB: successor) else { return nil }
     }
     guard checkIfCanRunForPayloadValues(
       results: values, forwardedPayloads: forwardedPayloads,
@@ -2847,7 +2785,6 @@ private struct PullbackSpecializationAgainstBTE {
         let enumType = remapBranchTracingEnumType(
           enumDict[flow.origins[0].enumType(in: vjp)]!, into: cloner.targetFunction)
         let enumCase = enumType.getEnumCases(in: cloner.targetFunction)![flow.origins[0].index]!
-        let throwingSuccessor = flow.throwingSuccessor.map { cloner.getClonedBlock(for: $0) }
         let closureInfoArray = flow.closureInfos
         let oldUses = Array(arg.uses)
         let payloadType = enumCase.payload!
@@ -2861,20 +2798,10 @@ private struct PullbackSpecializationAgainstBTE {
           continue
         }
 
-        if let successor = throwingSuccessor {
-          let oldArg = successor.arguments.singleElement!
-          let newArg = specializeOptionalBBArgInPullback(
-            bb: successor, newOptionalType: enumCase.payload!.tupleElements.last!,
-            context: cloner.context)
-          oldArg.uses.replaceAll(with: newArg, cloner.context)
-          successor.eraseArgument(at: oldArg.index, cloner.context)
-        }
-
         let projections = rebuildPayloadProjections(
           of: newArg, fieldIndex: flow.fieldIndex, originalUses: oldUses, context: cloner.context)
         let rewriteCtx = PayloadRewriteContext(
-          closureInfoArray: closureInfoArray,
-          throwingSuccessor: throwingSuccessor)
+          closureInfoArray: closureInfoArray)
         rewriteProjectedPayloadValues(
           projections: projections.values,
           rewriteCtx: rewriteCtx,
@@ -3016,7 +2943,7 @@ let specializePayloadArgInPullbackBB = FunctionTest("autodiff_specialize_payload
   print("Specialized BTE payload arguments of basic blocks in pullback \(pullback.name):")
   for bb in pullback.blocks {
     guard
-      let (arg, enumCase, throwingSuccessor) = getBTEPayloadArgOfPbBBInfo(bb, vjp: function)
+      let (arg, enumCase) = getBTEPayloadArgOfPbBBInfo(bb, vjp: function)
     else {
       continue
     }
@@ -3028,29 +2955,6 @@ let specializePayloadArgInPullbackBB = FunctionTest("autodiff_specialize_payload
       context: context)
     print("\(newArg)")
     bb.eraseArgument(at: newArg.index, context)
-
-    if let successor = throwingSuccessor {
-      let newArg = specializeOptionalBBArgInPullback(
-        bb: successor,
-        newOptionalType: enumType.getEnumCases(in: pullback)![enumCase.index]!.payload!.tupleElements.last!,
-        context: context)
-      print("\(newArg)")
-      successor.eraseArgument(at: newArg.index, context)
-    }
   }
   print("")
-}
-
-private func specializeOptionalBBArgInPullback(
-  bb: BasicBlock,
-  newOptionalType: Type,
-  context: FunctionPassContext
-) -> Argument {
-  let arg = bb.arguments.singleElement!
-
-  let underlyingType = newOptionalType.rawType.optionalObjectType.loweredTypeWithAbstractionPattern(
-    in: bb.parentFunction)
-
-  return bb.insertPhiArgument(
-    atPosition: arg.index, type: underlyingType, ownership: arg.ownership, context)
 }
