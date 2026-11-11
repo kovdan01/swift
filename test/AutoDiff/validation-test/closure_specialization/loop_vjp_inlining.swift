@@ -39,8 +39,15 @@ public func branchingLoop(_ x: Float, _ flag: Bool) -> Float {
   return x * x
 }
 
+// The caller has no tape of its own. Keep the callee's branch tape available
+// for specialization before inlining its VJP here.
+@differentiable(reverse, wrt: x)
+public func throughBranchingLoop(_ x: Float, _ flag: Bool) -> Float {
+  branchingLoop(x, flag)
+}
+
 public func branchingCaller(_ x: Float, _ flag: Bool) -> Float {
-  gradient(at: x, of: { branchingLoop($0, flag) })
+  gradient(at: x, of: { throughBranchingLoop($0, flag) })
 }
 
 #if !DEFINITIONS_ONLY
