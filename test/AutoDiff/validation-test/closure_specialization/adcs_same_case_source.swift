@@ -24,6 +24,23 @@ public func twoSelections(_ x: Float, _ first: Float?, _ second: Float?) -> Floa
   return intermediate
 }
 
+// Mid-level optimization sinks the specialized capture tuple into each branch.
+// The second ADCS visit sees distinct SSA tuples for the same bound tape case.
+@differentiable(reverse)
+public func squaredSelection(_ x: Float, _ first: Float?, _ second: Float?) -> Float {
+  let square = x * x
+  var intermediate = square
+  if let value = first {
+    if value < square { intermediate = value }
+  }
+  let shifted = intermediate * intermediate
+  if let value = second {
+    if value < shifted { return value }
+    return shifted
+  }
+  return shifted
+}
+
 // CHECK-LABEL: // reverse-mode derivative of twoSelections
 // CHECK-NOT: } // end sil function
 // CHECK: // function_ref specialized pullback of twoSelections
@@ -57,6 +74,22 @@ Tests.test("DuplicatedPredecessorPayloads") {
     expectEqual(expectedValue, result.value)
     expectEqual(expectedDerivative, result.pullback(1))
     expectEqual(2 * expectedDerivative, result.pullback(2))
+  }
+}
+Tests.test("DistinctSpecializedCaptureTuples") {
+  for (first, second, value, derivative): (Float?, Float?, Float, Float) in [
+    (nil, nil, 81, 108),
+    (4, nil, 16, 0),
+    (12, 200, 81, 108),
+    (nil, 2, 2, 0),
+    (4, 6, 6, 0),
+  ] {
+    let result = valueWithPullback(at: Float(3), of: {
+      squaredSelection($0, first, second)
+    })
+    expectEqual(value, result.value)
+    expectEqual(derivative, result.pullback(1))
+    expectEqual(2 * derivative, result.pullback(2))
   }
 }
 runAllTests()
