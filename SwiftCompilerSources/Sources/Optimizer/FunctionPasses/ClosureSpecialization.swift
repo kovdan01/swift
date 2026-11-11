@@ -1533,10 +1533,12 @@ private func synthesizeSpecializedEnums(
   from closureAnalysis: PullbackClosureAnalysis,
   context: FunctionPassContext
 ) -> SpecializedBTEMap? {
-  getSpecializedBTEDict(
+  guard !closureAnalysis.closuresInBTE.isEmpty else { return [:] }
+  return autodiffSpecializeBranchTracingEnums(
+    topVJP: closureAnalysis.vjp,
+    bteSpecializationQueue: closureAnalysis.bteSpecializationQueue,
     closuresInBTE: closureAnalysis.closuresInBTE,
-    paiOfPullback: closureAnalysis.paiOfPullback,
-    context)
+    context: context)
 }
 
 private func eraseDeadSpecializedClosures(
@@ -1682,11 +1684,9 @@ private func buildReplacementElement(
 }
 
 private func rewritePayloadTuplesInVJP(
-  vjp: Function, closureInfos: inout [ClosureInBTE], context: FunctionPassContext
+  vjp: Function, payloads: Set<TupleInst>,
+  closureInfos: inout [ClosureInBTE], context: FunctionPassContext
 ) {
-  let enumToPayload = findEnumsAndPayloadsInVjp(vjp: vjp)
-  let payloads = Set<TupleInst>(enumToPayload.values)
-
   for payload in payloads {
     let ti = payload
     if ti.operands.count == 0 {
@@ -1786,7 +1786,9 @@ private func rewriteVJPForBTEPullbackSpecialization(
   let pai = autodiffSpecializationInfo.paiOfPullback
   pai.replace(withCallTo: specializedCallee, arguments: Array(pai.arguments), context)
 
-  rewritePayloadTuplesInVJP(vjp: vjp, closureInfos: &closureInfos, context: context)
+  rewritePayloadTuplesInVJP(
+    vjp: vjp, payloads: autodiffSpecializationInfo.closureAnalysis.payloads,
+    closureInfos: &closureInfos, context: context)
 
   cleanupDeadOptionalEnums(in: vjp, context: context)
 }
@@ -2182,10 +2184,15 @@ private func getPartialApplyOfPullbackInExitVJPBB(vjp: Function) -> PartialApply
 // The code below for each 'some' optional value (%optionalWrapper1 in the example above) finds the corresponding
 // 'none' optional value and saves info about found value to allow further specialization. Pay attention to
 // exact same names for branch tracing enum cases used for payload tuples in both cases (bbK in the example above).
-private func findOptionalNoneMatchingOptionalSome(in vjp: Function, closuresInBTE: [ClosureInBTE]) -> [ClosureInBTE] {
+private func findOptionalNoneMatchingOptionalSome(
+  in vjp: Function, closuresInBTE: [ClosureInBTE], bteTypes: Set<Type>
+) -> [ClosureInBTE] {
   let branchTracingEnumInstructions: [EnumInst] = vjp.instructions.filter { $0 is EnumInst }.map {
     $0 as! EnumInst
-  }.filter { $0.type.isBranchTracingEnum(in: vjp) }
+  }.filter {
+    $0.type.isBranchTracingEnum(in: vjp)
+      && bteTypes.contains(remapBranchTracingEnumType($0.type, into: vjp))
+  }
 
   var closuresInBTEForOptionalNone = [ClosureInBTE]()
 
@@ -2421,7 +2428,7 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
   return closuresInBTE
 }
 
-private func findClosuresInBTE(paiOfPullback: PartialApplyInst) -> [ClosureInBTE]? {
+private func findClosuresInBTE(paiOfPullback: PartialApplyInst, bteTypes: Set<Type>) -> [ClosureInBTE]? {
   let vjp = paiOfPullback.parentFunction
   var reabstractions = Set<SingleValueInstruction>()
   var closuresInBTE = [ClosureInBTE]()
@@ -2434,34 +2441,64 @@ private func findClosuresInBTE(paiOfPullback: PartialApplyInst) -> [ClosureInBTE
     }
 
     guard let currentClosuresInBTE = findBTEUses(for: rootClosure) else { return nil }
-    closuresInBTE.append(contentsOf: currentClosuresInBTE)
     reabstractions.formUnion(currentClosuresInBTE.flatMap(\.reabstractions))
+    // Keep a shared root opaque if any of its payload uses remains outside
+    // this plan. Its captures cannot be consumed while that closure survives.
+    if currentClosuresInBTE.allSatisfy({ bteTypes.contains($0.enumCase.enumType(in: vjp)) }) {
+      closuresInBTE.append(contentsOf: currentClosuresInBTE)
+    }
   }
 
   closuresInBTE.append(contentsOf:
-    findOptionalNoneMatchingOptionalSome(in: vjp, closuresInBTE: closuresInBTE))
+    findOptionalNoneMatchingOptionalSome(in: vjp, closuresInBTE: closuresInBTE, bteTypes: bteTypes))
 
   return closuresInBTE
 }
 
-private func getSpecializedBTEDict(closuresInBTE: [ClosureInBTE], paiOfPullback: PartialApplyInst, _ context: FunctionPassContext) -> [Type: Type]? {
-  guard !closuresInBTE.isEmpty else {
-    return [:]
-  }
-
-  let vjp = paiOfPullback.parentFunction
-  let pullback = paiOfPullback.referencedFunction!
-  let enumTypeOfEntryBBArg = pullback.entryBlock.getBranchTracingEnumArg(vjp: vjp)!.type
-
-  return autodiffSpecializeBranchTracingEnums(
-    topVJP: vjp, topBTE: enumTypeOfEntryBBArg,
-    closuresInBTE: closuresInBTE, context: context)
-}
-
 private typealias SpecializedBTEMap = [Type: Type]
+
+// Retyping an enum also changes its SSA uses. The current rewrite handles
+// forwarding through phis, predecessor payloads and the returned pullback,
+// but cannot change another callback's signature or an unrelated tape schema.
+private func validateVJPTapeScope(
+  vjp: Function, bteTypes: Set<Type>, payloads: Set<TupleInst>,
+  paiOfPullback: PartialApplyInst
+) -> Bool {
+  func isSelected(_ value: Value) -> Bool {
+    value.type.isBranchTracingEnum(in: vjp)
+      && bteTypes.contains(remapBranchTracingEnumType(value.type, into: vjp))
+  }
+  func hasSupportedUses(_ value: Value) -> Bool {
+    value.uses.allSatisfy { use in
+      switch use.instruction {
+      case is BranchInst, is CondBranchInst, is DebugValueInst:
+        return true
+      case let tuple as TupleInst:
+        return payloads.contains(tuple)
+      default:
+        return use.instruction == paiOfPullback
+      }
+    }
+  }
+  for block in vjp.blocks {
+    for argument in block.arguments where isSelected(argument) {
+      guard let phi = Phi(argument),
+            phi.incomingOperands.allSatisfy({ $0.value is Argument || $0.value is EnumInst }),
+            hasSupportedUses(argument) else { return false }
+    }
+    for instruction in block.instructions {
+      for result in instruction.results where isSelected(result) {
+        guard instruction is EnumInst, hasSupportedUses(result) else { return false }
+      }
+    }
+  }
+  return true
+}
 
 private struct PullbackClosureAnalysis {
   let paiOfPullback: PartialApplyInst
+  let bteSpecializationQueue: [Type]
+  let payloads: Set<TupleInst>
   let closuresInBTE: [ClosureInBTE]
   // Nil means unsupported pullback flow; schema-only queries remain usable.
   let validatedPayloadFlows: [PayloadFlow]?
@@ -2480,22 +2517,53 @@ private struct PullbackClosureAnalysis {
       guard argument.type.isTrivial(in: pullback) || argument.ownership == .owned else { return nil }
     }
 
+    // A nested pullback may capture another instantiation of the same generic
+    // function's tape. Only specialize the returned tape's predecessor graph;
+    // preserve the nested tape together with the function that consumes it.
+    if let topBTE = pullback.entryBlock.getBranchTracingEnumArg(vjp: vjp) {
+      guard let queue = getBranchTracingEnumSpecializationQueue(
+        topBTEType: remapBranchTracingEnumType(topBTE.type, into: vjp), in: vjp)
+      else { return nil }
+      self.bteSpecializationQueue = queue
+    } else {
+      self.bteSpecializationQueue = []
+    }
+    let bteTypes = Set(bteSpecializationQueue)
+
     // A pullback case identifies one VJP payload tuple. Distinct constructors
     // sharing that case are only supported when CFG simplification duplicated
     // an identical ordered list of saved SSA values. Decline different plans
     // before synthesizing any specialized enum declarations.
     var payloadsByCase = [Type: [Int: TupleInst]]()
+    var payloads = Set<TupleInst>()
     for (enumInst, payload) in findEnumsAndPayloadsInVjp(vjp: vjp) {
       let enumType = remapBranchTracingEnumType(enumInst.type, into: vjp)
+      guard bteTypes.contains(enumType) else { continue }
       if let previous = payloadsByCase[enumType]?[enumInst.caseIndex],
          !previous.hasSamePayloadValues(as: payload) {
         return nil
       }
       payloadsByCase[enumType, default: [:]][enumInst.caseIndex] = payload
+      payloads.insert(payload)
     }
+    self.payloads = payloads
+    // Replacing a tuple changes all of its enum consumers. Do not cross the
+    // boundary into an enum whose declaration is being preserved. Empty
+    // tuples are never rewritten and can be shared with a nested tape.
+    guard payloads.allSatisfy({ payload in
+      payload.operands.isEmpty || payload.uses.allSatisfy { use in
+        guard let enumInst = use.instruction as? EnumInst else { return false }
+        return enumInst.type.isBranchTracingEnum(in: vjp)
+          && bteTypes.contains(remapBranchTracingEnumType(enumInst.type, into: vjp))
+      }
+    }) else { return nil }
+    guard validateVJPTapeScope(
+      vjp: vjp, bteTypes: bteTypes, payloads: payloads, paiOfPullback: paiOfPullback)
+    else { return nil }
 
     self.paiOfPullback = paiOfPullback
-    guard let closuresInBTE = findClosuresInBTE(paiOfPullback: paiOfPullback) else { return nil }
+    guard let closuresInBTE = findClosuresInBTE(paiOfPullback: paiOfPullback, bteTypes: bteTypes)
+    else { return nil }
     // Optional callbacks are supported when the pullback only destroys the
     // tape. Live optional payloads require a separate successor rewrite.
     guard paiOfPullback.referencedFunction!.blocks.singleElement != nil
@@ -2503,7 +2571,7 @@ private struct PullbackClosureAnalysis {
     self.closuresInBTE = closuresInBTE
     self.validatedPayloadFlows = closuresInBTE.isEmpty ? [] : analyzePayloadFlows(
       in: paiOfPullback.referencedFunction!, vjp: vjp,
-      payloadsByCase: payloadsByCase, closureInfos: closuresInBTE)
+      bteTypes: bteTypes, payloadsByCase: payloadsByCase, closureInfos: closuresInBTE)
   }
 }
 
@@ -2562,11 +2630,20 @@ private func computeTopologicalBlockOrder(of function: Function) -> [BasicBlock]
 // All paths into a logical payload value must agree on the callable plan used
 // to rewrite it. Whole tuples and projected fields share this check.
 private func analyzePayloadFlows(
-  in pullback: Function, vjp: Function, payloadsByCase: [Type: [Int: TupleInst]],
+  in pullback: Function, vjp: Function, bteTypes: Set<Type>,
+  payloadsByCase: [Type: [Int: TupleInst]],
   closureInfos: [ClosureInBTE]
 ) -> [PayloadFlow]? {
-  let flows = pullback.blocks.flatMap { block in
+  let allFlows = pullback.blocks.flatMap { block in
     block.arguments.compactMap { PayloadFlow($0, vjp: vjp) }
+  }
+  var flows = [PayloadFlow]()
+  for flow in allFlows {
+    let selectedOrigins = flow.origins.filter { bteTypes.contains($0.enumType(in: vjp)) }
+    if selectedOrigins.isEmpty { continue }
+    // A phi cannot mix a changed payload with an unchanged nested tape.
+    guard selectedOrigins.count == flow.origins.count else { return nil }
+    flows.append(flow)
   }
   let forwardedPayloads = Set(flows.flatMap { $0.forwardedPayloads })
   var validated = [PayloadFlow]()
@@ -2617,7 +2694,8 @@ private func analyzePayloadFlows(
   // Every such successor must have a validated flow before its type is changed.
   for block in pullback.blocks {
     if let dispatch = block.terminator as? SwitchEnumInst,
-       dispatch.enumOp.type.isBranchTracingEnum(in: vjp) {
+       dispatch.enumOp.type.isBranchTracingEnum(in: vjp),
+       bteTypes.contains(remapBranchTracingEnumType(dispatch.enumOp.type, into: vjp)) {
       guard block.successors.allSatisfy({ successor in
         validated.contains { $0.argument.parentBlock == successor && $0.fieldIndex == nil }
       }) else { return nil }
