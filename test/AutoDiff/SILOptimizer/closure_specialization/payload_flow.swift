@@ -13,6 +13,13 @@
 // custom pullback. This checks actual late specialization, not just a second
 // visit to a function already specialized by the first invocation.
 
+// The VJP tapes a known callback with no captures.
+// INPUT-LABEL: // reverse-mode derivative of branching(_:_:)
+// INPUT: %[[SUBTRACT:[0-9]+]] = function_ref @{{.*}}_vjpSubtract
+// INPUT-NEXT: %[[NO_CAPTURES:[0-9]+]] = thin_to_thick_function %[[SUBTRACT]]
+// INPUT: %[[PAYLOAD:[0-9]+]] = tuple $(predecessor: {{.*}}) (%{{[0-9]+}}, %{{[0-9]+}}, %[[NO_CAPTURES]])
+// INPUT-NEXT: {{.*}} = enum {{.*}}, %[[PAYLOAD]]
+
 // The first input has both a whole multi-field payload argument and a scalar
 // callback phi fed by singleton payload projections from two incoming edges.
 // INPUT-LABEL: // pullback of branching(_:_:)
@@ -43,6 +50,11 @@
 // EARLY: *** New SIL function in {{.*}}stage HighLevel,Module+StackPromote, pass: AutodiffClosureSpecialization {{.*}}, Function: $s12payload_flow9branchingyS2f_SbtFTJp
 // EARLY-NEXT: // specialized pullback of branching(_:_:)
 // EARLY: // specialized pullback of branching(_:_:)
+// The captureless callbacks become empty tuples. Invoke their thin functions
+// directly, with only the original seed argument.
+// EARLY: bb{{[0-9]+}}(%{{[0-9]+}} : $(predecessor: {{.*}}, (), ())):
+// EARLY: %[[DIRECT_SUBTRACT:[0-9]+]] = function_ref @{{.*}}_vjpSubtract
+// EARLY-NEXT: {{.*}} = apply %[[DIRECT_SUBTRACT]](%{{[0-9]+}}) : $@convention(thin) (Float) -> (Float, Float)
 // EARLY: bb{{[0-9]+}}(%{{[0-9]+}} : $Builtin.FPIEEE32, %{{[0-9]+}} : $(Float, Float), %{{[0-9]+}} : $Builtin.FPIEEE32):
 // EARLY-NOT: apply {{.*}} : $@callee_guaranteed
 // EARLY: } // end sil function
