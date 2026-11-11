@@ -2472,6 +2472,14 @@ private struct PullbackClosureAnalysis {
   init?(vjp: Function) {
     guard let paiOfPullback = getPartialApplyOfPullbackInExitVJPBB(vjp: vjp) else { return nil }
 
+    // Check the actual pullback after ordinary specialization. Capture
+    // reconstruction consumes nontrivial tapes, as generated pullbacks do;
+    // borrowed tapes require a different ownership rewrite.
+    let pullback = paiOfPullback.referencedFunction!
+    for argument in pullback.entryBlock.arguments where argument.type.isBranchTracingEnum(in: vjp) {
+      guard argument.type.isTrivial(in: pullback) || argument.ownership == .owned else { return nil }
+    }
+
     // A pullback case identifies one VJP payload tuple. Distinct constructors
     // sharing that case are only supported when CFG simplification duplicated
     // an identical ordered list of saved SSA values. Decline different plans
