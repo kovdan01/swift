@@ -1216,6 +1216,7 @@ void NodePrinter::printFunctionSigSpecializationParams(NodePointer Node,
     }
     case FunctionSigSpecializationParamKind::ConstantPropInteger:
     case FunctionSigSpecializationParamKind::ConstantPropFloat:
+    case FunctionSigSpecializationParamKind::AutoDiffBranchTracingEnum:
       if (Idx + 2 > End)
         return;
       Printer << "[";
