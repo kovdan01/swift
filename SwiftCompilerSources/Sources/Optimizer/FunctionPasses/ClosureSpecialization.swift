@@ -2558,6 +2558,9 @@ private extension Instruction {
       // BTE specialization loads and removes indirect captures, so it requires
       // a dedicated stack allocation even for conventions supported by the general pass.
       for op in pai.argumentOperands {
+        // A mutable capture's SIL box cannot be stored in an AST enum payload.
+        // Keep the callback opaque so its box identity and sharing are preserved.
+        guard !op.value.type.isBox else { return nil }
         guard op.value.type.isAddress else {
           continue
         }
