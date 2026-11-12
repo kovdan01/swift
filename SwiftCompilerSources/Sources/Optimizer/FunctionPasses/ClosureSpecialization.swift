@@ -2676,6 +2676,13 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
     reabstractions.append(pai)
   }
 
+  // Generated taped pullbacks are nonthrowing. Leave unexpected throwing
+  // callables opaque rather than reconstructing their error-result ABI.
+  // Check the outer callable: an inner throws(Never) root may have a
+  // nonthrowing reabstraction thunk which we can still specialize.
+  guard FunctionConvention(for: currentClosure.type.rawType.canonical, in: vjp).errorResult == nil
+  else { return [] }
+
   let optionalWrapper = currentClosure.uses.singleElement?.instruction.asOptionalWrapper
   let closure = optionalWrapper ?? currentClosure
 
