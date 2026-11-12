@@ -356,20 +356,20 @@ bb0(%0 : $Class):
   // TRUNNER-NEXT:  non-specialized BTE 0: enum _AD__$s4test5ClassV6methodSfyF_bb1__Pred__src_0_wrt_0 {
   // TRUNNER-NEXT:    case bb0(((Float) -> Float, (Class.TangentVector) -> (Float, Optional<Float>.TangentVector)))
   // TRUNNER-NEXT:  }
-  // TRUNNER-NEXT:  specialized BTE 0: enum _AD__$s4test5ClassV6methodSfyF_bb1__Pred__src_0_wrt_0_spec_bb0_0_1_[[SCHEMA1:[0-9a-f]{32}]] {
+  // TRUNNER-NEXT:  specialized BTE 0: @frozen enum _AD__$s4test5ClassV6methodSfyF_bb1__Pred__src_0_wrt_0_spec_bb0_0_1_[[SCHEMA1:[0-9a-f]{32}]] {
   // TRUNNER-NEXT:    case bb0(((Float, Float), ()))
   // TRUNNER-NEXT:  }
   // TRUNNER-NEXT:  non-specialized BTE 1: enum _AD__$s4test5ClassV6methodSfyF_bb2__Pred__src_0_wrt_0 {
   // TRUNNER-NEXT:    case bb0(((Float) -> Float, (Class.TangentVector) -> (Float, Optional<Float>.TangentVector)))
   // TRUNNER-NEXT:  }
-  // TRUNNER-NEXT:  specialized BTE 1: enum _AD__$s4test5ClassV6methodSfyF_bb2__Pred__src_0_wrt_0_spec_bb0_0_1_[[SCHEMA2:[0-9a-f]{32}]] {
+  // TRUNNER-NEXT:  specialized BTE 1: @frozen enum _AD__$s4test5ClassV6methodSfyF_bb2__Pred__src_0_wrt_0_spec_bb0_0_1_[[SCHEMA2:[0-9a-f]{32}]] {
   // TRUNNER-NEXT:    case bb0(((Float, Float), ()))
   // TRUNNER-NEXT:  }
   // TRUNNER-NEXT:  non-specialized BTE 2: enum _AD__$s4test5ClassV6methodSfyF_bb3__Pred__src_0_wrt_0 {
   // TRUNNER-NEXT:    case bb2((predecessor: _AD__$s4test5ClassV6methodSfyF_bb2__Pred__src_0_wrt_0, (Float) -> Float))
   // TRUNNER-NEXT:    case bb1((predecessor: _AD__$s4test5ClassV6methodSfyF_bb1__Pred__src_0_wrt_0, (Float) -> (Float, Float)))
   // TRUNNER-NEXT:  }
-  // TRUNNER-NEXT:  specialized BTE 2: enum _AD__$s4test5ClassV6methodSfyF_bb3__Pred__src_0_wrt_0_spec_bb2_1_bb1_1_[[SCHEMA3:[0-9a-f]{32}]] {
+  // TRUNNER-NEXT:  specialized BTE 2: @frozen enum _AD__$s4test5ClassV6methodSfyF_bb3__Pred__src_0_wrt_0_spec_bb2_1_bb1_1_[[SCHEMA3:[0-9a-f]{32}]] {
   // TRUNNER-NEXT:    case bb2((predecessor: _AD__$s4test5ClassV6methodSfyF_bb2__Pred__src_0_wrt_0_spec_bb0_0_1_[[SCHEMA2]], (Float, Float)))
   // TRUNNER-NEXT:    case bb1((predecessor: _AD__$s4test5ClassV6methodSfyF_bb1__Pred__src_0_wrt_0_spec_bb0_0_1_[[SCHEMA1]], (Float, Float)))
   // TRUNNER-NEXT:  }
@@ -688,20 +688,20 @@ bb0(%0 : $Float):
   // TRUNNER-NEXT:  non-specialized BTE 0: enum _AD__$s4test14cond_tuple_varyS2fF_bb1__Pred__src_0_wrt_0 {
   // TRUNNER-NEXT:    case bb0(((Float) -> (Float, Float), (Float) -> (Float, Float)))
   // TRUNNER-NEXT:  }
-  // TRUNNER-NEXT:  specialized BTE 0: enum _AD__$s4test14cond_tuple_varyS2fF_bb1__Pred__src_0_wrt_0_spec_bb0_0_1_[[SCHEMA4:[0-9a-f]{32}]] {
+  // TRUNNER-NEXT:  specialized BTE 0: @frozen enum _AD__$s4test14cond_tuple_varyS2fF_bb1__Pred__src_0_wrt_0_spec_bb0_0_1_[[SCHEMA4:[0-9a-f]{32}]] {
   // TRUNNER-NEXT:    case bb0(((), ()))
   // TRUNNER-NEXT:  }
   // TRUNNER-NEXT:  non-specialized BTE 1: enum _AD__$s4test14cond_tuple_varyS2fF_bb2__Pred__src_0_wrt_0 {
   // TRUNNER-NEXT:    case bb0(((Float) -> (Float, Float), (Float) -> (Float, Float)))
   // TRUNNER-NEXT:  }
-  // TRUNNER-NEXT:  specialized BTE 1: enum _AD__$s4test14cond_tuple_varyS2fF_bb2__Pred__src_0_wrt_0_spec_bb0_0_1_[[SCHEMA5:[0-9a-f]{32}]] {
+  // TRUNNER-NEXT:  specialized BTE 1: @frozen enum _AD__$s4test14cond_tuple_varyS2fF_bb2__Pred__src_0_wrt_0_spec_bb0_0_1_[[SCHEMA5:[0-9a-f]{32}]] {
   // TRUNNER-NEXT:    case bb0(((), ()))
   // TRUNNER-NEXT:  }
   // TRUNNER-NEXT:  non-specialized BTE 2: enum _AD__$s4test14cond_tuple_varyS2fF_bb3__Pred__src_0_wrt_0 {
   // TRUNNER-NEXT:    case bb2((predecessor: _AD__$s4test14cond_tuple_varyS2fF_bb2__Pred__src_0_wrt_0, (Float) -> Float))
   // TRUNNER-NEXT:    case bb1((predecessor: _AD__$s4test14cond_tuple_varyS2fF_bb1__Pred__src_0_wrt_0, (Float) -> (Float, Float), (Float) -> (Float, Float)))
   // TRUNNER-NEXT:  }
-  // TRUNNER-NEXT:  specialized BTE 2: enum _AD__$s4test14cond_tuple_varyS2fF_bb3__Pred__src_0_wrt_0_spec_bb2_1_bb1_1_2_[[SCHEMA6:[0-9a-f]{32}]] {
+  // TRUNNER-NEXT:  specialized BTE 2: @frozen enum _AD__$s4test14cond_tuple_varyS2fF_bb3__Pred__src_0_wrt_0_spec_bb2_1_bb1_1_2_[[SCHEMA6:[0-9a-f]{32}]] {
   // TRUNNER-NEXT:    case bb2((predecessor: _AD__$s4test14cond_tuple_varyS2fF_bb2__Pred__src_0_wrt_0_spec_bb0_0_1_[[SCHEMA5]], (Float, Float)))
   // TRUNNER-NEXT:    case bb1((predecessor: _AD__$s4test14cond_tuple_varyS2fF_bb1__Pred__src_0_wrt_0_spec_bb0_0_1_[[SCHEMA4]], (), ()))
   // TRUNNER-NEXT:  }

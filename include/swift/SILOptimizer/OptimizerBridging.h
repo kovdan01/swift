@@ -283,7 +283,8 @@ struct BridgedPassContext {
       BridgedType enumType, SwiftInt argIdx, BridgedFunction vjp,
       BridgedFunction pullback) const;
   BridgedOwnedString mangleAutoDiffBranchTracingEnum(
-      BridgedStringRef prefix, BridgedASTType schema, BridgedFunction vjp) const;
+      BridgedStringRef prefix, BridgedASTType schema, BridgedFunction vjp,
+      BridgedSourceFile sourceFile) const;
   OptionalBridgedDeclObj lookupAutoDiffSpecializedBranchTracingEnum(
       BridgedStringRef name, BridgedFunction vjp) const;
 

@@ -15,6 +15,7 @@
 #include "../../IRGen/IRGenModule.h"
 #include "swift/AST/ConformanceLookup.h"
 #include "swift/AST/SemanticAttrs.h"
+#include "swift/AST/SourceFile.h"
 #include "swift/Basic/CodeGenerationModel.h"
 #include "swift/Demangling/ManglingMacros.h"
 #include "swift/SIL/DynamicCasts.h"
@@ -575,10 +576,13 @@ BridgedOwnedString BridgedPassContext::mangleWithAutoDiffBranchTracingEnum(
 }
 
 BridgedOwnedString BridgedPassContext::mangleAutoDiffBranchTracingEnum(
-    BridgedStringRef prefix, BridgedASTType schema, BridgedFunction vjp) const {
+    BridgedStringRef prefix, BridgedASTType schema, BridgedFunction vjp,
+    BridgedSourceFile sourceFile) const {
   return BridgedOwnedString(Mangle::mangleAutoDiffSpecializedBranchTracingEnum(
       prefix.unbridged(), schema.unbridged()->getCanonicalType(),
-      vjp.getFunction()->getGenericSignature().getCanonicalSignature()));
+      vjp.getFunction()->getGenericSignature().getCanonicalSignature(),
+      sourceFile.unbridged()->getPrivateDiscriminator(/*createIfMissing=*/true)
+          .str()));
 }
 
 OptionalBridgedDeclObj

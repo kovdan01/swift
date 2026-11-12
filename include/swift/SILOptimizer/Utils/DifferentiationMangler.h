@@ -24,9 +24,11 @@ namespace swift {
 
 namespace Mangle {
 
-/// A deterministic name for a specialized tape layout in its generic context.
+/// A deterministic name for a specialized tape layout in its generic context
+/// and emitting file.
 std::string mangleAutoDiffSpecializedBranchTracingEnum(
-    StringRef prefix, CanType schema, CanGenericSignature signature);
+    StringRef prefix, CanType schema, CanGenericSignature signature,
+    StringRef fileDiscriminator);
 
 /// Identify a rewritten pullback by its originating VJP and new tape type.
 std::string mangleAutoDiffSpecializedPullback(

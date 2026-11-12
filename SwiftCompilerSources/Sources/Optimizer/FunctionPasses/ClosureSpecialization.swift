@@ -3272,8 +3272,10 @@ let specializeBranchTracingEnums = FunctionTest("autodiff_specialize_branch_trac
   keys.sort(by: compareTypes)
 
   for (idx, key) in keys.enumerated() {
-    print("non-specialized BTE \(idx): \(key.nominal!.description)")
-    print("specialized BTE \(idx): \(specializedBTEDict[key]!.nominal!.description)")
+    let original = String(taking: key.nominal!.bridged.getDebugDescription(true))
+    let specialized = String(taking: specializedBTEDict[key]!.nominal!.bridged.getDebugDescription(true))
+    print("non-specialized BTE \(idx): \(original)")
+    print("specialized BTE \(idx): \(specialized)")
   }
   print("")
 }

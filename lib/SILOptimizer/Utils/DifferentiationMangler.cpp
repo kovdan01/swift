@@ -20,13 +20,18 @@ using namespace swift;
 using namespace Mangle;
 
 std::string Mangle::mangleAutoDiffSpecializedBranchTracingEnum(
-    StringRef prefix, CanType schema, CanGenericSignature signature) {
+    StringRef prefix, CanType schema, CanGenericSignature signature,
+    StringRef fileDiscriminator) {
   ASTMangler mangler(schema->getASTContext());
   auto key = mangler.mangleTypeForDebugger(schema, signature);
   if (signature) {
     ASTMangler signatureMangler(schema->getASTContext());
     key += signatureMangler.mangleGenericSignature(signature);
   }
+  // Separate primary-file compilations can specialize the same imported VJP.
+  // Its public tape metadata needs a distinct identity in each emitting file.
+  key += ":";
+  key += fileDiscriminator;
   // A digest keeps nested predecessor schemas from making names grow
   // exponentially. Layout consistency is asserted when the name is reused.
   MD5Stream stream;

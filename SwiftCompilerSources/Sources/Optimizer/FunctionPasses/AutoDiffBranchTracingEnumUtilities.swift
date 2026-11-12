@@ -163,6 +163,11 @@ private func getBranchTracingEnumLoweredType(ed: EnumDecl, vjp: Function) -> Typ
 }
 
 private func getSourceFileFor(derivative: Function) -> SourceFile {
+  // Imported VJPs have no source file of their own. Prefer the current primary
+  // file so that synthesized tape metadata is emitted in its IRGen partition.
+  if let sourceFile = SourceFile(bridged: derivative.bridged.getAssociatedSourceFile()) {
+    return sourceFile
+  }
   if let sourceFile = derivative.sourceFile {
     return sourceFile
   }
@@ -267,7 +272,7 @@ private func getSpecializedParamDeclForEnumCase(
 // Create a specialized EnumDecl for a given branch tracing enum. See getSpecializedParamDeclForEnumCase
 // for more info on how each enum case payload is specialized.
 // The specialized enum name includes the changed payload positions followed by
-// a digest of the complete canonical schema. For example:
+// a digest of the complete canonical schema and emitting file. For example:
 //   _AD__$xxx_bbA__Pred__xxx_spec_bbB_1_bbC_0_1_<schema digest>
 // This means that for enum case bbB closure at index 1 in payload tuple was replaced with
 // its captured arguments tuple, and for enum case bbC closures at indexes 0 and 1 were
@@ -282,7 +287,10 @@ private func autodiffSpecializeBranchTracingEnum(
   closuresInBTE.forEach { assert($0.enumCase.enumType(in: topVJP) == bteType) }
 
   let oldED = bteType.nominal as! EnumDecl
-  let declContext = oldED.parentDeclContext!
+  // A deserialized tape belongs to the imported module. Its specialized
+  // declaration must instead be owned by the file that registers and emits it.
+  let sourceFile = getSourceFileFor(derivative: topVJP)
+  let declContext = UnknownDeclContext(bridged: sourceFile.getOrCreateSynthesizedFileContext())
   let astContext = declContext.astContext
 
   var newEDName: String = oldED.name.string + "_spec"
@@ -313,7 +321,8 @@ private func autodiffSpecializeBranchTracingEnum(
   let schema = context.getTupleType(elements:
     [bteType.rawType.mapOutOfEnvironment()] + newPayloadTypes)
   newEDName = newEDName._withBridgedStringRef {
-    String(taking: context.bridgedPassContext.mangleAutoDiffBranchTracingEnum($0, schema.bridged, topVJP.bridged))
+    String(taking: context.bridgedPassContext.mangleAutoDiffBranchTracingEnum(
+      $0, schema.bridged, topVJP.bridged, sourceFile))
   }
   // Generic specialization can produce VJP variants with the same tape layout.
   // Share their declaration to avoid duplicating emitted enum metadata.
@@ -355,12 +364,19 @@ private func autodiffSpecializeBranchTracingEnum(
       equalsLoc: nil, rawValue: nil, astContext)
     newEED.setImplicit()
     newED.add(member: newEED)
+    // AST conformance inference visits case declarations, while SIL lowering
+    // visits elements. Keep both views of the enum's storage consistent.
+    let newCase = EnumCaseDecl.create(
+      declContext: newED, caseKeywordLoc: nil, elements: [newEED])
+    newCase.setImplicit()
+    newED.add(member: newCase)
   }
 
-  // TODO: we should probably copy access level from old EnumDecl, but
-  // for some reason it results in crashes for many existing tests
+  // Like the original branch-tracing enums, specialized tapes must never be
+  // resilient, even in a pullback with minimal resilience expansion.
   newED.setAccess(swift.AccessLevel.public)
-  getSourceFileFor(derivative: topVJP).addTopLevelDecl(newED.bridgedDecl)
+  newED.setFrozen()
+  sourceFile.addTopLevelDecl(newED.bridgedDecl)
 
   return getBranchTracingEnumLoweredType(ed: newED, vjp: topVJP)
 }
