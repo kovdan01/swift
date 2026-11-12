@@ -2808,6 +2808,11 @@ private struct PullbackClosureAnalysis {
           let pullback = paiOfPullback.referencedFunction,
           pullback.isDefinition, pullback.hasOwnership else { return nil }
 
+    // BTE specialization runs after serialization. Before then, newly exposed
+    // callback references or the shared specialized pullback may be unavailable
+    // to a serialized body. Decline before synthesizing any tape declarations.
+    guard !vjp.isAnySerialized, !pullback.isAnySerialized else { return nil }
+
     // Check the actual pullback after ordinary specialization. Capture
     // reconstruction consumes nontrivial tapes, as generated pullbacks do;
     // borrowed tapes require a different ownership rewrite.
