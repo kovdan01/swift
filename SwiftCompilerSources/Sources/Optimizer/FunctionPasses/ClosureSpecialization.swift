@@ -1495,6 +1495,10 @@ private func checkIfCanRun(vjp: Function, context: FunctionPassContext) -> BTESp
     )
     return .ineligible
   }
+  guard pb.isDefinition, pb.hasOwnership else {
+    log("\(prefixFail)pullback \(pb.name.string) has no body with ownership information")
+    return .ineligible
+  }
   guard computeTopologicalBlockOrder(of: pb) != nil else { return .ineligible }
   guard let bteArgOfPb = pb.entryBlock.getBranchTracingEnumArg(vjp: vjp) else {
     log(
@@ -2790,12 +2794,13 @@ private struct PullbackClosureAnalysis {
   var pullback: Function { paiOfPullback.referencedFunction! }
 
   init?(vjp: Function) {
-    guard let paiOfPullback = getPartialApplyOfPullbackInExitVJPBB(vjp: vjp) else { return nil }
+    guard let paiOfPullback = getPartialApplyOfPullbackInExitVJPBB(vjp: vjp),
+          let pullback = paiOfPullback.referencedFunction,
+          pullback.isDefinition, pullback.hasOwnership else { return nil }
 
     // Check the actual pullback after ordinary specialization. Capture
     // reconstruction consumes nontrivial tapes, as generated pullbacks do;
     // borrowed tapes require a different ownership rewrite.
-    let pullback = paiOfPullback.referencedFunction!
     for argument in pullback.entryBlock.arguments where argument.type.isBranchTracingEnum(in: vjp) {
       guard argument.type.isTrivial(in: pullback) || argument.ownership == .owned else { return nil }
     }
