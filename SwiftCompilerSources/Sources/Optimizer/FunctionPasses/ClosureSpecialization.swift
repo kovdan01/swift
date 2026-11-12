@@ -1830,7 +1830,7 @@ private func eraseDeadSpecializedClosures(
     }
 
     closuresSet.insert(closureInfo.closure)
-    for reabstraction in closureInfo.reabstractions {
+    for reabstraction in closureInfo.adapters {
       closuresSet.insert(reabstraction)
     }
   }
@@ -2162,11 +2162,23 @@ private func extractTupleElements(
   return elements
 }
 
+// The recipe belongs to the VJP; its contextual result type must be lowered
+// in the specialized pullback, just like the reconstructed thunk substitutions.
+private func recreateFunctionConversion(
+  _ conversion: ConvertFunctionInst, of closure: Value, builder: Builder
+) -> ConvertFunctionInst {
+  let function = closure.parentFunction
+  let type = function.mapTypeIntoEnvironment(conversion.type.rawType.mapOutOfEnvironment())
+    .canonical.loweredType(in: function)
+  return builder.createConvertFunction(
+    originalFunction: closure, resultType: type, kind: conversion.conversionKind)
+}
+
 private func rewriteApplyDirectClosure(
   ai: ApplyInst, closureInfo: ClosureInBTE, extractedElements: [Value],
   builder: Builder, _ context: FunctionPassContext
 ) {
-  if closureInfo.reabstractions.isEmpty {
+  if closureInfo.adapters.isEmpty {
     var capturedArguments = extractedElements
     var indirectCaptures = [(allocation: AllocStackInst, isTrivial: Bool)]()
     if let partialApply = closureInfo.closure as? PartialApplyInst {
@@ -2248,7 +2260,13 @@ private func rewriteApplyDirectClosure(
   var allNewClosures : [SingleValueInstruction] = [rootClosure]
 
   var currentClosure = rootClosure
-  for reabstraction in closureInfo.reabstractions.dropLast() {
+  for adapter in closureInfo.adapters.dropLast() {
+    if let conversion = adapter as? ConvertFunctionInst {
+      currentClosure = recreateFunctionConversion(conversion, of: currentClosure, builder: builder)
+      allNewClosures.append(currentClosure)
+      continue
+    }
+    let reabstraction = adapter as! PartialApplyInst
     let reabstractionFn = reabstraction.asSupportedClosureFn!
     let reabstractionFri = builder.createFunctionRef(reabstractionFn)
     let newReabstraction = builder.createPartialApply(
@@ -2264,14 +2282,27 @@ private func rewriteApplyDirectClosure(
     allNewClosures.append(newReabstraction)
   }
 
-  var newArgs = Array(ai.arguments)
-  newArgs.append(currentClosure)
-  let fn = closureInfo.reabstractions.last!.asSupportedClosureFn!
-  let newFriForAi = builder.createFunctionRef(fn)
-  let newAi = builder.createApply(
-    function: newFriForAi,
-    closureInfo.reabstractions.last!.substitutionMap.substitute(with: ai.parentFunction.forwardingSubstitutionMap),
-    arguments: newArgs)
+  let newAi: ApplyInst
+  if let conversion = closureInfo.adapters.last as? ConvertFunctionInst {
+    let convertedClosure = recreateFunctionConversion(conversion, of: currentClosure, builder: builder)
+    allNewClosures.append(convertedClosure)
+    // Keep the converted callable's ABI. SILCombine subsequently folds the
+    // conversion and partial application, including any required argument casts.
+    newAi = builder.createApply(
+      function: convertedClosure, ai.substitutionMap, arguments: Array(ai.arguments),
+      isNonThrowing: ai.isNonThrowing, isNonAsync: ai.isNonAsync,
+      specializationInfo: ai.specializationInfo, argumentLocationsFrom: ai)
+  } else {
+    let reabstraction = closureInfo.adapters.last as! PartialApplyInst
+    var newArgs = Array(ai.arguments)
+    newArgs.append(currentClosure)
+    let fn = reabstraction.asSupportedClosureFn!
+    let newFriForAi = builder.createFunctionRef(fn)
+    newAi = builder.createApply(
+      function: newFriForAi,
+      reabstraction.substitutionMap.substitute(with: ai.parentFunction.forwardingSubstitutionMap),
+      arguments: newArgs)
+  }
   ai.replace(with: newAi, context)
 
   for newClosure in allNewClosures.reversed() {
@@ -2494,7 +2525,7 @@ private func findOptionalNoneMatchingOptionalSome(
 
       let info = ClosureInBTE(
         closure: closureInBTE.closure,
-        reabstractions: closureInBTE.reabstractions,
+        adapters: closureInBTE.adapters,
         optionalWrapper: optionalNone,
         useInPayload: payloadTuple.operands.last!,
         enumCase: bteWithNone.type.getEnumCases(in: vjp)![bteWithNone.caseIndex]!
@@ -2660,10 +2691,17 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
   let vjp = rootClosure.parentFunction
   var closuresInBTE = [ClosureInBTE]()
 
-  var reabstractions = [PartialApplyInst]()
+  var adapters = [SingleValueInstruction]()
   var currentClosure = rootClosure
   while let singleUse = currentClosure.uses.singleElement {
-    // TODO: handle other stuff like convert_function, thin_to_thick_function, etc
+    if let conversion = singleUse.instruction as? ConvertFunctionInst {
+      // Preserve ordinary ABI conversions in the reconstruction recipe. The
+      // scoped escaping/discarding conversions require separate lifetime rules.
+      guard conversion.conversionKind == .ordinary else { return [] }
+      currentClosure = conversion
+      adapters.append(conversion)
+      continue
+    }
     guard let pai = singleUse.instruction as? PartialApplyInst else {
       break
     }
@@ -2676,7 +2714,7 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
     guard pai.asSupportedClosure != nil else { return [] }
 
     currentClosure = pai
-    reabstractions.append(pai)
+    adapters.append(pai)
   }
 
   // Generated taped pullbacks are nonthrowing. Leave unexpected throwing
@@ -2708,7 +2746,7 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
       let enumCase = ei.type.getEnumCases(in: vjp)![ei.caseIndex]!
       let closureInBTE = ClosureInBTE(
         closure: rootClosure,
-        reabstractions: reabstractions,
+        adapters: adapters,
         optionalWrapper: optionalWrapper,
         useInPayload: use,
         enumCase: enumCase
@@ -2726,18 +2764,18 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
 
 private func findClosuresInBTE(paiOfPullback: PartialApplyInst, bteTypes: Set<Type>) -> [ClosureInBTE]? {
   let vjp = paiOfPullback.parentFunction
-  var reabstractions = Set<SingleValueInstruction>()
+  var adapters = Set<SingleValueInstruction>()
   var closuresInBTE = [ClosureInBTE]()
   for inst in vjp.instructions {
     guard inst != paiOfPullback,
           let rootClosure = inst.asSupportedClosure,
-          !reabstractions.contains(rootClosure)
+          !adapters.contains(rootClosure)
     else {
       continue
     }
 
     guard let currentClosuresInBTE = findBTEUses(for: rootClosure) else { return nil }
-    reabstractions.formUnion(currentClosuresInBTE.flatMap(\.reabstractions))
+    adapters.formUnion(currentClosuresInBTE.flatMap(\.adapters))
     // Keep a shared root opaque if any of its payload uses remains outside
     // this plan. Its captures cannot be consumed while that closure survives.
     if currentClosuresInBTE.allSatisfy({ bteTypes.contains($0.enumCase.enumType(in: vjp)) }) {
@@ -2967,7 +3005,7 @@ private func analyzePayloadFlows(
         guard commonPlan.count == plan.count,
               plan.allSatisfy({ info in commonPlan.contains(where: {
                 $0.indexInPayload == info.indexInPayload && $0.closure == info.closure
-                  && $0.reabstractions == info.reabstractions
+                  && $0.adapters == info.adapters
                   && $0.optionalWrapper == info.optionalWrapper
               }) }) else { return nil }
       } else {
@@ -3009,10 +3047,10 @@ private func analyzePayloadFlows(
 
 extension ClosureInBTE {
   /// The value that actually appears as the payload-tuple operand for this closure:
-  /// the subset thunk if present, otherwise the optional-wrapper enum, otherwise the raw closure.
+  /// the optional wrapper, outermost adapter, or raw closure.
   var valueInPayload: Value {
     if let optionalWrapper { return optionalWrapper }
-    if let reabstraction = reabstractions.last { return reabstraction }
+    if let reabstraction = adapters.last { return reabstraction }
     return closure
   }
 }
@@ -3251,11 +3289,11 @@ let getAutoDiffSpecializationInfoTest = FunctionTest("autodiff_get_specializatio
   for closureInBTE in autodiffSpecializationInfo.closuresInBTE {
     print("    ClosureInBTE(")
     print("      closure: \(closureInBTE.closure)")
-    print("      reabstractions: " + (closureInBTE.reabstractions.isEmpty ? "[]" : "["))
-    for reabstraction in closureInBTE.reabstractions {
+    print("      adapters: " + (closureInBTE.adapters.isEmpty ? "[]" : "["))
+    for reabstraction in closureInBTE.adapters {
       print("        \(reabstraction)")
     }
-    if !closureInBTE.reabstractions.isEmpty {
+    if !closureInBTE.adapters.isEmpty {
       print("    ]")
     }
     print("      optionalWrapper: " + (closureInBTE.optionalWrapper == nil ? "nil" : "\(closureInBTE.optionalWrapper!)"))

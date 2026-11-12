@@ -26,7 +26,9 @@ extension TupleInst {
 // Information required to specialize one closure stored in a payload tuple of a branch tracing enum case.
 struct ClosureInBTE : Equatable {
   let closure: SingleValueInstruction
-  let reabstractions: [PartialApplyInst]
+  // Ordered from the root closure to its stored callable: ordinary function
+  // conversions and supported reabstraction/subset thunk partial applications.
+  let adapters: [SingleValueInstruction]
   let optionalWrapper: EnumInst?
   let useInPayload: Operand
   let enumCase: EnumCase
