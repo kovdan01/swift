@@ -22,6 +22,10 @@
 
 namespace swift {
 
+/// Whether a branch-tracing enum belongs to the primal entity of this VJP,
+/// including specialized variants of the VJP.
+bool isAutodiffBranchTracingEnumInVJP(SILType type, SILFunction *vjp);
+
 namespace Mangle {
 
 /// A deterministic name for a specialized tape layout in its generic context

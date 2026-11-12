@@ -14,10 +14,71 @@
 #include "swift/AST/AutoDiff.h"
 #include "swift/AST/GenericSignature.h"
 #include "swift/Basic/MD5Stream.h"
+#include "swift/Demangling/ManglingMacros.h"
 #include "swift/SILOptimizer/Utils/SpecializationMangler.h"
 
 using namespace swift;
 using namespace Mangle;
+
+// See also ASTMangler::mangleAutoDiffGeneratedDeclaration.
+bool swift::isAutodiffBranchTracingEnumInVJP(SILType type, SILFunction *vjp) {
+  EnumDecl *ed = type.getEnumDecl();
+  if (ed == nullptr)
+    return false;
+
+  llvm::StringRef edName = ed->getNameStr();
+  if (!edName.starts_with("_AD__"))
+    return false;
+  if (!llvm::StringRef(edName.data() + 5, edName.size() - 5)
+           .starts_with(MANGLING_PREFIX_STR))
+    return false;
+
+  // At this point, we know that the type is indeed a branch tracing enum.
+  // Now we need to ensure that it is the enum related to the given VJP.
+
+  std::size_t idx = edName.rfind("__Pred__");
+  assert(idx != std::string::npos);
+
+  // Before "__Pred__", we have "_bbX", where X is a number.
+  // The loop calculates the start position of X.
+  for (; idx != 0 && std::isdigit(edName[idx - 1]); --idx)
+    ;
+
+  assert(std::isdigit(edName[idx]));
+  assert(!std::isdigit(edName[idx - 1]));
+
+  // The branch tracing enum decl name has the following components:
+  // 1) "_AD__";
+  // 2) MANGLING_PREFIX;
+  // 3) original function name;
+  // 4) "_bb";
+  // 5) X at position idx (see above);
+  // 6) the rest of the enum decl name.
+  // Thus, "_AD__", MANGLING_PREFIX and "_bb" must have total length less than
+  // idx.
+  std::size_t manglingPrefixSize = std::strlen(MANGLING_PREFIX_STR);
+  assert(idx > 5 + manglingPrefixSize + 3);
+  assert(std::string_view(edName.data() + idx - 3, 3) == "_bb");
+  assert(std::string_view(edName.data(), 5 + manglingPrefixSize) == "_AD__$s");
+
+  llvm::StringRef enumOrigFuncName =
+      std::string_view(edName.data() + 5 + manglingPrefixSize,
+                       idx - (5 + manglingPrefixSize + 3));
+
+  Demangle::Context Ctx;
+  auto *root = Ctx.demangleSymbolAsNode(vjp->getName());
+  if (!root)
+    return false;
+  auto *derivative = root->findByKind(Demangle::Node::Kind::AutoDiffFunction,
+                                      /*maxDepth=*/3);
+  if (!derivative)
+    return false;
+
+  // The derivative's first child is its primal entity. It can be a getter or
+  // closure as well as a named function. Searching for a Function node instead
+  // can miss these entities or find a closure's enclosing function.
+  return mangleNode(derivative->getFirstChild()).result() == enumOrigFuncName;
+}
 
 std::string Mangle::mangleAutoDiffSpecializedBranchTracingEnum(
     StringRef prefix, CanType schema, CanGenericSignature signature,
