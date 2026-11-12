@@ -2545,6 +2545,12 @@ private extension Instruction {
       return tttf
     case let pai as PartialApplyInst
     where pai.callee is FunctionRefInst:
+      // An opened existential substitution implicitly captures metadata and
+      // witnesses whose defining instruction belongs to the VJP. Explicit
+      // capture arguments alone cannot reconstruct that environment in the pullback.
+      guard !pai.substitutionMap.replacementTypes.contains(where: { $0.hasExistentialArchetype }) else {
+        return nil
+      }
       // BTE specialization loads and removes indirect captures, so it requires
       // a dedicated stack allocation even for conventions supported by the general pass.
       for op in pai.argumentOperands {
@@ -2660,6 +2666,7 @@ private func findBTEUses(for rootClosure: SingleValueInstruction) -> [ClosureInB
     // a root even when its only capture is another function.
     guard pai.callee is FunctionRefInst else { return nil }
     guard pai.isPartialApplyOfThunk else { break }
+    guard pai.asSupportedClosure != nil else { return [] }
 
     currentClosure = pai
     reabstractions.append(pai)
