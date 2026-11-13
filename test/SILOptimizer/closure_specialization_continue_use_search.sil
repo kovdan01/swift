@@ -1,0 +1,238 @@
+// RUN: %target-sil-opt -sil-print-types -enable-sil-verify-all -closure-specialization -module-name ClosureUseSearch %s | %FileCheck %s --check-prefixes=ORDINARY,THUNK,NEGATIVE
+//
+// Literal pre-pass SIL generated from closure_specialization_continue_use_search.swift:
+//   %target-swift-frontend -emit-sil -O -parse-as-library -module-name ClosureUseSearch -Xllvm -sil-print-around=closure-specialization %S/closure_specialization_continue_use_search.swift
+//
+// The bodies below are copied verbatim from the first ClosureSpecialize-stage
+// pre-pass dumps, together with their transitive function dependencies. Only
+// unrelated function definitions are omitted. No instructions, types, ownership,
+// attributes, operand order, debug information, or control flow were changed.
+//
+// The returned ordinary wrapper and reabstraction thunk are not applied inside
+// their respective callees. Searching either must continue to the direct apply.
+// deferOnly is the negative case: it captures a callback but never applies it.
+
+// ORDINARY-LABEL: sil {{.*}}@$s16ClosureUseSearch6update{{.*}} :
+// ORDINARY-NOT: partial_apply
+// ORDINARY: function_ref @{{.*}}11runAndDefer{{.*}}Tf1{{.*}} : $@convention(thin) (Float, Float)
+// ORDINARY-NOT: partial_apply
+// ORDINARY: apply
+// ORDINARY-NEXT: return
+// THUNK-LABEL: sil {{.*}}@$s16ClosureUseSearch9updateBox{{.*}} :
+// THUNK-NOT: partial_apply
+// THUNK: function_ref @{{.*}}9runAndBox{{.*}}Tf1{{.*}} : $@convention(thin) (Float, Float)
+// THUNK-NOT: partial_apply
+// THUNK: apply
+// THUNK-NEXT: return
+// NEGATIVE-LABEL: sil {{.*}}@$s16ClosureUseSearch12unusedUpdate{{.*}} :
+// NEGATIVE: partial_apply
+// NEGATIVE: function_ref @{{.*}}9deferOnly{{.*}} : $@convention(thin) (@owned @callee_guaranteed (Float) -> Float)
+// NEGATIVE: apply
+// NEGATIVE-NEXT: return
+
+sil_stage canonical
+
+import Builtin
+import Swift
+import SwiftShims
+
+@inline(never) public func runAndDefer(_ value: Float, _ body: consuming @escaping (Float) -> Float) -> (Float, (Float) -> Float)
+
+public func update(_ value: Float, _ factor: Float) -> (Float, (Float) -> Float)
+
+public struct CallbackBox<T> {
+  @_hasStorage public var body: (T) -> T { get set }
+  init(body: @escaping (T) -> T)
+}
+
+@inline(never) public func runAndBox(_ value: Float, _ body: consuming @escaping (Float) -> Float) -> (Float, CallbackBox<Float>)
+
+public func updateBox(_ value: Float, _ factor: Float) -> (Float, CallbackBox<Float>)
+
+@inline(never) public func deferOnly(_ body: consuming @escaping (Float) -> Float) -> (Float) -> Float
+
+public func unusedUpdate(_ factor: Float) -> (Float) -> Float
+
+sil [noinline] [ossa] @$s16ClosureUseSearch11runAndDeferySf_S2fctSf_S2fcntF : $@convention(thin) (Float, @owned @callee_guaranteed (Float) -> Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) {
+[%0: read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[%1: escape v** -> %r.1.v**, escape v**.c*.v** -> %r.1.v**.c*.v**, read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0 "value"                                     // users: %4, %2
+// %1 "body"                                      // users: %3, %7, %4
+bb0(%0 : $Float, %1 : @noImplicitCopy @_eagerMove @owned $@callee_guaranteed (Float) -> Float):
+  debug_value %0, let, name "value", argno 1      // id: %2
+  debug_value %1, var, name "body", argno 2       // id: %3
+  %4 = apply %1(%0) : $@callee_guaranteed (Float) -> Float // users: %5, %10
+  debug_value %4, let, name "result"              // id: %5
+  // function_ref closure #1 in runAndDefer(_:_:)
+  %6 = function_ref @$s16ClosureUseSearch11runAndDeferySf_S2fctSf_S2fcntFS2fcfU_ : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> Float) -> Float // user: %7
+  %7 = partial_apply [callee_guaranteed] %6(%1) : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> Float) -> Float // users: %10, %8
+  debug_value %7, let, name "deferred"            // id: %8
+  debug_value [moveable_value_debuginfo] undef : $*@callee_guaranteed (Float) -> Float, var, name "body", argno 2, expr op_deref // id: %9
+  %10 = tuple (%4, %7)                            // user: %11
+  return %10                                      // id: %11
+} // end sil function '$s16ClosureUseSearch11runAndDeferySf_S2fctSf_S2fcntF'
+
+sil private [ossa] @$s16ClosureUseSearch11runAndDeferySf_S2fctSf_S2fcntFS2fcfU_ : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> Float) -> Float {
+[%0: read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[%1: noescape **, read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0 "next"                                      // users: %4, %2
+// %1 "body"                                      // users: %4, %3
+bb0(%0 : $Float, %1 : @closureCapture @guaranteed $@callee_guaranteed (Float) -> Float):
+  debug_value %0, let, name "next", argno 1       // id: %2
+  debug_value %1, let, name "body", argno 2       // id: %3
+  %4 = apply %1(%0) : $@callee_guaranteed (Float) -> Float // user: %5
+  return %4                                       // id: %5
+} // end sil function '$s16ClosureUseSearch11runAndDeferySf_S2fctSf_S2fcntFS2fcfU_'
+
+sil [ossa] @$s16ClosureUseSearch6updateySf_S2fctSf_SftF : $@convention(thin) (Float, Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) {
+[%0: read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0 "value"                                     // users: %7, %2
+// %1 "factor"                                    // users: %5, %3
+bb0(%0 : $Float, %1 : $Float):
+  debug_value %0, let, name "value", argno 1      // id: %2
+  debug_value %1, let, name "factor", argno 2     // id: %3
+  // function_ref closure #1 in update(_:_:)
+  %4 = function_ref @$s16ClosureUseSearch6updateySf_S2fctSf_SftFS2fcfU_ : $@convention(thin) (Float, Float) -> Float // user: %5
+  %5 = partial_apply [callee_guaranteed] %4(%1) : $@convention(thin) (Float, Float) -> Float // user: %7
+  // function_ref runAndDefer(_:_:)
+  %6 = function_ref @$s16ClosureUseSearch11runAndDeferySf_S2fctSf_S2fcntF : $@convention(thin) (Float, @owned @callee_guaranteed (Float) -> Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) // user: %7
+  %7 = apply %6(%0, %5) : $@convention(thin) (Float, @owned @callee_guaranteed (Float) -> Float) -> (Float, @owned @callee_guaranteed (Float) -> Float) // user: %8
+  return %7                                       // id: %8
+} // end sil function '$s16ClosureUseSearch6updateySf_S2fctSf_SftF'
+
+sil private [ossa] @$s16ClosureUseSearch6updateySf_S2fctSf_SftFS2fcfU_ : $@convention(thin) (Float, Float) -> Float {
+[global: ]
+// %0 "$0"                                        // users: %3, %2
+// %1 "factor"                                    // user: %4
+bb0(%0 : $Float, %1 : @closureCapture $Float):
+  debug_value %0, let, name "$0", argno 1         // id: %2
+  %3 = struct_extract %0, #Float._value           // user: %5
+  %4 = struct_extract %1, #Float._value           // user: %5
+  %5 = builtin "fmul_FPIEEE32"(%3, %4) : $Builtin.FPIEEE32 // user: %6
+  %6 = struct $Float (%5)                         // user: %7
+  return %6                                       // id: %7
+} // end sil function '$s16ClosureUseSearch6updateySf_S2fctSf_SftFS2fcfU_'
+
+sil [noinline] [ossa] @$s16ClosureUseSearch9runAndBoxySf_AA08CallbackF0VySfGtSf_S2fcntF : $@convention(thin) (Float, @owned @callee_guaranteed (Float) -> Float) -> (Float, @owned CallbackBox<Float>) {
+[%0: read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[%1: read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0 "value"                                     // users: %5, %2
+// %1 "body"                                      // users: %8, %5, %4, %3
+bb0(%0 : $Float, %1 : @noImplicitCopy @_eagerMove @owned $@callee_guaranteed (Float) -> Float):
+  debug_value %0, let, name "value", argno 1      // id: %2
+  debug_value %1, var, name "body", argno 2       // id: %3
+  debug_value %1, let, name "function"            // id: %4
+  %5 = apply %1(%0) : $@callee_guaranteed (Float) -> Float // users: %6, %12
+  debug_value %5, let, name "result"              // id: %6
+  // function_ref thunk for @escaping @callee_guaranteed (@unowned Float) -> (@unowned Float)
+  %7 = function_ref @$sS2fIegyd_S2fIegnr_TR : $@convention(thin) (@in_guaranteed Float, @guaranteed @callee_guaranteed (Float) -> Float) -> @out Float // user: %8
+  %8 = partial_apply [callee_guaranteed] %7(%1) : $@convention(thin) (@in_guaranteed Float, @guaranteed @callee_guaranteed (Float) -> Float) -> @out Float // user: %9
+  %9 = convert_function %8 to $@callee_guaranteed @substituted <τ_0_0, τ_0_1> (@in_guaranteed τ_0_0) -> @out τ_0_1 for <Float, Float> // user: %10
+  %10 = struct $CallbackBox<Float> (%9)           // user: %12
+  debug_value [moveable_value_debuginfo] undef : $*@callee_guaranteed (Float) -> Float, var, name "body", argno 2, expr op_deref // id: %11
+  %12 = tuple (%5, %10)                           // user: %13
+  return %12                                      // id: %13
+} // end sil function '$s16ClosureUseSearch9runAndBoxySf_AA08CallbackF0VySfGtSf_S2fcntF'
+
+sil shared [transparent] [reabstraction_thunk] [ossa] @$sS2fIegyd_S2fIegnr_TR : $@convention(thin) (@in_guaranteed Float, @guaranteed @callee_guaranteed (Float) -> Float) -> @out Float {
+[%0: write v**]
+[%1: read v**]
+[%2: noescape **, read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0                                             // user: %5
+// %1                                             // user: %3
+// %2                                             // user: %4
+bb0(%0 : $*Float, %1 : $*Float, %2 : @guaranteed $@callee_guaranteed (Float) -> Float):
+  %3 = load [trivial] %1                          // user: %4
+  %4 = apply %2(%3) : $@callee_guaranteed (Float) -> Float // user: %5
+  store %4 to [trivial] %0                        // id: %5
+  %6 = tuple ()                                   // user: %7
+  return %6                                       // id: %7
+} // end sil function '$sS2fIegyd_S2fIegnr_TR'
+
+sil [ossa] @$s16ClosureUseSearch9updateBoxySf_AA08CallbackE0VySfGtSf_SftF : $@convention(thin) (Float, Float) -> (Float, @owned CallbackBox<Float>) {
+[%0: read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0 "value"                                     // users: %7, %2
+// %1 "factor"                                    // users: %5, %3
+bb0(%0 : $Float, %1 : $Float):
+  debug_value %0, let, name "value", argno 1      // id: %2
+  debug_value %1, let, name "factor", argno 2     // id: %3
+  // function_ref closure #1 in updateBox(_:_:)
+  %4 = function_ref @$s16ClosureUseSearch9updateBoxySf_AA08CallbackE0VySfGtSf_SftFS2fcfU_ : $@convention(thin) (Float, Float) -> Float // user: %5
+  %5 = partial_apply [callee_guaranteed] %4(%1) : $@convention(thin) (Float, Float) -> Float // user: %7
+  // function_ref runAndBox(_:_:)
+  %6 = function_ref @$s16ClosureUseSearch9runAndBoxySf_AA08CallbackF0VySfGtSf_S2fcntF : $@convention(thin) (Float, @owned @callee_guaranteed (Float) -> Float) -> (Float, @owned CallbackBox<Float>) // user: %7
+  %7 = apply %6(%0, %5) : $@convention(thin) (Float, @owned @callee_guaranteed (Float) -> Float) -> (Float, @owned CallbackBox<Float>) // user: %8
+  return %7                                       // id: %8
+} // end sil function '$s16ClosureUseSearch9updateBoxySf_AA08CallbackE0VySfGtSf_SftF'
+
+sil private [ossa] @$s16ClosureUseSearch9updateBoxySf_AA08CallbackE0VySfGtSf_SftFS2fcfU_ : $@convention(thin) (Float, Float) -> Float {
+[global: ]
+// %0 "$0"                                        // users: %3, %2
+// %1 "factor"                                    // user: %4
+bb0(%0 : $Float, %1 : @closureCapture $Float):
+  debug_value %0, let, name "$0", argno 1         // id: %2
+  %3 = struct_extract %0, #Float._value           // user: %5
+  %4 = struct_extract %1, #Float._value           // user: %5
+  %5 = builtin "fmul_FPIEEE32"(%3, %4) : $Builtin.FPIEEE32 // user: %6
+  %6 = struct $Float (%5)                         // user: %7
+  return %6                                       // id: %7
+} // end sil function '$s16ClosureUseSearch9updateBoxySf_AA08CallbackE0VySfGtSf_SftFS2fcfU_'
+
+sil [noinline] [ossa] @$s16ClosureUseSearch9deferOnlyyS2fcS2fcnF : $@convention(thin) (@owned @callee_guaranteed (Float) -> Float) -> @owned @callee_guaranteed (Float) -> Float {
+[%0: escape v** -> %r.v**, escape v**.c*.v** -> %r.v**.c*.v**]
+[global: ]
+// %0 "body"                                      // users: %1, %3
+bb0(%0 : @noImplicitCopy @_eagerMove @owned $@callee_guaranteed (Float) -> Float):
+  debug_value %0, var, name "body", argno 1       // id: %1
+  // function_ref closure #1 in deferOnly(_:)
+  %2 = function_ref @$s16ClosureUseSearch9deferOnlyyS2fcS2fcnFS2fcfU_ : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> Float) -> Float // user: %3
+  %3 = partial_apply [callee_guaranteed] %2(%0) : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> Float) -> Float // user: %5
+  debug_value [moveable_value_debuginfo] undef : $*@callee_guaranteed (Float) -> Float, var, name "body", argno 1, expr op_deref // id: %4
+  return %3                                       // id: %5
+} // end sil function '$s16ClosureUseSearch9deferOnlyyS2fcS2fcnF'
+
+sil private [ossa] @$s16ClosureUseSearch9deferOnlyyS2fcS2fcnFS2fcfU_ : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> Float) -> Float {
+[%0: read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[%1: noescape **, read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0 "value"                                     // users: %4, %2
+// %1 "body"                                      // users: %4, %3
+bb0(%0 : $Float, %1 : @closureCapture @guaranteed $@callee_guaranteed (Float) -> Float):
+  debug_value %0, let, name "value", argno 1      // id: %2
+  debug_value %1, let, name "body", argno 2       // id: %3
+  %4 = apply %1(%0) : $@callee_guaranteed (Float) -> Float // user: %5
+  return %4                                       // id: %5
+} // end sil function '$s16ClosureUseSearch9deferOnlyyS2fcS2fcnFS2fcfU_'
+
+sil [ossa] @$s16ClosureUseSearch12unusedUpdateyS2fcSfF : $@convention(thin) (Float) -> @owned @callee_guaranteed (Float) -> Float {
+[global: ]
+// %0 "factor"                                    // users: %3, %1
+bb0(%0 : $Float):
+  debug_value %0, let, name "factor", argno 1     // id: %1
+  // function_ref closure #1 in unusedUpdate(_:)
+  %2 = function_ref @$s16ClosureUseSearch12unusedUpdateyS2fcSfFS2fcfU_ : $@convention(thin) (Float, Float) -> Float // user: %3
+  %3 = partial_apply [callee_guaranteed] %2(%0) : $@convention(thin) (Float, Float) -> Float // user: %5
+  // function_ref deferOnly(_:)
+  %4 = function_ref @$s16ClosureUseSearch9deferOnlyyS2fcS2fcnF : $@convention(thin) (@owned @callee_guaranteed (Float) -> Float) -> @owned @callee_guaranteed (Float) -> Float // user: %5
+  %5 = apply %4(%3) : $@convention(thin) (@owned @callee_guaranteed (Float) -> Float) -> @owned @callee_guaranteed (Float) -> Float // user: %6
+  return %5                                       // id: %6
+} // end sil function '$s16ClosureUseSearch12unusedUpdateyS2fcSfF'
+
+sil private [ossa] @$s16ClosureUseSearch12unusedUpdateyS2fcSfFS2fcfU_ : $@convention(thin) (Float, Float) -> Float {
+[global: ]
+// %0 "$0"                                        // users: %3, %2
+// %1 "factor"                                    // user: %4
+bb0(%0 : $Float, %1 : @closureCapture $Float):
+  debug_value %0, let, name "$0", argno 1         // id: %2
+  %3 = struct_extract %0, #Float._value           // user: %5
+  %4 = struct_extract %1, #Float._value           // user: %5
+  %5 = builtin "fmul_FPIEEE32"(%3, %4) : $Builtin.FPIEEE32 // user: %6
+  %6 = struct $Float (%5)                         // user: %7
+  return %6                                       // id: %7
+} // end sil function '$s16ClosureUseSearch12unusedUpdateyS2fcSfFS2fcfU_'

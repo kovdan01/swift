@@ -1,0 +1,196 @@
+// RUN: %target-sil-opt -sil-print-types -enable-sil-verify-all -autodiff-closure-specialization %s | %FileCheck %s
+//
+// This SIL is derived from continue_closure_use_search.swift immediately before
+// AutoDiff closure specialization of regimeStep. Executable instructions,
+// closure captures, and use order are unchanged. Debug-only instructions and
+// unrelated definitions are omitted; printed enum payload syntax is normalized.
+//
+// The generated pullback captures a closure in an unused subset adapter and
+// passes another copy to a live call. A failed recursive search through the
+// unused adapter must continue searching the closure's other uses.
+//
+// CHECK-LABEL: sil hidden {{.*}}@{{.*}}10regimeStep{{.*}}TJrSSSpSr :
+// CHECK: [[PULLBACK:%[0-9]+]] = partial_apply
+// CHECK-NOT: partial_apply
+// CHECK: [[RESULT:%[0-9]+]] = tuple ({{.*}}, [[PULLBACK]] :
+// CHECK-NEXT: return [[RESULT]]
+// CHECK-NEXT: } // end sil function
+
+sil_stage canonical
+
+import Builtin
+import Swift
+import _Differentiation
+
+enum _AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb1__Pred__src_0_wrt_0_1_2 {
+  case bb0(())
+}
+
+enum _AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb2__Pred__src_0_wrt_0_1_2 {
+  case bb0(())
+}
+
+enum _AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb3__Pred__src_0_wrt_0_1_2 {
+  case bb2(predecessor: _AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb2__Pred__src_0_wrt_0_1_2)
+  case bb1(predecessor: _AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb1__Pred__src_0_wrt_0_1_2)
+}
+
+sil hidden_external [ossa] @$s18closure_use_search15filmCoefficientyS2f_SftFTJpSSpSr073$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktm1_n5FZSf_N6SfcfU_S2fACS2f0fg1_h3E7_j11Add3lhs3rhsl1_m1_nom1_np1_nQ2U_ACS2fTf1nEEcE_n : $@convention(thin) (Float, Float, Float, Float, Float, Float, Float) -> (Float, Float)
+
+sil hidden_external [ossa] @$s18closure_use_search8heatFlowyS2f_S2ftFTJpSSSpSr073$sSf16_DifferentiationE12_vjpSubtract3lhs3rhsSf5value_Sf_SftSfc8pullbacktm1_n5FZSf_N6SfcfU_0fg1_hi1_j16Multiply3lhs3rhsl1_m1_nom1_np1_nQ2U_S2fTf1ncE_n : $@convention(thin) (Float, Float, Float) -> (Float, Float, Float)
+
+sil hidden_external [ossa] @$s18closure_use_search8heatFlowyS2f_S2ftFTJpSSSpSr : $@convention(thin) (Float, @owned @callee_guaranteed (Float) -> (Float, Float), @owned @callee_guaranteed (Float) -> (Float, Float)) -> (Float, Float, Float)
+
+sil hidden_external [ossa] @$s18closure_use_search9eulerStepyS2f_S2ftFTJpSSSpSr073$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktm1_n5FZSf_N6SfcfU_S2f0fg1_h3E7_j11Add3lhs3rhsl1_m1_nom1_np1_nQ2U_Tf1nEc_n : $@convention(thin) (Float, Float, Float) -> (Float, Float, Float)
+
+sil hidden [ossa] @$s18closure_use_search10regimeStepyS2f_S2ftFTJrSSSpSr : $@convention(thin) (Float, Float, Float) -> (Float, @owned @callee_guaranteed (Float) -> (Float, Float, Float)) {
+[global: ]
+// %0                                             // users: %55, %44, %6, %3
+// %1                                             // users: %47, %45, %4
+// %2                                             // users: %42, %42, %31, %27, %5
+bb0(%0 : $Float, %1 : $Float, %2 : $Float):
+  %6 = struct_extract %0, #Float._value           // users: %59, %48, %8
+  %7 = float_literal $Builtin.FPIEEE32, 0x41A80000 // 21 // user: %8
+  %8 = builtin "fcmp_olt_FPIEEE32"(%7, %6) : $Builtin.Int1 // user: %10
+  %9 = tuple ()                                   // users: %18, %11
+  cond_br %8, bb1, bb2                            // id: %10
+
+bb1:                                              // Preds: bb0
+  %11 = enum $_AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb1__Pred__src_0_wrt_0_1_2, #_AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb1__Pred__src_0_wrt_0_1_2.bb0!enumelt, %9 // user: %15
+  %12 = float_literal $Builtin.FPIEEE32, 0x3FA7AE14 // 1.30999994 // users: %14, %13
+  %13 = struct $Float (%12)                       // user: %17
+  %15 = tuple $(predecessor: _AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb1__Pred__src_0_wrt_0_1_2) (%11) // user: %16
+  %16 = enum $_AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb3__Pred__src_0_wrt_0_1_2, #_AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb3__Pred__src_0_wrt_0_1_2.bb1!enumelt, %15 // user: %17
+  br bb3(%16, %13)                                // id: %17
+
+bb2:                                              // Preds: bb0
+  %18 = enum $_AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb2__Pred__src_0_wrt_0_1_2, #_AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb2__Pred__src_0_wrt_0_1_2.bb0!enumelt, %9 // user: %22
+  %19 = float_literal $Builtin.FPIEEE32, 0x3FE7AE14 // 1.80999994 // users: %21, %20
+  %20 = struct $Float (%19)                       // user: %24
+  %22 = tuple $(predecessor: _AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb2__Pred__src_0_wrt_0_1_2) (%18) // user: %23
+  %23 = enum $_AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb3__Pred__src_0_wrt_0_1_2, #_AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb3__Pred__src_0_wrt_0_1_2.bb2!enumelt, %22 // user: %24
+  br bb3(%23, %20)                                // id: %24
+
+// %25                                            // user: %64
+// %26                                            // users: %42, %38, %28
+bb3(%25 : $_AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb3__Pred__src_0_wrt_0_1_2, %26 : $Float): // Preds: bb1 bb2
+  %29 = float_literal $Builtin.FPIEEE32, 0x3C23D70A // 0.00999999977 // users: %32, %30
+  %30 = struct $Float (%29)                       // user: %42
+  %31 = struct_extract %2, #Float._value          // users: %35, %34, %32
+  %32 = builtin "fmul_FPIEEE32"(%29, %31) : $Builtin.FPIEEE32 // users: %34, %33
+  %33 = struct $Float (%32)                       // user: %42
+  %34 = builtin "fmul_FPIEEE32"(%32, %31) : $Builtin.FPIEEE32 // user: %35
+  %35 = builtin "fadd_FPIEEE32"(%31, %34) : $Builtin.FPIEEE32 // users: %39, %36
+  %36 = struct $Float (%35)                       // users: %42, %37
+  %38 = struct_extract %26, #Float._value         // user: %39
+  %39 = builtin "fmul_FPIEEE32"(%38, %35) : $Builtin.FPIEEE32 // users: %50, %40
+  %40 = struct $Float (%39)                       // users: %46, %43, %64
+  // function_ref specialized pullback of filmCoefficient(_:_:)
+  %41 = function_ref @$s18closure_use_search15filmCoefficientyS2f_SftFTJpSSpSr073$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktm1_n5FZSf_N6SfcfU_S2fACS2f0fg1_h3E7_j11Add3lhs3rhsl1_m1_nom1_np1_nQ2U_ACS2fTf1nEEcE_n : $@convention(thin) (Float, Float, Float, Float, Float, Float, Float) -> (Float, Float) // user: %42
+  %42 = partial_apply [callee_guaranteed] %41(%2, %30, %2, %33, %36, %26) : $@convention(thin) (Float, Float, Float, Float, Float, Float, Float) -> (Float, Float) // user: %64
+  %47 = struct_extract %1, #Float._value          // user: %48
+  %48 = builtin "fsub_FPIEEE32"(%47, %6) : $Builtin.FPIEEE32 // users: %50, %49
+  %49 = struct $Float (%48)                       // user: %64
+  %50 = builtin "fmul_FPIEEE32"(%39, %48) : $Builtin.FPIEEE32 // users: %58, %51
+  %51 = struct $Float (%50)                       // users: %62, %56, %52
+  %53 = float_literal $Builtin.FPIEEE32, 0x3D000000 // 0.03125 // users: %58, %54
+  %54 = struct $Float (%53)                       // users: %62, %57
+  %58 = builtin "fmul_FPIEEE32"(%50, %53) : $Builtin.FPIEEE32 // user: %59
+  %59 = builtin "fadd_FPIEEE32"(%6, %58) : $Builtin.FPIEEE32 // user: %60
+  %60 = struct $Float (%59)                       // user: %65
+  // function_ref specialized pullback of eulerStep(_:_:_:)
+  %61 = function_ref @$s18closure_use_search9eulerStepyS2f_S2ftFTJpSSSpSr073$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktm1_n5FZSf_N6SfcfU_S2f0fg1_h3E7_j11Add3lhs3rhsl1_m1_nom1_np1_nQ2U_Tf1nEc_n : $@convention(thin) (Float, Float, Float) -> (Float, Float, Float) // user: %62
+  %62 = partial_apply [callee_guaranteed] %61(%54, %51) : $@convention(thin) (Float, Float, Float) -> (Float, Float, Float) // user: %64
+  // function_ref specialized pullback of regimeStep(_:_:_:)
+  %63 = function_ref @$s18closure_use_search10regimeStepyS2f_S2ftFTJpSSSpSr24$sS3fIegydd_TJSpSSpSrSUPS3fIegydd_012$s18closure_b33_search8heatFlowyS2f_S2ftFTJpSSSpK0S3fIegydd_S3fIegydd_0f11S4fIegyddd_isK4SSUPS4fIegyddd_Tf1nnEEE_n0F91Sf16_DifferentiationE12_vjpSubtract3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_0fw1_xy1_Z64Multiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_S2fTf1nnncEn_n : $@convention(thin) (Float, @owned _AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb3__Pred__src_0_wrt_0_1_2, @owned @callee_guaranteed (Float) -> (Float, Float), @owned @callee_guaranteed (Float) -> (Float, Float, Float), Float, Float) -> (Float, Float, Float) // user: %64
+  %64 = partial_apply [callee_guaranteed] %63(%25, %42, %62, %49, %40) : $@convention(thin) (Float, @owned _AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb3__Pred__src_0_wrt_0_1_2, @owned @callee_guaranteed (Float) -> (Float, Float), @owned @callee_guaranteed (Float) -> (Float, Float, Float), Float, Float) -> (Float, Float, Float) // user: %65
+  %65 = tuple (%60, %64)                          // user: %66
+  return %65                                      // id: %66
+} // end sil function '$s18closure_use_search10regimeStepyS2f_S2ftFTJrSSSpSr'
+
+sil private [ossa] @$s18closure_use_search10regimeStepyS2f_S2ftFTJpSSSpSr24$sS3fIegydd_TJSpSSpSrSUPS3fIegydd_012$s18closure_b33_search8heatFlowyS2f_S2ftFTJpSSSpK0S3fIegydd_S3fIegydd_0f11S4fIegyddd_isK4SSUPS4fIegyddd_Tf1nnEEE_n0F91Sf16_DifferentiationE12_vjpSubtract3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_0fw1_xy1_Z64Multiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_S2fTf1nnncEn_n : $@convention(thin) (Float, @owned _AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb3__Pred__src_0_wrt_0_1_2, @owned @callee_guaranteed (Float) -> (Float, Float), @owned @callee_guaranteed (Float) -> (Float, Float, Float), Float, Float) -> (Float, Float, Float) {
+// %0                                             // user: %21
+// %2                                             // users: %13, %12
+// %3                                             // users: %20, %19
+// %4                                             // users: %32, %9
+// %5                                             // users: %32, %9
+bb0(%0 : $Float, %1 : $_AD__$s18closure_use_search10regimeStepyS2f_S2ftF_bb3__Pred__src_0_wrt_0_1_2, %2 : @owned $@callee_guaranteed (Float) -> (Float, Float), %3 : @owned $@callee_guaranteed (Float) -> (Float, Float, Float), %4 : $Float, %5 : $Float):
+  // function_ref closure #1 in static Float._vjpSubtract(lhs:rhs:)
+  %6 = function_ref @$sSf16_DifferentiationE12_vjpSubtract3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float) -> (Float, Float) // user: %7
+  %7 = thin_to_thick_function %6 to $@callee_guaranteed (Float) -> (Float, Float) // users: %17, %15; ownership: none
+  // function_ref closure #1 in static Float._vjpMultiply(lhs:rhs:)
+  %8 = function_ref @$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float, Float, Float) -> (Float, Float) // user: %9
+  %9 = partial_apply [callee_guaranteed] %8(%4, %5) : $@convention(thin) (Float, Float, Float) -> (Float, Float) // users: %57, %10
+  %10 = copy_value %9                             // users: %17, %16
+  // function_ref autodiff subset parameters thunk for pullback from @escaping @callee_guaranteed (@unowned Float) -> (@unowned Float, @unowned Float)
+  %11 = function_ref @$sS3fIegydd_TJSpSSpSrSUP : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float)) -> Float // users: %44, %13
+  %12 = copy_value %2                             // users: %46, %44
+  %13 = partial_apply [callee_guaranteed] %11(%2) : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float)) -> Float // user: %45
+  // function_ref pullback of heatFlow(_:_:_:)
+  %14 = function_ref @$s18closure_use_search8heatFlowyS2f_S2ftFTJpSSSpSr : $@convention(thin) (Float, @owned @callee_guaranteed (Float) -> (Float, Float), @owned @callee_guaranteed (Float) -> (Float, Float)) -> (Float, Float, Float) // user: %17
+  %15 = copy_value %7                             // users: %34, %27
+  %16 = copy_value %10                            // users: %35, %28
+  %17 = partial_apply [callee_guaranteed] %14(%7, %10) : $@convention(thin) (Float, @owned @callee_guaranteed (Float) -> (Float, Float), @owned @callee_guaranteed (Float) -> (Float, Float)) -> (Float, Float, Float) // user: %33
+  // function_ref autodiff subset parameters thunk for pullback from @escaping @callee_guaranteed (@unowned Float) -> (@unowned Float, @unowned Float, @unowned Float)
+  %18 = function_ref @$sS4fIegyddd_TJSpSSSpSrSSUP : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float, Float)) -> (Float, Float) // users: %21, %20
+  %19 = copy_value %3                             // users: %23, %21
+  %20 = partial_apply [callee_guaranteed] %18(%3) : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float, Float)) -> (Float, Float) // user: %22
+  %21 = apply %18(%0, %19) : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float, Float)) -> (Float, Float) // users: %25, %24
+  destroy_value %20                               // id: %22
+  destroy_value %19                               // id: %23
+  %24 = tuple_extract %21, 0                      // user: %39
+  %25 = tuple_extract %21, 1                      // users: %32, %26
+  %27 = copy_value %15                            // user: %29
+  %28 = copy_value %16                            // user: %30
+  destroy_value %27                               // id: %29
+  destroy_value %28                               // id: %30
+  // function_ref specialized pullback of heatFlow(_:_:_:)
+  %31 = function_ref @$s18closure_use_search8heatFlowyS2f_S2ftFTJpSSSpSr073$sSf16_DifferentiationE12_vjpSubtract3lhs3rhsSf5value_Sf_SftSfc8pullbacktm1_n5FZSf_N6SfcfU_0fg1_hi1_j16Multiply3lhs3rhsl1_m1_nom1_np1_nQ2U_S2fTf1ncE_n : $@convention(thin) (Float, Float, Float) -> (Float, Float, Float) // user: %32
+  %32 = apply %31(%25, %4, %5) : $@convention(thin) (Float, Float, Float) -> (Float, Float, Float) // users: %36, %37, %38
+  destroy_value %17                               // id: %33
+  destroy_value %15                               // id: %34
+  destroy_value %16                               // id: %35
+  %36 = tuple_extract %32, 0                      // user: %40
+  %37 = tuple_extract %32, 1                      // users: %56, %54, %51, %48
+  %38 = tuple_extract %32, 2                      // users: %44, %43
+  %39 = struct_extract %24, #Float._value         // user: %41
+  %40 = struct_extract %36, #Float._value         // user: %41
+  %41 = builtin "fadd_FPIEEE32"(%40, %39) : $Builtin.FPIEEE32 // user: %42
+  %42 = struct $Float (%41)                       // users: %56, %53, %50, %47
+  %44 = apply %11(%38, %12) : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float)) -> Float // users: %56, %55, %52, %49
+  destroy_value %13                               // id: %45
+  destroy_value %12                               // id: %46
+  %56 = tuple (%42, %37, %44)                     // user: %58
+  destroy_value %9                                // id: %57
+  return %56                                      // id: %58
+} // end sil function '$s18closure_use_search10regimeStepyS2f_S2ftFTJpSSSpSr24$sS3fIegydd_TJSpSSpSrSUPS3fIegydd_012$s18closure_b33_search8heatFlowyS2f_S2ftFTJpSSSpK0S3fIegydd_S3fIegydd_0f11S4fIegyddd_isK4SSUPS4fIegyddd_Tf1nnEEE_n0F91Sf16_DifferentiationE12_vjpSubtract3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_0fw1_xy1_Z64Multiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_S2fTf1nnncEn_n'
+
+sil shared [transparent] [thunk] [ossa] @$sS4fIegyddd_TJSpSSSpSrSSUP : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float, Float)) -> (Float, Float) {
+[%0: read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[%1: noescape **, read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0                                             // user: %2
+// %1                                             // user: %2
+bb0(%0 : $Float, %1 : @guaranteed $@callee_guaranteed (Float) -> (Float, Float, Float)):
+  %2 = apply %1(%0) : $@callee_guaranteed (Float) -> (Float, Float, Float) // users: %4, %3
+  %3 = tuple_extract %2, 0                        // user: %5
+  %4 = tuple_extract %2, 1                        // user: %5
+  %5 = tuple (%3, %4)                             // user: %6
+  return %5                                       // id: %6
+} // end sil function '$sS4fIegyddd_TJSpSSSpSrSSUP'
+
+sil shared [transparent] [thunk] [ossa] @$sS3fIegydd_TJSpSSpSrSUP : $@convention(thin) (Float, @guaranteed @callee_guaranteed (Float) -> (Float, Float)) -> Float {
+[%0: read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[%1: noescape **, read v**.c*.v**, write v**.c*.v**, copy v**.c*.v**, destroy v**.c*.v**]
+[global: read,write,copy,destroy,allocate,deinit_barrier]
+// %0                                             // user: %2
+// %1                                             // user: %2
+bb0(%0 : $Float, %1 : @guaranteed $@callee_guaranteed (Float) -> (Float, Float)):
+  %2 = apply %1(%0) : $@callee_guaranteed (Float) -> (Float, Float) // user: %3
+  %3 = tuple_extract %2, 0                        // user: %4
+  return %3                                       // id: %4
+} // end sil function '$sS3fIegydd_TJSpSSpSrSUP'
+
+sil hidden_external [ossa] @$sSf16_DifferentiationE12_vjpMultiply3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float, Float, Float) -> (Float, Float)
+
+sil hidden_external [ossa] @$sSf16_DifferentiationE12_vjpSubtract3lhs3rhsSf5value_Sf_SftSfc8pullbacktSf_SftFZSf_SftSfcfU_ : $@convention(thin) (Float) -> (Float, Float)
